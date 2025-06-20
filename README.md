@@ -12,8 +12,12 @@ NDI SDK – Enables real-time streaming of the drawing canvas.
 
 
 ### TODO
-Refactor code for clarity and modularity
-Restructure project directories
-Optimize app lifecycle
-Improve performance and resource management
-Remove unused or experimental code
+Refactor code for clarity and modularity.
+
+Restructure project directories.
+
+Optimize app lifecycle.
+
+Improve performance and resource management.
+
+Remove unused or experimental code.
