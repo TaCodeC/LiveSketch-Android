@@ -5,7 +5,8 @@
 #include "Canvas/CanvasView.h"
 #include "IO/ImageExport.h"
 #include "NDI/NdiOutput.h"
-#include "UI/Menu.h"
+#include "UI/Backdrop.h"
+#include "UI/Ui.h"
 
 #include <SDL3/SDL.h>
 #include <glm/vec2.hpp>
@@ -36,7 +37,11 @@ private:
     void requestPngExport();
     void exportPng();
     void onPngSaved(const io::PngExporter::Result& result);
+    UiStatus uiStatus() const;
     void applyRequests(const UiRequests& requests);
+    void startFitAnimation();
+    void stepFitAnimation();
+    void updateBackdrop();
     void renderFrame();
     void schedulePacing();
     void wakeAt(uint64_t ticksMs);
@@ -47,17 +52,32 @@ private:
     glm::vec2 windowToPixels(float x, float y) const;
     glm::vec2 fingerToPixels(float x, float y) const;
     glm::vec2 toCanvas(glm::vec2 pixels) const { return m_camera.screenToCanvas(pixels); }
+    float pointsToPixels(float points) const;
     bool penBlocksFingers() const;
     bool canvasInteractionActive() const;
     void resetGestureReference();
     void notifyHiddenLayer();
+    // Empieza un trazo con los ajustes de la herramienta (o del borrador, con la goma
+    // del lápiz). `pixels`: posición en la ventana, en píxeles.
+    bool beginCanvasStroke(glm::vec2 pixels, float pressure, bool eraserTip);
+
+    // Cuentagotas: mientras se arrastra, la lupa muestra el color de debajo; al soltar,
+    // ese color pasa al pincel. Posiciones en coordenadas de ventana.
+    enum class PickSource { None, Mouse, Pen, Finger };
+    void beginPick(PickSource source, SDL_FingerID finger, float x, float y);
+    void movePick(float x, float y);
+    void endPick(bool apply);
+    void samplePick();
+    // Dedo quieto un momento al empezar a dibujar: cuentagotas.
+    void checkLongPress();
+    // Terminó un gesto de dedos: si fue un toque con dos (deshacer) o tres (rehacer).
+    void finishTapGesture(bool canceled);
 
     void onPenEvent(const SDL_Event& event);
     void flushPenSample();
     void endPenStroke();
     void onFingerEvent(const SDL_Event& event);
     void onMouseEvent(const SDL_Event& event);
-    void onKeyEvent(const SDL_Event& event);
     void endGestures();
 
     SDL_Window* m_window = nullptr;
@@ -71,9 +91,24 @@ private:
     Canvas m_canvas;
     CanvasView m_view;
     Camera m_camera;
-    Menu m_menu;
-    UiState m_ui;
+    Ui m_ui;
+    Backdrop m_backdrop;
     NdiOutput m_ndi;
+    bool m_ndiAvailable = false;
+
+    // Fondo desenfocado del cristal: se rehace cuando cambia la escena (mientras se
+    // dibuja, como mucho unas cuantas veces por segundo).
+    GLuint m_backdropTexture = 0;       // la que usó la interfaz en este frame
+    uint64_t m_backdropVersion = 0;     // versión del lienzo que tiene
+    uint64_t m_backdropUpdatedMs = 0;
+
+    // "Centrar lienzo" animado.
+    struct FitAnimation {
+        bool active = false;
+        uint64_t startMs = 0;
+        float fromZoom = 1.0f;
+        glm::vec2 fromOffset{0.0f};
+    } m_fitAnimation;
 
     // Guardar PNG: la lectura del lienzo es en el hilo de GL; la compresión, en otro.
     io::PngExporter m_exporter;
@@ -113,6 +148,31 @@ private:
     // Referencia del gesto de uno o dos dedos (centro y distancia en píxeles).
     glm::vec2 m_gestureCenter{0.0f};
     float m_gestureDistance = 0.0f;
+
+    // Toque con varios dedos (deshacer con dos, rehacer con tres) y dedo quieto al
+    // empezar (cuentagotas). Sigue a todos los dedos del gesto, también al tercero.
+    struct TapGesture {
+        struct Finger {
+            SDL_FingerID id = 0;
+            glm::vec2 start{0.0f};   // píxeles
+        };
+        std::vector<Finger> fingers;
+        bool candidate = false;      // todavía puede ser un toque
+        bool moved = false;          // algún dedo se movió más de un toque
+        int maxFingers = 0;
+        uint64_t startMs = 0;
+        Camera::View view;           // vista al empezar (el toque no debe moverla)
+    } m_tap;
+
+    struct Pick {
+        PickSource source = PickSource::None;
+        SDL_FingerID finger = 0;
+        float x = 0.0f;              // coordenadas de ventana
+        float y = 0.0f;
+        bool valid = false;          // hay color debajo
+        float rgb[3] = {0.0f, 0.0f, 0.0f};
+        bool dirty = false;          // se movió: hay que volver a leer el color
+    } m_pick;
 
     // Ratón de verdad (no el emulado desde el lápiz o los dedos).
     bool m_mouseDrawing = false;

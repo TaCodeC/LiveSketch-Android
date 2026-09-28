@@ -6,13 +6,28 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 
 ## Features
 
-- Multi-layer canvas: add, delete, rename, move up/down, duplicate, merge down and clear layers, with per-layer visibility and opacity.
-- Pressure-sensitive brushes (four brush textures), color, size and stroke opacity. Eraser from the menu or from the stylus eraser tip.
-- Pan and pinch-zoom with two fingers; one finger pans, or draws if "Dibujar con el dedo" is enabled. With a mouse: left button draws, right/middle button pans, wheel zooms.
-- NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom.
+- Procreate-style layout with an iOS look: floating frosted-glass bars over the canvas (the glass blurs the drawing behind it), a sidebar with brush size, eyedropper, opacity, undo and redo, and panels that open from the bars: popovers on tablets and desktop, bottom sheets on phones held upright. Dark theme, Inter font and Lucide icons. The interface size (small, normal, large) and the side of the sidebar can be changed in Actions.
+- Multi-layer canvas: add, delete, rename, move up/down, duplicate, merge down and clear layers, with per-layer visibility, opacity and live thumbnails.
+- Pressure-sensitive brushes (four brush textures, each with a preview stroke), color wheel with hex input, recent colors and a palette. The brush and the eraser keep their own brush, size and opacity; the stylus eraser tip uses the eraser settings.
+- Undo and redo for strokes and layer changes.
+- Eyedropper, with a loupe that shows the color under it next to the current one.
+- New canvas sizes: full screen, HD 720p, Full HD 1080p, QHD 1440p, 4K UHD and a small one, horizontal or vertical.
+- NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom. The NDI capsule turns red while live and shows the number of receivers.
 - "Guardar PNG" saves the full canvas to Downloads as `LiveSketch_YYYYMMDD_HHMMSS.png`, with transparency.
-- The Android back button asks before exiting.
+- The Android back button closes the open panel; with everything closed, it asks before exiting.
 - It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
+
+### Gestures and shortcuts
+
+| Action | Touch and stylus | Mouse and keyboard |
+|---|---|---|
+| Draw | Stylus, or one finger if "Dibujar con el dedo" is on | Left button |
+| Move and zoom | Two fingers (one finger moves when finger drawing is off) | Right or middle button; wheel |
+| Undo / redo | Tap with two / three fingers, or the sidebar buttons (hold to repeat) | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
+| Eyedropper | Sidebar button, or hold a finger still when finger drawing is on | Alt+click, or the sidebar button |
+| Brush / eraser | Top-right bar; tap the selected tool again for its brushes | B / E |
+| Brush size | Sidebar slider | [ and ] |
+| Close a panel | Tap outside it, or the Android back button | Esc |
 
 ## Building
 
@@ -84,11 +99,14 @@ app/src/main/cpp/
   Gfx/         OpenGL helpers (RAII objects, shaders, pixel conversion)
   IO/          assets and PNG export
   NDI/         NDI output (asynchronous readback and a sender thread)
-  UI/          Dear ImGui menu
+  UI/          interface: iOS-style controls drawn with Dear ImGui, bars, panels,
+               dialogs, animations and the blurred backdrop of the glass
+app/src/main/assets/ brush textures and interface fonts
 app/src/main/java/   MainActivity (extends SDL's SDLActivity)
 app/src/web/         page for the web version
 app/tests/           desktop tests
 app/externals/       SDL3, glm, Dear ImGui
+tools/fonts/         script that builds the font subsets and UI/Icons.h
 ```
 
 ## Planned
@@ -99,6 +117,8 @@ app/externals/       SDL3, glm, Dear ImGui
 
 - [NDI SDK](https://ndi.video/) – real-time streaming of the canvas (not included; see its license).
 - [SDL3](https://libsdl.org/) – window, OpenGL context, input and Android lifecycle.
-- [Dear ImGui](https://github.com/ocornut/imgui) – user interface.
+- [Dear ImGui](https://github.com/ocornut/imgui) – user interface engine.
+- [Inter](https://rsms.me/inter/) – interface font (SIL Open Font License 1.1, `app/src/main/assets/fonts/Inter-LICENSE.txt`).
+- [Lucide](https://lucide.dev/) – icons (ISC License, `app/src/main/assets/fonts/Lucide-LICENSE.txt`).
 - [glm](https://github.com/g-truc/glm) – math.
 - [stb_image / stb_image_write](https://github.com/nothings/stb) – brush textures and PNG export.

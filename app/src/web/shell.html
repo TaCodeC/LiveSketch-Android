@@ -5,23 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>LiveSketch</title>
 <style>
-  /* Página de carga de la versión web: el mismo fondo y la misma cuadrícula de 35 px que
-     dibuja la app (CanvasView). En cuanto SDL crea la ventana, el lienzo ocupa toda la
-     página y este aviso queda oculto. */
+  /* Página de carga de la versión web: el mismo fondo que la pantalla de inicio de la app
+     (casi negro con una luz azul y otra violeta, ver Ui::startScreen), así el paso de uno
+     a otra no se nota. En cuanto SDL crea la ventana, el lienzo ocupa toda la página y
+     este aviso queda oculto. */
   :root {
     color-scheme: dark;
-    --bg: #0d0d0d;
-    --grid: #171717;
-    --text: #e6e4e1;
-    --muted: #8e8a85;
-    --live: #e5484d;
-    --error: #ff8f7a;
+    --bg: #0c0c0e;
+    --text: #fff;
+    --muted: rgb(235 235 245 / 0.6);
+    --live: #ff3b30;
+    --error: #ff453a;
   }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg);
     color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 15px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
   /* Sin ancho ni alto en CSS: SDL mide el lienzo para saber si puede ajustarlo a la página. */
@@ -32,43 +33,57 @@
     z-index: 1;
     display: grid;
     place-content: center;
-    gap: 6px;
+    justify-items: center;
+    gap: 18px;
     padding: 16px;
     text-align: center;
-    background-color: var(--bg);
-    background-image:
-      linear-gradient(to right, var(--grid) 2px, transparent 2px),
-      linear-gradient(to bottom, var(--grid) 2px, transparent 2px);
-    background-size: 35px 35px;
-    background-position: -1px -1px;
+    /* Las luces caen como las de la app: exp(-3t²)(1 - t²) desde el centro. */
+    background:
+      radial-gradient(circle 50vmax at 28% 25%, rgb(10 132 255 / 0.2), rgb(10 132 255 / 0.188) 12.5%,
+                      rgb(10 132 255 / 0.155) 25%, rgb(10 132 255 / 0.113) 37.5%, rgb(10 132 255 / 0.071) 50%,
+                      rgb(10 132 255 / 0.038) 62.5%, rgb(10 132 255 / 0.016) 75%, rgb(10 132 255 / 0.005) 87.5%,
+                      rgb(10 132 255 / 0) 100%),
+      radial-gradient(circle 45vmax at 76% 80%, rgb(191 90 242 / 0.14), rgb(191 90 242 / 0.132) 12.5%,
+                      rgb(191 90 242 / 0.109) 25%, rgb(191 90 242 / 0.079) 37.5%, rgb(191 90 242 / 0.05) 50%,
+                      rgb(191 90 242 / 0.026) 62.5%, rgb(191 90 242 / 0.011) 75%, rgb(191 90 242 / 0.003) 87.5%,
+                      rgb(191 90 242 / 0) 100%),
+      var(--bg);
   }
-  #splash h1 {
-    margin: 0;
+  .brand {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 12px;
-    font-size: 2.25rem;
-    font-weight: 650;
-    letter-spacing: -0.02em;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--muted);
   }
-  #splash h1::before {
-    content: "";
-    width: 0.32em;
-    height: 0.32em;
-    border-radius: 50%;
-    background: var(--live);
-    animation: live 1.6s ease-in-out infinite;
-  }
-  #status { margin: 0; color: var(--muted); max-width: 36em; text-wrap: balance; }
-  #status.error { color: var(--error); }
-  @keyframes live { 50% { opacity: 0.35; } }
-  @media (prefers-reduced-motion: reduce) { #splash h1::before { animation: none; } }
+  .brand::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
+  /* Indicador de actividad de iOS: ocho radios que giran a saltos. */
+  .spinner { width: 28px; height: 28px; color: var(--muted); animation: spin 0.8s steps(8) infinite; }
+  #status { margin: 0; color: var(--muted); max-width: 32em; text-wrap: balance; }
+  #splash.error .spinner { display: none; }
+  #splash.error #status { color: var(--error); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 </style>
 </head>
 <body>
 <div id="splash">
-  <h1>LiveSketch</h1>
+  <p class="brand">LIVESKETCH</p>
+  <svg class="spinner" viewBox="0 0 28 28" aria-hidden="true">
+    <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round">
+      <line x1="14" y1="3" x2="14" y2="8.5"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(45 14 14)" opacity="0.2"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(90 14 14)" opacity="0.25"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(135 14 14)" opacity="0.3"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(180 14 14)" opacity="0.4"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(225 14 14)" opacity="0.5"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(270 14 14)" opacity="0.65"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(315 14 14)" opacity="0.8"/>
+    </g>
+  </svg>
   <p id="status" role="status">Cargando el lienzo…</p>
   <noscript><p>LiveSketch necesita JavaScript.</p></noscript>
 </div>
@@ -79,11 +94,11 @@
     var status = document.getElementById('status');
     var canvas = document.getElementById('canvas');
     function showError(text) {
-      if (status.classList.contains('error')) {
+      if (splash.classList.contains('error')) {
         return;   // se queda el primer error, que es el que explica el resto
       }
       status.textContent = text;
-      status.classList.add('error');
+      splash.classList.add('error');
       // Con la app en marcha, SDL tiene escondido el aviso: se vuelve a mostrar encima.
       if (splash.parentNode !== document.body) {
         document.body.appendChild(splash);

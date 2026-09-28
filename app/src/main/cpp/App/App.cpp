@@ -2,6 +2,8 @@
 
 #include "Gfx/GL.h"
 #include "Gfx/GLObjects.h"
+#include "UI/Anim.h"
+#include "UI/Kit.h"
 
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
@@ -9,6 +11,8 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -23,6 +27,44 @@ constexpr size_t kSnapshotBudget = size_t{256} * 1024 * 1024;
 
 // Frames que se dibujan después de cada entrada (ver App::event).
 constexpr int kFramesAfterInput = 4;
+
+// "Centrar lienzo": duración de la animación.
+constexpr uint64_t kFitDurationMs = 320;
+
+// Fondo desenfocado del cristal: radio del desenfoque (pt) y, mientras se dibuja, cada
+// cuánto se rehace como mucho.
+constexpr float kBackdropBlurPoints = 22.0f;
+constexpr uint64_t kBackdropStrokeIntervalMs = 90;
+
+ImTextureID textureId(GLuint texture) {
+    return texture != 0 ? static_cast<ImTextureID>(texture) : ImTextureID_Invalid;
+}
+
+// La interfaz ya dibujó el cristal con la textura del fondo que había; si esa textura se
+// volvió a crear (cambió el tamaño de la ventana), se cambia en los comandos.
+void retargetTexture(ImDrawData* data, ImTextureID from, ImTextureID to) {
+    if (!data || from == to || from == ImTextureID_Invalid) {
+        return;
+    }
+    for (ImDrawList* list : data->CmdLists) {
+        for (ImDrawCmd& cmd : list->CmdBuffer) {
+            if (cmd.TexRef._TexData == nullptr && cmd.TexRef._TexID == from) {
+                cmd.TexRef._TexID = to;
+            }
+        }
+    }
+}
+
+uint64_t mixHash(uint64_t hash, uint64_t value) {
+    hash ^= value + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+    return hash;
+}
+
+uint64_t floatBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
 
 // Eventos propios. Despiertan el bucle cuando está dormido esperando eventos; los
 // empujan un temporizador u otros hilos.
@@ -56,7 +98,7 @@ void SDLCALL onStoragePermission(void*, const char*, bool granted) {
 // -----------------------------------------------------------------------------
 
 SDL_AppResult App::init(int, char**) {
-    SDL_SetAppMetadata("LiveSketch", "0.2.4-alpha", "com.tacodec.livesketch");
+    SDL_SetAppMetadata("LiveSketch", "0.3.0-alpha", "com.tacodec.livesketch");
 
     // El lápiz llega como eventos de lápiz (con presión) y, para ImGui, también como
     // ratón. Los dedos manejan ImGui a través del ratón emulado y el lienzo con sus
@@ -65,7 +107,8 @@ SDL_AppResult App::init(int, char**) {
     SDL_SetHint(SDL_HINT_PEN_MOUSE_EVENTS, "1");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
-    // El botón atrás de Android llega como tecla y pide confirmación antes de salir.
+    // El botón atrás de Android llega como tecla: cierra lo último que se abrió y, con
+    // todo cerrado, pide confirmación antes de salir.
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
     SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "0");
 
@@ -86,11 +129,18 @@ SDL_AppResult App::init(int, char**) {
         return SDL_APP_FAILURE;
     }
 #ifdef LIVESKETCH_WITH_NDI
-    m_ui.ndiAvailable = true;
+    m_ndiAvailable = true;
 #endif
     if (!m_view.init()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron compilar los shaders de la vista");
         return SDL_APP_FAILURE;
+    }
+    // Sin miniaturas o sin desenfoque la interfaz funciona igual (con cristal opaco).
+    if (!m_ui.init()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron crear las miniaturas de la interfaz");
+    }
+    if (!m_backdrop.init()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "No se pudo crear el fondo desenfocado de la interfaz");
     }
 
     GLint maxTexture = 0;
@@ -146,6 +196,17 @@ bool App::initImGui() {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // en Android no hay dónde escribir imgui.ini
     ImGui::StyleColorsDark();
+    // Las ventanas de ImGui son solo zonas de la pantalla (barras, paneles): el aspecto lo
+    // dibuja la interfaz.
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowPadding = ImVec2(0.0f, 0.0f);
+    style.WindowBorderSize = 0.0f;
+    style.WindowRounding = 0.0f;
+    style.WindowMinSize = ImVec2(1.0f, 1.0f);
+    style.ItemSpacing = ImVec2(0.0f, 0.0f);
+    if (!ui::loadFonts()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Faltan fuentes o iconos de la interfaz: se usa la fuente de ImGui");
+    }
 
     if (!ImGui_ImplSDL3_InitForOpenGL(m_window, m_glContext) || !ImGui_ImplOpenGL3_Init(kGlslVersion)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudo iniciar ImGui");
@@ -180,6 +241,8 @@ void App::quit() {
     }
     m_ndi.stop();
     m_canvas.destroy();
+    m_ui.destroy();
+    m_backdrop.destroy();
     m_view.destroy();
     shutdownImGui();
     if (m_glContext) {
@@ -247,7 +310,7 @@ SDL_AppResult App::event(const SDL_Event& event) {
         if (event.user.code != 0) {
             m_exportPending = true;   // se lee el lienzo en iterate(), con el contexto actual
         } else {
-            m_menu.notify("Sin el permiso de almacenamiento no se puede guardar en Descargas", 5000);
+            m_ui.notify("Sin el permiso de almacenamiento no se puede guardar en Descargas", Notice::Error, 5000);
         }
         m_redrawFrames = std::max(m_redrawFrames, 1);
         return SDL_APP_CONTINUE;
@@ -291,16 +354,19 @@ void App::onRenderDeviceReset() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplOpenGL3_Init(kGlslVersion);
     m_view.init();
+    m_ui.init();
+    m_backdrop.init();
+    m_backdropTexture = 0;
     m_ndi.recreateGpu();
 
     if (m_canvas.layers().count() > 0) {
         bool restored = false;
         if (!m_canvas.recreateGpu(&restored)) {
-            m_menu.notify("No se pudo recuperar el lienzo tras perder el contexto gráfico", 6000);
+            m_ui.notify("No se pudo recuperar el lienzo tras perder el contexto gráfico", Notice::Error, 6000);
         } else if (restored) {
-            m_menu.notify("Se recuperó el lienzo tras perder el contexto gráfico", 4000);
+            m_ui.notify("Se recuperó el lienzo tras perder el contexto gráfico", Notice::Success, 4000);
         } else {
-            m_menu.notify("Se perdió el contexto gráfico y el dibujo no se pudo recuperar", 6000);
+            m_ui.notify("Se perdió el contexto gráfico y el dibujo no se pudo recuperar", Notice::Error, 6000);
         }
     }
     gfx::clearErrors();
@@ -319,12 +385,21 @@ void App::updateWindowSize() {
 }
 
 void App::createCanvas(int width, int height) {
+    // NDI emite al tamaño del lienzo: con uno nuevo se vuelve a empezar.
+    const bool ndi = m_ndi.running();
+    m_ndi.stop();
+    endGestures();
+    m_fitAnimation.active = false;
     if (!m_canvas.init(width, height)) {
-        m_menu.notify("No se pudo crear un lienzo de " + std::to_string(width) + "×" + std::to_string(height), 5000);
+        m_ui.notify("No se pudo crear un lienzo de " + std::to_string(width) + " × " + std::to_string(height),
+                    Notice::Error, 5000);
         return;
     }
     m_camera.setCanvasSize({static_cast<float>(width), static_cast<float>(height)});
     SDL_Log("Lienzo de %dx%d (hasta %d capas)", width, height, m_canvas.maxLayers());
+    if (ndi) {
+        setNdiEnabled(true);
+    }
 }
 
 void App::setNdiEnabled(bool enabled) {
@@ -337,11 +412,11 @@ void App::setNdiEnabled(bool enabled) {
     }
     std::unique_ptr<FrameSink> sink = makeNdiSink("LiveSketch");
     if (!sink) {
-        m_menu.notify("Esta compilación no incluye NDI");
+        m_ui.notify("Esta compilación no incluye NDI", Notice::Warning);
         return;
     }
     if (!m_ndi.start(std::move(sink), m_canvas.width(), m_canvas.height())) {
-        m_menu.notify("No se pudo iniciar NDI");
+        m_ui.notify("No se pudo iniciar NDI", Notice::Error);
     }
 }
 
@@ -356,7 +431,7 @@ void App::requestPngExport() {
         m_awaitingPermission =
             SDL_RequestAndroidPermission("android.permission.WRITE_EXTERNAL_STORAGE", onStoragePermission, nullptr);
         if (!m_awaitingPermission) {
-            m_menu.notify("No se pudo pedir el permiso de almacenamiento");
+            m_ui.notify("No se pudo pedir el permiso de almacenamiento", Notice::Error);
         }
         return;
     }
@@ -372,16 +447,16 @@ void App::exportPng() {
     // fondo está oculto o borrado.
     std::vector<uint8_t> pixels;
     if (!m_canvas.readComposite(pixels)) {
-        m_menu.notify("No se pudo leer el lienzo para guardar el PNG", 5000);
+        m_ui.notify("No se pudo leer el lienzo para guardar el PNG", Notice::Error, 5000);
         return;
     }
     const std::string path = io::timestampedPath(io::downloadsFolder(), "LiveSketch", ".png");
     if (!m_exporter.start(std::move(pixels), m_canvas.width(), m_canvas.height(), path,
                           [] { pushEvent(g_exportEventType); })) {
-        m_menu.notify("No se pudo empezar a guardar el PNG", 5000);
+        m_ui.notify("No se pudo empezar a guardar el PNG", Notice::Error, 5000);
         return;
     }
-    m_menu.notify("Guardando PNG…", 60000);
+    m_ui.notify("Guardando PNG…", Notice::Progress, 60000);
 }
 
 void App::onPngSaved(const io::PngExporter::Result& result) {
@@ -390,14 +465,17 @@ void App::onPngSaved(const io::PngExporter::Result& result) {
         SDL_Log("PNG guardado en %s", result.path.c_str());
 #ifdef SDL_PLATFORM_EMSCRIPTEN
         // El archivo estaba en la memoria de la página; lo guarda el navegador.
-        m_menu.notify("PNG descargado: " + result.path.substr(result.path.find_last_of('/') + 1), 5000);
+        m_ui.notify("PNG descargado: " + result.path.substr(result.path.find_last_of('/') + 1), Notice::Success,
+                    5000);
+#elif defined(SDL_PLATFORM_ANDROID)
+        m_ui.notify("PNG guardado en Descargas", Notice::Success, 4000);
 #else
-        m_menu.notify("PNG guardado en " + result.path, 5000);
+        m_ui.notify("PNG guardado en " + result.path, Notice::Success, 5000);
 #endif
     } else {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudo guardar %s: %s", result.path.c_str(),
                      result.error.c_str());
-        m_menu.notify("No se pudo guardar el PNG: " + result.error, 8000);
+        m_ui.notify("No se pudo guardar el PNG: " + result.error, Notice::Error, 8000);
     }
 }
 
@@ -411,6 +489,7 @@ SDL_AppResult App::iterate() {
         return SDL_APP_CONTINUE;
     }
     flushPenSample();
+    checkLongPress();
     if (m_exportPending) {
         m_exportPending = false;
         exportPng();
@@ -418,23 +497,19 @@ SDL_AppResult App::iterate() {
     if (std::optional<io::PngExporter::Result> saved = m_exporter.takeResult()) {
         onPngSaved(*saved);
     }
+    samplePick();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    const UiStatus status = uiStatus();
+    m_view.setPixelsPerPoint(status.pointScale * status.pixelsPerUnit);
+    m_ui.beginFrame(status);
     ImGui::NewFrame();
-
-    m_ui.ndiRunning = m_ndi.running();
-    m_ui.ndiConnections = m_ndi.connections();
-    m_ui.ndiError = m_ndi.error();
-    m_ui.exporting = m_awaitingPermission || m_exportPending || m_exporter.busy();
+    m_backdropTexture = m_backdrop.texture();
+    ui::setBackdrop(textureId(m_backdropTexture), ImGui::GetIO().DisplaySize);
 
     UiRequests requests;
-    if (m_canvas.ready()) {
-        m_menu.controls(m_canvas, m_ui, requests);
-    } else {
-        m_menu.startup(m_pixelWidth, m_pixelHeight, m_maxCanvasSize, requests);
-    }
-    m_menu.overlays(m_canvas.ready() ? &m_canvas : nullptr, requests);
+    m_ui.build(m_canvas.ready() ? &m_canvas : nullptr, requests);
     ImGui::Render();
 
     if (requests.quit) {
@@ -442,23 +517,60 @@ SDL_AppResult App::iterate() {
     }
     applyRequests(requests);
 
+    // El ajuste del lienzo deja libre lo que tapa la interfaz.
+    const float density = SDL_GetWindowPixelDensity(m_window);
+    m_camera.setInsets(m_ui.insetTop() * density, m_ui.insetRight() * density, m_ui.insetBottom() * density,
+                       m_ui.insetLeft() * density);
+    stepFitAnimation();
+
     m_canvas.update();
     if (m_ndi.running()) {
         m_ndi.capture(m_canvas.composite().fbo.id(), m_canvas.version());
     }
+    updateBackdrop();
     renderFrame();
     schedulePacing();
     return SDL_APP_CONTINUE;
 }
 
+UiStatus App::uiStatus() const {
+    UiStatus status;
+    const float density = std::max(SDL_GetWindowPixelDensity(m_window), 0.01f);
+    const float displayScale = SDL_GetWindowDisplayScale(m_window);
+    // Unidades de ImGui (coordenadas de la ventana) por punto: en Android las coordenadas
+    // son píxeles y la escala es la densidad de la pantalla; en el escritorio y la web,
+    // la ventana ya va en puntos.
+    status.pointScale = displayScale > 0.0f ? displayScale / density : 1.0f;
+    status.pixelsPerUnit = density;
+    int windowWidth = 0;
+    int windowHeight = 0;
+    SDL_GetWindowSize(m_window, &windowWidth, &windowHeight);
+    SDL_Rect safe;
+    if (SDL_GetWindowSafeArea(m_window, &safe) && windowWidth > 0 && windowHeight > 0) {
+        status.safeTop = static_cast<float>(std::max(safe.y, 0));
+        status.safeLeft = static_cast<float>(std::max(safe.x, 0));
+        status.safeRight = static_cast<float>(std::max(windowWidth - (safe.x + safe.w), 0));
+        status.safeBottom = static_cast<float>(std::max(windowHeight - (safe.y + safe.h), 0));
+    }
+    status.screenWidth = m_pixelWidth;
+    status.screenHeight = m_pixelHeight;
+    status.maxCanvasSize = m_maxCanvasSize;
+    status.canvasZoom = m_camera.zoom();
+    status.ndiAvailable = m_ndiAvailable;
+    status.ndiRunning = m_ndi.running();
+    status.ndiConnections = m_ndi.connections();
+    status.ndiError = m_ndi.error();
+    status.exporting = m_awaitingPermission || m_exportPending || m_exporter.busy();
+    return status;
+}
+
 void App::applyRequests(const UiRequests& requests) {
     if (requests.canvasWidth > 0 && requests.canvasHeight > 0) {
         createCanvas(requests.canvasWidth, requests.canvasHeight);
-        // El panel de control aparece en los frames siguientes.
         m_redrawFrames = std::max(m_redrawFrames, kFramesAfterInput);
     }
     if (requests.fitView) {
-        m_camera.fit();
+        startFitAnimation();
     }
     if (requests.savePng) {
         requestPngExport();
@@ -468,9 +580,70 @@ void App::applyRequests(const UiRequests& requests) {
     }
 }
 
+void App::startFitAnimation() {
+    if (!m_canvas.ready()) {
+        return;
+    }
+    m_fitAnimation.active = true;
+    m_fitAnimation.startMs = SDL_GetTicks();
+    m_fitAnimation.fromZoom = m_camera.zoom();
+    m_fitAnimation.fromOffset = m_camera.offset();
+}
+
+void App::stepFitAnimation() {
+    if (!m_fitAnimation.active) {
+        return;
+    }
+    // Si el usuario toca el lienzo mientras tanto, manda él.
+    if (canvasInteractionActive() || !m_canvas.ready()) {
+        m_fitAnimation.active = false;
+        return;
+    }
+    const float t = static_cast<float>(SDL_GetTicks() - m_fitAnimation.startMs) / static_cast<float>(kFitDurationMs);
+    if (t >= 1.0f) {
+        m_camera.fit();
+        m_fitAnimation.active = false;
+        return;
+    }
+    float zoom = 1.0f;
+    glm::vec2 offset{0.0f};
+    m_camera.fitView(zoom, offset);
+    // El zoom avanza en escala logarítmica y el centro del lienzo en línea recta: así el
+    // movimiento se ve uniforme aunque el zoom cambie mucho.
+    const float e = ui::anim::easeInOutCubic(std::clamp(t, 0.0f, 1.0f));
+    const float fromZoom = std::max(m_fitAnimation.fromZoom, 1e-6f);
+    const float z = std::exp(std::log(fromZoom) + (std::log(std::max(zoom, 1e-6f)) - std::log(fromZoom)) * e);
+    const glm::vec2 half = m_camera.canvasSize() * 0.5f;
+    const glm::vec2 from = m_fitAnimation.fromOffset + half * fromZoom;
+    const glm::vec2 to = offset + half * zoom;
+    const glm::vec2 center = from + (to - from) * e;
+    m_camera.setView(z, center - half * z);
+}
+
+void App::updateBackdrop() {
+    if (!m_canvas.ready()) {
+        return;
+    }
+    // Mientras se dibuja no hace falta rehacerlo en cada frame: está desenfocado.
+    const uint64_t now = SDL_GetTicks();
+    if (m_canvas.version() != m_backdropVersion &&
+        (!m_canvas.stroking() || now - m_backdropUpdatedMs >= kBackdropStrokeIntervalMs)) {
+        m_backdropVersion = m_canvas.version();
+        m_backdropUpdatedMs = now;
+    }
+    uint64_t key = mixHash(0, m_backdropVersion);
+    key = mixHash(key, floatBits(m_camera.zoom()));
+    key = mixHash(key, floatBits(m_camera.offset().x));
+    key = mixHash(key, floatBits(m_camera.offset().y));
+    key = mixHash(key, (static_cast<uint64_t>(m_pixelWidth) << 32) | static_cast<uint32_t>(m_pixelHeight));
+    const float sigma = kBackdropBlurPoints * ui::scale() * SDL_GetWindowPixelDensity(m_window);
+    m_backdrop.update(m_view, m_camera, m_canvas.composite().texture.id(), m_pixelWidth, m_pixelHeight, sigma, key);
+    retargetTexture(ImGui::GetDrawData(), textureId(m_backdropTexture), textureId(m_backdrop.texture()));
+}
+
 void App::renderFrame() {
     const GLuint composite = m_canvas.ready() ? m_canvas.composite().texture.id() : 0;
-    m_view.draw(m_camera, composite, m_pixelWidth, m_pixelHeight);
+    m_view.draw(m_camera, composite, 0, m_pixelWidth, m_pixelHeight);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(m_window);
 }
@@ -481,7 +654,8 @@ void App::schedulePacing() {
     // Entradas que ImGui todavía no ha procesado o el oscurecido de un diálogo a medias.
     const bool imguiPending = g.InputEventsQueue.Size > 0 || (g.DimBgRatio > 0.0f && g.DimBgRatio < 1.0f);
     const bool busy = m_redrawFrames > 0 || imguiPending || canvasInteractionActive() || io.WantTextInput ||
-                      ImGui::IsAnyItemActive() || m_ndi.busy();
+                      ImGui::IsAnyItemActive() || m_ndi.busy() || ui::anim::active() || m_fitAnimation.active ||
+                      m_pick.source != PickSource::None;
     if (m_redrawFrames > 0) {
         --m_redrawFrames;
     }
@@ -493,7 +667,7 @@ void App::schedulePacing() {
         m_continuous = busy;
     }
     if (!busy) {
-        uint64_t deadline = m_menu.noticeDeadline();
+        uint64_t deadline = m_ui.wakeDeadline();
         if (m_ndi.running()) {
             // Refresca cada segundo el número de receptores que muestra el menú.
             const uint64_t refresh = SDL_GetTicks() + 1000;

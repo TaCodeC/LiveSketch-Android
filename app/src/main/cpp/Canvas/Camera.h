@@ -14,8 +14,25 @@ public:
     void setViewport(glm::vec2 size);
     // Tamaño del lienzo. Deja la vista ajustada.
     void setCanvasSize(glm::vec2 size);
+    // Bordes de la ventana que tapa la interfaz (barras): el ajuste centra el lienzo en
+    // lo que queda. Si el usuario no ha movido la vista, se vuelve a ajustar.
+    void setInsets(float top, float right, float bottom, float left);
     // Lienzo completo, centrado y con su proporción.
     void fit();
+    // Zoom y posición que dejaría fit(), sin aplicarlos (para animar el ajuste).
+    void fitView(float& zoom, glm::vec2& offset) const;
+    // Pone una vista intermedia de la animación del ajuste.
+    void setView(float zoom, glm::vec2 offset);
+    bool userMoved() const { return m_userMoved; }
+
+    // Vista completa, para deshacer el pequeño movimiento de un toque con dos dedos.
+    struct View {
+        float zoom = 1.0f;
+        glm::vec2 offset{0.0f, 0.0f};
+        bool userMoved = false;
+    };
+    View view() const { return {m_zoom, m_offset, m_userMoved}; }
+    void restoreView(const View& view);
 
     glm::vec2 canvasToScreen(glm::vec2 p) const { return m_offset + p * m_zoom; }
     glm::vec2 screenToCanvas(glm::vec2 p) const { return (p - m_offset) / m_zoom; }
@@ -36,8 +53,12 @@ private:
     float fitZoom() const;
     void clampView();
 
+    // Zona libre para el ajuste: la ventana sin los bordes que tapa la interfaz.
+    void fitArea(glm::vec2& origin, glm::vec2& size) const;
+
     glm::vec2 m_viewport{1.0f, 1.0f};
     glm::vec2 m_canvas{1.0f, 1.0f};
+    float m_insets[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // arriba, derecha, abajo, izquierda
     glm::vec2 m_offset{0.0f, 0.0f};
     float m_zoom = 1.0f;
     bool m_userMoved = false;

@@ -37,6 +37,10 @@ public:
     Layer* insert(int position, std::string name);
     // Borra una capa. Nunca deja la pila vacía. La activa pasa a la de abajo si se borra.
     bool remove(int index);
+    // Como remove(), pero devuelve la capa en vez de destruirla (para deshacer).
+    std::unique_ptr<Layer> take(int index);
+    // Vuelve a meter en `position` una capa sacada con take() y la hace activa.
+    Layer* put(int position, std::unique_ptr<Layer> layer);
     // Mueve la capa `from` a la posición `to`. La activa sigue siendo la misma capa.
     bool move(int from, int to);
 

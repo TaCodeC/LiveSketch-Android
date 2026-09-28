@@ -96,3 +96,42 @@ TEST_CASE(camera_viewport_change) {
     camera.fit();
     CHECK_NEAR(camera.zoom(), 1248.0f / 1920.0f, 1e-6f);
 }
+
+TEST_CASE(camera_insets_center_in_free_area) {
+    // Barras arriba (72 px) y a la izquierda (76 px): el lienzo se centra en lo que queda.
+    Camera camera = makeCamera({1280.0f, 800.0f}, {1920.0f, 1080.0f});
+    camera.setInsets(72.0f, 0.0f, 0.0f, 76.0f);
+    const float zoom = std::min((1204.0f - 32.0f) / 1920.0f, (728.0f - 32.0f) / 1080.0f);
+    CHECK_NEAR(camera.zoom(), zoom, 1e-6f);
+    const glm::vec2 center = camera.canvasToScreen({960.0f, 540.0f});
+    CHECK_NEAR(center.x, 76.0f + 1204.0f * 0.5f, 1e-3f);
+    CHECK_NEAR(center.y, 72.0f + 728.0f * 0.5f, 1e-3f);
+
+    // Con la vista movida, cambiar los bordes no la toca.
+    camera.pan({30.0f, 0.0f});
+    const glm::vec2 offset = camera.offset();
+    camera.setInsets(0.0f, 0.0f, 0.0f, 0.0f);
+    CHECK_NEAR(camera.offset().x, offset.x, 1e-4f);
+    camera.fit();
+    CHECK_NEAR(camera.zoom(), 1248.0f / 1920.0f, 1e-6f);
+
+    // Si la interfaz taparía casi toda la ventana, se ignora.
+    Camera small = makeCamera({300.0f, 300.0f}, {100.0f, 100.0f});
+    small.setInsets(200.0f, 0.0f, 0.0f, 0.0f);
+    CHECK_NEAR(small.zoom(), (300.0f - 32.0f) / 100.0f, 1e-5f);
+}
+
+TEST_CASE(camera_fit_view_for_animation) {
+    Camera camera = makeCamera({1280.0f, 800.0f}, {640.0f, 360.0f});
+    camera.zoomAt({100.0f, 100.0f}, 2.5f);
+    CHECK(camera.userMoved());
+    float zoom = 0.0f;
+    glm::vec2 offset{0.0f};
+    camera.fitView(zoom, offset);
+    camera.setView(zoom, offset);
+    const glm::vec2 center = camera.canvasToScreen({320.0f, 180.0f});
+    CHECK_NEAR(center.x, 640.0f, 1e-3f);
+    CHECK_NEAR(center.y, 400.0f, 1e-3f);
+    camera.fit();
+    CHECK(!camera.userMoved());
+}

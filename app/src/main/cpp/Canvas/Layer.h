@@ -11,5 +11,6 @@ struct Layer {
     std::string name;
     bool visible = true;
     float opacity = 1.0f;   // 0..1, se aplica al componer
+    uint64_t revision = 0;  // sube cada vez que cambian sus píxeles (miniaturas)
     gfx::RenderTarget target;
 };

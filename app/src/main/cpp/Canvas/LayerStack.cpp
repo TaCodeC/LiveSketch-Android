@@ -47,16 +47,33 @@ Layer* LayerStack::insert(int position, std::string name) {
 }
 
 bool LayerStack::remove(int index) {
+    return take(index) != nullptr;
+}
+
+std::unique_ptr<Layer> LayerStack::take(int index) {
     if (!validIndex(index) || count() <= 1) {
-        return false;
+        return nullptr;
     }
+    std::unique_ptr<Layer> layer = std::move(m_layers[static_cast<size_t>(index)]);
     m_layers.erase(m_layers.begin() + index);
     if (index < m_active || (index == m_active && m_active > 0)) {
         --m_active;
     }
     m_active = std::clamp(m_active, 0, count() - 1);
     markAllDirty();
-    return true;
+    return layer;
+}
+
+Layer* LayerStack::put(int position, std::unique_ptr<Layer> layer) {
+    if (!layer) {
+        return nullptr;
+    }
+    position = std::clamp(position, 0, count());
+    Layer* raw = layer.get();
+    m_layers.insert(m_layers.begin() + position, std::move(layer));
+    m_active = position;
+    markAllDirty();
+    return raw;
 }
 
 bool LayerStack::move(int from, int to) {

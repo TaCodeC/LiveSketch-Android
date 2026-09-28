@@ -32,8 +32,32 @@ void Camera::setCanvasSize(glm::vec2 size) {
     fit();
 }
 
+void Camera::setInsets(float top, float right, float bottom, float left) {
+    const float insets[4] = {top, right, bottom, left};
+    if (std::equal(insets, insets + 4, m_insets)) {
+        return;
+    }
+    std::copy(insets, insets + 4, m_insets);
+    if (!m_userMoved) {
+        fit();
+    }
+}
+
+void Camera::fitArea(glm::vec2& origin, glm::vec2& size) const {
+    origin = glm::vec2(m_insets[3], m_insets[0]);
+    size = m_viewport - glm::vec2(m_insets[1] + m_insets[3], m_insets[0] + m_insets[2]);
+    // En una ventana muy pequeña la interfaz taparía casi todo: se ignora.
+    if (size.x < m_viewport.x * 0.4f || size.y < m_viewport.y * 0.4f) {
+        origin = glm::vec2(0.0f);
+        size = m_viewport;
+    }
+}
+
 float Camera::fitZoom() const {
-    const glm::vec2 room = glm::max(m_viewport - 2.0f * kFitMargin, glm::vec2(1.0f));
+    glm::vec2 origin;
+    glm::vec2 area;
+    fitArea(origin, area);
+    const glm::vec2 room = glm::max(area - 2.0f * kFitMargin, glm::vec2(1.0f));
     return std::min(room.x / m_canvas.x, room.y / m_canvas.y);
 }
 
@@ -44,9 +68,32 @@ float Camera::minZoom() const { return fitZoom() * 0.1f; }
 float Camera::maxZoom() const { return std::max(fitZoom() * 10.0f, 8.0f); }
 
 void Camera::fit() {
-    m_zoom = fitZoom();
-    m_offset = (m_viewport - m_canvas * m_zoom) * 0.5f;
+    fitView(m_zoom, m_offset);
     m_userMoved = false;
+}
+
+void Camera::fitView(float& zoom, glm::vec2& offset) const {
+    glm::vec2 origin;
+    glm::vec2 area;
+    fitArea(origin, area);
+    zoom = fitZoom();
+    offset = origin + (area - m_canvas * zoom) * 0.5f;
+}
+
+void Camera::setView(float zoom, glm::vec2 offset) {
+    if (zoom > 0.0f) {
+        m_zoom = zoom;
+        m_offset = offset;
+    }
+}
+
+void Camera::restoreView(const View& view) {
+    if (view.zoom > 0.0f) {
+        m_zoom = view.zoom;
+        m_offset = view.offset;
+        m_userMoved = view.userMoved;
+        clampView();
+    }
 }
 
 void Camera::pan(glm::vec2 delta) {

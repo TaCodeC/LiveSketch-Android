@@ -1,14 +1,21 @@
-// Enrutado de la entrada: qué va a ImGui y qué al lienzo.
+// Enrutado de la entrada: qué va a la interfaz y qué al lienzo.
 //
 // - Lápiz: dibuja (con presión y goma). Para ImGui llega también como ratón emulado.
 // - Dedos: un dedo mueve la vista y dos hacen zoom, o dibujan si está activado
-//   "Dibujar con el dedo". Mientras el lápiz está cerca o tocando se ignoran (palma).
-// - Ratón de verdad (escritorio): izquierdo dibuja, derecho o central mueve, rueda zoom.
+//   "Dibujar con el dedo" (y entonces dejar el dedo quieto al empezar abre el
+//   cuentagotas). Un toque con dos dedos deshace y con tres rehace. Mientras el lápiz
+//   está cerca o tocando se ignoran (palma).
+// - Ratón de verdad (escritorio): izquierdo dibuja (con Alt, cuentagotas), derecho o
+//   central mueve, rueda zoom.
+// - Con el cuentagotas de la barra lateral armado, la siguiente pulsación en el lienzo
+//   elige un color en vez de dibujar.
 //
-// Cada pulsación se decide una vez, en el punto donde empieza: si cae sobre una ventana
-// de ImGui, o hay un popup abierto, es de la interfaz hasta que se suelta; si no, es del
-// lienzo y ImGui no la ve.
+// Cada pulsación se decide una vez, en el punto donde empieza: si cae sobre la interfaz
+// (una barra, un panel o, con un panel abierto, cualquier sitio: el toque lo cierra) es
+// de la interfaz hasta que se suelta; si no, es del lienzo y ImGui no la ve.
 #include "App/App.h"
+
+#include "UI/Kit.h"
 
 #include <glm/geometric.hpp>
 #include <imgui.h>
@@ -23,9 +30,15 @@ namespace {
 // Tras levantar o alejar el lápiz, los dedos siguen ignorados un momento (palma).
 constexpr uint64_t kPalmGraceMs = 300;
 // Si el segundo dedo llega tan pronto, el trazo con el primer dedo era el inicio de un
-// pellizco y se descarta.
+// pellizco (o de un toque con dos dedos) y se descarta.
 constexpr uint64_t kPinchCancelMs = 250;
 constexpr float kWheelZoomStep = 1.1f;
+// Toque con dos o tres dedos: todos se levantan antes de este tiempo y ninguno se mueve
+// más de esta distancia (pt).
+constexpr uint64_t kTapMaxMs = 350;
+constexpr float kTapSlopPoints = 12.0f;
+// Dedo quieto este tiempo al empezar un trazo: cuentagotas.
+constexpr uint64_t kLongPressMs = 450;
 
 bool isEmulatedMouse(SDL_MouseID which) {
     return which == SDL_TOUCH_MOUSEID || which == SDL_PEN_MOUSEID;
@@ -42,6 +55,11 @@ glm::vec2 App::fingerToPixels(float x, float y) const {
     return {x * static_cast<float>(m_pixelWidth), y * static_cast<float>(m_pixelHeight)};
 }
 
+float App::pointsToPixels(float points) const {
+    // Escala de la ventana: píxeles por punto.
+    return points * std::max(SDL_GetWindowDisplayScale(m_window), 0.01f);
+}
+
 bool App::uiWantsPoint(float x, float y) const {
     if (!m_imguiReady) {
         return false;
@@ -49,12 +67,12 @@ bool App::uiWantsPoint(float x, float y) const {
     if (!m_canvas.ready()) {
         return true;   // pantalla de inicio
     }
-    // Con un combo, un menú o un diálogo abierto, el toque es para la interfaz (fuera
-    // de un popup, lo cierra) y no debe pintar.
     const ImGuiContext& g = *ImGui::GetCurrentContext();
     if (g.OpenPopupStack.Size > 0) {
         return true;
     }
+    // Las barras, los paneles y los diálogos son ventanas de ImGui. Con un panel o un
+    // diálogo abierto hay además una ventana que cubre la pantalla detrás de ellos.
     ImGuiWindow* hovered = nullptr;
     ImGui::FindHoveredWindowEx(ImVec2(x, y), false, &hovered, nullptr);
     return hovered != nullptr;
@@ -68,13 +86,25 @@ bool App::penBlocksFingers() const {
 }
 
 bool App::canvasInteractionActive() const {
-    return m_pen.drawing || !m_fingers.empty() || m_mouseDrawing || m_mousePanning;
+    return m_pen.drawing || !m_fingers.empty() || m_mouseDrawing || m_mousePanning ||
+           m_pick.source != PickSource::None;
 }
 
 void App::notifyHiddenLayer() {
     if (m_canvas.ready() && !m_canvas.layers().active().visible) {
-        m_menu.notify("La capa activa está oculta");
+        m_ui.notify("La capa activa está oculta", Notice::Warning);
     }
+}
+
+bool App::beginCanvasStroke(glm::vec2 pixels, float pressure, bool eraserTip) {
+    m_ui.prepareStroke(m_canvas, eraserTip);
+    const glm::vec2 point = toCanvas(pixels);
+    if (!m_canvas.beginStroke(point.x, point.y, pressure, eraserTip)) {
+        notifyHiddenLayer();
+        return false;
+    }
+    m_ui.strokeStarted(m_canvas, eraserTip || m_canvas.brushSettings().eraser);
+    return true;
 }
 
 bool App::routeEvent(const SDL_Event& event) {
@@ -141,16 +171,73 @@ bool App::routeEvent(const SDL_Event& event) {
         onFingerEvent(event);
         return false;
 
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_KEY_UP:
-        ImGui_ImplSDL3_ProcessEvent(&event);
-        onKeyEvent(event);
-        return true;
-
     default:
+        // Teclado incluido: los atajos y el botón atrás los maneja la interfaz.
         ImGui_ImplSDL3_ProcessEvent(&event);
         return false;
     }
+}
+
+// -----------------------------------------------------------------------------
+// Cuentagotas
+// -----------------------------------------------------------------------------
+
+void App::beginPick(PickSource source, SDL_FingerID finger, float x, float y) {
+    m_pick.source = source;
+    m_pick.finger = finger;
+    m_pick.x = x;
+    m_pick.y = y;
+    m_pick.valid = false;
+    m_pick.dirty = true;
+    samplePick();
+}
+
+void App::movePick(float x, float y) {
+    m_pick.x = x;
+    m_pick.y = y;
+    m_pick.dirty = true;
+}
+
+void App::samplePick() {
+    if (m_pick.source == PickSource::None || !m_pick.dirty || !m_canvas.ready()) {
+        return;
+    }
+    m_pick.dirty = false;
+    const glm::vec2 point = toCanvas(windowToPixels(m_pick.x, m_pick.y));
+    m_pick.valid = m_canvas.pickColor(point.x, point.y, m_pick.rgb);
+    m_ui.showPicker(ImVec2(m_pick.x, m_pick.y), m_pick.valid ? m_pick.rgb : nullptr,
+                    m_pick.source == PickSource::Finger);
+}
+
+void App::endPick(bool apply) {
+    if (m_pick.source == PickSource::None) {
+        return;
+    }
+    samplePick();
+    if (apply && m_pick.valid && m_canvas.ready()) {
+        m_ui.pickColor(m_canvas, m_pick.rgb);
+    }
+    m_ui.hidePicker();
+    m_ui.setEyedropperArmed(false);
+    m_pick = {};
+}
+
+void App::checkLongPress() {
+    if (!m_ui.drawWithFinger() || m_pick.source != PickSource::None || m_fingers.size() != 1 ||
+        m_tap.fingers.size() != 1 || m_tap.moved || SDL_GetTicks() - m_tap.startMs < kLongPressMs) {
+        return;
+    }
+    // El trazo que había empezado era en realidad el cuentagotas.
+    if (m_fingerDrawing) {
+        m_canvas.cancelStroke();
+        m_fingerDrawing = false;
+    }
+    const FingerPoint finger = m_fingers.front();
+    m_fingers.clear();
+    m_gestureDistance = 0.0f;
+    m_tap.candidate = false;
+    const float density = SDL_GetWindowPixelDensity(m_window);
+    beginPick(PickSource::Finger, finger.id, finger.position.x / density, finger.position.y / density);
 }
 
 // -----------------------------------------------------------------------------
@@ -176,6 +263,9 @@ void App::onPenEvent(const SDL_Event& event) {
         m_pen.y = event.pmotion.y;
         m_pen.pendingSample = m_pen.drawing;
         m_pen.lastActiveMs = now;
+        if (m_pick.source == PickSource::Pen) {
+            movePick(m_pen.x, m_pen.y);
+        }
         break;
 
     case SDL_EVENT_PEN_AXIS:
@@ -194,6 +284,10 @@ void App::onPenEvent(const SDL_Event& event) {
         }
         // El lápiz manda: lo que estuvieran haciendo los dedos (la palma) se termina.
         endGestures();
+        if (m_ui.eyedropperArmed()) {
+            beginPick(PickSource::Pen, 0, m_pen.x, m_pen.y);
+            break;
+        }
         m_pen.drawing = true;
         m_pen.strokePending = true;
         m_pen.eraser = event.ptouch.eraser;
@@ -203,6 +297,9 @@ void App::onPenEvent(const SDL_Event& event) {
     case SDL_EVENT_PEN_UP:
         m_pen.down = false;
         m_pen.lastActiveMs = now;
+        if (m_pick.source == PickSource::Pen) {
+            endPick(true);
+        }
         endPenStroke();
         break;
 
@@ -219,14 +316,12 @@ void App::flushPenSample() {
     if (!m_pen.drawing) {
         return;
     }
-    const glm::vec2 point = toCanvas(windowToPixels(m_pen.x, m_pen.y));
+    const glm::vec2 pixels = windowToPixels(m_pen.x, m_pen.y);
     if (m_pen.strokePending) {
         m_pen.strokePending = false;
-        m_pen.drawing = m_canvas.beginStroke(point.x, point.y, m_pen.pressure, m_pen.eraser);
-        if (!m_pen.drawing) {
-            notifyHiddenLayer();
-        }
+        m_pen.drawing = beginCanvasStroke(pixels, m_pen.pressure, m_pen.eraser);
     } else {
+        const glm::vec2 point = toCanvas(pixels);
         m_canvas.strokeTo(point.x, point.y, m_pen.pressure);
     }
 }
@@ -258,45 +353,74 @@ void App::resetGestureReference() {
                             : 0.0f;
 }
 
+void App::finishTapGesture(bool canceled) {
+    const bool tap = !canceled && m_tap.candidate && m_tap.maxFingers >= 2 && m_tap.maxFingers <= 3 &&
+                     SDL_GetTicks() - m_tap.startMs <= kTapMaxMs;
+    if (tap && m_canvas.ready()) {
+        // Los dedos movieron la vista un poco (pellizco): vuelve a como estaba.
+        m_camera.restoreView(m_tap.view);
+        const bool redo = m_tap.maxFingers == 3;
+        m_ui.showUndo(redo, redo ? m_canvas.redo() : m_canvas.undo());
+    }
+    m_tap = {};
+}
+
 void App::onFingerEvent(const SDL_Event& event) {
     if (!m_canvas.ready()) {
         return;
     }
     const SDL_TouchFingerEvent& touch = event.tfinger;
     const glm::vec2 position = fingerToPixels(touch.x, touch.y);
+    const float density = SDL_GetWindowPixelDensity(m_window);
+    const uint64_t now = SDL_GetTicks();
     auto finger = std::find_if(m_fingers.begin(), m_fingers.end(),
                                [&](const FingerPoint& f) { return f.id == touch.fingerID; });
-    const uint64_t now = SDL_GetTicks();
+    auto tapFinger = std::find_if(m_tap.fingers.begin(), m_tap.fingers.end(),
+                                  [&](const TapGesture::Finger& f) { return f.id == touch.fingerID; });
+    const bool picking = m_pick.source == PickSource::Finger && m_pick.finger == touch.fingerID;
 
     switch (event.type) {
     case SDL_EVENT_FINGER_DOWN: {
-        if (penBlocksFingers() || m_fingers.size() >= 2) {
+        if (penBlocksFingers() || m_pick.source == PickSource::Finger) {
             return;
         }
-        int windowWidth = 0;
-        int windowHeight = 0;
-        SDL_GetWindowSize(m_window, &windowWidth, &windowHeight);
-        if (uiWantsPoint(touch.x * static_cast<float>(windowWidth), touch.y * static_cast<float>(windowHeight))) {
-            return;
+        if (m_tap.fingers.empty()) {
+            // Primer dedo del gesto: si cae en la interfaz, es de ella.
+            if (uiWantsPoint(position.x / density, position.y / density)) {
+                return;
+            }
+            if (m_ui.eyedropperArmed()) {
+                beginPick(PickSource::Finger, touch.fingerID, position.x / density, position.y / density);
+                return;
+            }
+            m_tap = {};
+            m_tap.candidate = true;
+            m_tap.startMs = now;
+            m_tap.view = m_camera.view();
+        }
+        m_tap.fingers.push_back({touch.fingerID, position});
+        m_tap.maxFingers = std::max(m_tap.maxFingers, static_cast<int>(m_tap.fingers.size()));
+        if (m_tap.fingers.size() > 3) {
+            m_tap.candidate = false;
+        }
+        if (m_fingers.size() >= 2) {
+            return;   // el tercer dedo solo cuenta para el toque
         }
 
         m_fingers.push_back({touch.fingerID, position});
         if (m_fingers.size() == 1) {
-            if (m_ui.drawWithFinger) {
+            if (m_ui.drawWithFinger()) {
                 // La presión de un dedo no es fiable: se dibuja como con presión 1.
-                const glm::vec2 point = toCanvas(position);
-                m_fingerDrawing = m_canvas.beginStroke(point.x, point.y, 1.0f);
+                m_fingerDrawing = beginCanvasStroke(position, 1.0f, false);
                 m_fingerStrokeStartMs = now;
-                if (!m_fingerDrawing) {
-                    notifyHiddenLayer();
-                }
             }
         } else if (m_fingerDrawing) {
-            // Segundo dedo: empieza un pellizco.
+            // Segundo dedo: empieza un pellizco o un toque con dos dedos.
             if (now - m_fingerStrokeStartMs < kPinchCancelMs) {
                 m_canvas.cancelStroke();
             } else {
                 m_canvas.endStroke();
+                m_tap.candidate = false;
             }
             m_fingerDrawing = false;
         }
@@ -305,6 +429,15 @@ void App::onFingerEvent(const SDL_Event& event) {
     }
 
     case SDL_EVENT_FINGER_MOTION: {
+        if (picking) {
+            movePick(position.x / density, position.y / density);
+            return;
+        }
+        if (tapFinger != m_tap.fingers.end() &&
+            glm::length(position - tapFinger->start) > pointsToPixels(kTapSlopPoints)) {
+            m_tap.moved = true;
+            m_tap.candidate = false;
+        }
         if (finger == m_fingers.end()) {
             return;
         }
@@ -326,22 +459,35 @@ void App::onFingerEvent(const SDL_Event& event) {
     }
 
     case SDL_EVENT_FINGER_UP:
-    case SDL_EVENT_FINGER_CANCELED:
-        if (finger == m_fingers.end()) {
-            return;
+    case SDL_EVENT_FINGER_CANCELED: {
+        const bool canceled = event.type == SDL_EVENT_FINGER_CANCELED;
+        if (picking) {
+            endPick(!canceled);
         }
-        if (m_fingerDrawing) {
-            if (event.type == SDL_EVENT_FINGER_CANCELED) {
-                m_canvas.cancelStroke();   // el sistema decidió que era la palma
-            } else {
-                m_canvas.endStroke();
+        if (finger != m_fingers.end()) {
+            if (m_fingerDrawing) {
+                if (canceled) {
+                    m_canvas.cancelStroke();   // el sistema decidió que era la palma
+                } else {
+                    m_canvas.endStroke();
+                }
+                m_fingerDrawing = false;
             }
-            m_fingerDrawing = false;
+            m_fingers.erase(finger);
+            // Con el dedo que queda, el movimiento sigue desde su posición actual, sin saltos.
+            resetGestureReference();
         }
-        m_fingers.erase(finger);
-        // Con el dedo que queda, el movimiento sigue desde su posición actual, sin saltos.
-        resetGestureReference();
+        if (tapFinger != m_tap.fingers.end()) {
+            m_tap.fingers.erase(tapFinger);
+            if (canceled) {
+                m_tap.candidate = false;
+            }
+            if (m_tap.fingers.empty()) {
+                finishTapGesture(false);
+            }
+        }
         break;
+    }
 
     default:
         break;
@@ -349,7 +495,7 @@ void App::onFingerEvent(const SDL_Event& event) {
 }
 
 // -----------------------------------------------------------------------------
-// Ratón y teclado
+// Ratón
 // -----------------------------------------------------------------------------
 
 void App::onMouseEvent(const SDL_Event& event) {
@@ -360,10 +506,11 @@ void App::onMouseEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         const glm::vec2 position = windowToPixels(event.button.x, event.button.y);
         if (event.button.button == SDL_BUTTON_LEFT) {
-            const glm::vec2 point = toCanvas(position);
-            m_mouseDrawing = m_canvas.beginStroke(point.x, point.y, 1.0f);
-            if (!m_mouseDrawing) {
-                notifyHiddenLayer();
+            const bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+            if (alt || m_ui.eyedropperArmed()) {
+                beginPick(PickSource::Mouse, 0, event.button.x, event.button.y);
+            } else {
+                m_mouseDrawing = beginCanvasStroke(position, 1.0f, false);
             }
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             m_mousePanning = true;
@@ -373,6 +520,9 @@ void App::onMouseEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_MOUSE_MOTION: {
         const glm::vec2 position = windowToPixels(event.motion.x, event.motion.y);
+        if (m_pick.source == PickSource::Mouse) {
+            movePick(event.motion.x, event.motion.y);
+        }
         if (m_mouseDrawing) {
             const glm::vec2 point = toCanvas(position);
             m_canvas.strokeTo(point.x, point.y, 1.0f);
@@ -384,9 +534,13 @@ void App::onMouseEvent(const SDL_Event& event) {
         break;
     }
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (event.button.button == SDL_BUTTON_LEFT && m_mouseDrawing) {
-            m_canvas.endStroke();
-            m_mouseDrawing = false;
+        if (event.button.button == SDL_BUTTON_LEFT) {
+            if (m_pick.source == PickSource::Mouse) {
+                endPick(true);
+            } else if (m_mouseDrawing) {
+                m_canvas.endStroke();
+                m_mouseDrawing = false;
+            }
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             m_mousePanning = false;
         }
@@ -404,22 +558,15 @@ void App::onMouseEvent(const SDL_Event& event) {
     }
 }
 
-void App::onKeyEvent(const SDL_Event& event) {
-    if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat) {
-        return;
-    }
-    if (event.key.key == SDLK_AC_BACK) {
-        m_menu.askExit();
-    }
-}
-
 void App::endGestures() {
     endPenStroke();
+    endPick(false);
     if (m_fingerDrawing) {
         m_canvas.endStroke();
         m_fingerDrawing = false;
     }
     m_fingers.clear();
+    m_tap = {};
     m_gestureDistance = 0.0f;
     if (m_mouseDrawing) {
         m_canvas.endStroke();
