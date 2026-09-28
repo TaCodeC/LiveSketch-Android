@@ -4,87 +4,118 @@ project(livesketch LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Para asegurar que se incluya ANativeActivity_onCreate
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")
+set(EXTERNALS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/externals)
+set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp)
+set(ASSETS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/main/assets)
 
-# Rutas NDK y dependencias externas
-set(NDK_PATH ${ANDROID_NDK})
-set(NATIVE_APP_GLUE_DIR ${NDK_PATH}/sources/android/native_app_glue)
-set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/externals/imgui)
+# -----------------------------------------------------------------------------
+# NDI (opcional)
+# La ruta del SDK se toma, en este orden, de -DNDI_SDK_DIR (Gradle la pasa desde
+# ndi.sdk.dir en local.properties), de la variable de entorno NDI_SDK_DIR o de la
+# ruta que usaba el CMakeLists original. Si no se encuentra, se compila sin NDI.
+# -----------------------------------------------------------------------------
+option(LIVESKETCH_WITH_NDI "Compilar la salida NDI (requiere el NDI SDK)" ON)
+set(NDI_SDK_DIR "" CACHE PATH "Carpeta del NDI SDK (con include/ y lib/)")
+if(NOT NDI_SDK_DIR AND DEFINED ENV{NDI_SDK_DIR})
+    set(NDI_SDK_DIR "$ENV{NDI_SDK_DIR}")
+endif()
+if(NOT NDI_SDK_DIR AND EXISTS "/Users/tacode/NDI_Android")
+    set(NDI_SDK_DIR "/Users/tacode/NDI_Android")
+endif()
 
-# Ruta de NDI SDK
-set(NDI_DIR /Users/tacode/NDI_Android)
-include_directories(
-        ${NATIVE_APP_GLUE_DIR}
-        ${CMAKE_SOURCE_DIR}/externals/glm
-        ${IMGUI_DIR}
-        ${IMGUI_DIR}/backends
-        ${NDI_DIR}/include
-)
+set(LIVESKETCH_NDI_ENABLED OFF)
+if(LIVESKETCH_WITH_NDI AND NDI_SDK_DIR)
+    if(ANDROID)
+        set(NDI_LIBRARY "${NDI_SDK_DIR}/lib/${ANDROID_ABI}/libndi.so")
+    else()
+        find_library(NDI_LIBRARY NAMES ndi
+                     PATHS "${NDI_SDK_DIR}/lib"
+                     PATH_SUFFIXES x86_64-linux-gnu aarch64-linux-gnu
+                     NO_DEFAULT_PATH)
+    endif()
+    if(EXISTS "${NDI_SDK_DIR}/include/Processing.NDI.Lib.h" AND NDI_LIBRARY AND EXISTS "${NDI_LIBRARY}")
+        set(LIVESKETCH_NDI_ENABLED ON)
+    endif()
+endif()
+if(LIVESKETCH_WITH_NDI AND NOT LIVESKETCH_NDI_ENABLED)
+    message(WARNING "NDI SDK no encontrado (NDI_SDK_DIR='${NDI_SDK_DIR}'): se compila sin salida NDI.")
+endif()
 
-# Biblioteca glue y ImGui
-add_library(android_native_app_glue STATIC ${NATIVE_APP_GLUE_DIR}/android_native_app_glue.c)
-add_library(imgui
+# -----------------------------------------------------------------------------
+# SDL3 (submódulo en externals/SDL)
+# -----------------------------------------------------------------------------
+set(SDL_SHARED ON CACHE BOOL "" FORCE)
+set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${EXTERNALS_DIR}/SDL ${CMAKE_CURRENT_BINARY_DIR}/SDL)
+
+# OpenGL ES 3.0. En Linux, libGLESv2 (Mesa/libglvnd) incluye las funciones de GLES 3.
+if(ANDROID)
+    find_library(GLES_LIBRARY GLESv3 REQUIRED)
+else()
+    find_library(GLES_LIBRARY GLESv2 REQUIRED)
+endif()
+
+# -----------------------------------------------------------------------------
+# Dear ImGui (backends SDL3 + OpenGL3)
+# -----------------------------------------------------------------------------
+set(IMGUI_DIR ${EXTERNALS_DIR}/imgui)
+add_library(imgui STATIC
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_android.cpp
 )
+target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+target_link_libraries(imgui PUBLIC SDL3::SDL3 ${GLES_LIBRARY})
 
-enable_language(CXX)
-
-# Biblioteca principal y NDI sender
-add_library(livesketch SHARED
-        src/main/cpp/main.cpp
-        src/main/cpp/Renderer/Renderer.cpp
-        src/main/cpp/layers/Layer.cpp
-        src/main/cpp/layers/LayerManager.cpp
-        src/main/cpp/Brush/Brush.cpp
-        src/main/cpp/Brush/stb_image.h
-        src/main/cpp/DevUI/IMGUIMenu.h
-        src/main/cpp/DevUI/IMGUIMenu.cpp
-        src/main/cpp/NDI/NDISender.h       # header
-        src/main/cpp/NDI/NDISender.cpp     # implementación
-        src/main/cpp/NDIThreadSender.h
-        src/main/cpp/NDIThreadSender.cpp
-        src/main/cpp/FileManager/FileManager.h
-        src/main/cpp/FileManager/FileManager.cpp
+# -----------------------------------------------------------------------------
+# LiveSketch
+# -----------------------------------------------------------------------------
+add_library(livesketch_core STATIC
+        ${SRC_DIR}/App/App.cpp
+        ${SRC_DIR}/App/AppInput.cpp
+        ${SRC_DIR}/Canvas/Brush.cpp
+        ${SRC_DIR}/Canvas/Camera.cpp
+        ${SRC_DIR}/Canvas/Canvas.cpp
+        ${SRC_DIR}/Canvas/CanvasView.cpp
+        ${SRC_DIR}/Canvas/Compositor.cpp
+        ${SRC_DIR}/Canvas/LayerStack.cpp
+        ${SRC_DIR}/Gfx/GLObjects.cpp
+        ${SRC_DIR}/Gfx/Shader.cpp
+        ${SRC_DIR}/IO/Assets.cpp
+        ${SRC_DIR}/ThirdParty/stb_impl.cpp
+        ${SRC_DIR}/UI/Menu.cpp
 )
-#add_library(miniz STATIC src/main/cpp/FileManager/miniz.c)
+target_include_directories(livesketch_core PUBLIC ${SRC_DIR} ${EXTERNALS_DIR}/glm)
+target_compile_options(livesketch_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
+# Código de terceros: sin avisos.
+set_source_files_properties(${SRC_DIR}/ThirdParty/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
+target_link_libraries(livesketch_core PUBLIC imgui SDL3::SDL3 ${GLES_LIBRARY})
 
-
-# Bibliotecas de sistema
-find_library(log-lib log)
-find_library(android-lib android)
-find_library(EGL-lib EGL)
-find_library(GLESv3-lib GLESv3)
-
-# Detección de ABI para la librería NDI
-if(${ANDROID_ABI} STREQUAL "arm64-v8a")
-    set(NDI_LIB ${NDI_DIR}/lib/arm64-v8a/libndi.so)
-elseif(${ANDROID_ABI} STREQUAL "armeabi-v7a")
-    set(NDI_LIB ${NDI_DIR}/lib/armeabi-v7a/libndi.so)
-elseif(${ANDROID_ABI} STREQUAL "x86_64")
-    set(NDI_LIB ${NDI_DIR}/lib/x86_64/libndi.so)
+if(ANDROID)
+    target_link_libraries(livesketch_core PUBLIC log android)
 else()
-    message(FATAL_ERROR "Unsupported ABI: ${ANDROID_ABI}")
+    # En escritorio los assets se leen directamente de la carpeta del proyecto.
+    target_compile_definitions(livesketch_core PUBLIC LIVESKETCH_ASSETS_DIR="${ASSETS_DIR}")
 endif()
 
-target_link_libraries(livesketch
-        PUBLIC
-        imgui     # si otros targets van a usar ImGui
-        PRIVATE
-        #miniz
-        ${NDI_LIB}
-        android_native_app_glue
-        ${log-lib}
-        ${android-lib}
-        ${EGL-lib}
-        ${GLESv3-lib}
-)
+if(LIVESKETCH_NDI_ENABLED)
+    message(STATUS "LiveSketch: salida NDI activada (${NDI_LIBRARY})")
+    target_compile_definitions(livesketch_core PUBLIC LIVESKETCH_WITH_NDI=1)
+    target_include_directories(livesketch_core PRIVATE ${NDI_SDK_DIR}/include)
+    target_link_libraries(livesketch_core PUBLIC ${NDI_LIBRARY})
+endif()
 
-
-# Incluir imgui como dependencia pública si fuera necesario
-# target_link_libraries(livesketch PUBLIC imgui)
+if(ANDROID)
+    # SDLActivity carga libSDL3.so y liblivesketch.so (ver MainActivity.getLibraries).
+    add_library(livesketch SHARED ${SRC_DIR}/main.cpp)
+else()
+    add_executable(livesketch ${SRC_DIR}/main.cpp)
+endif()
+target_link_libraries(livesketch PRIVATE livesketch_core)
