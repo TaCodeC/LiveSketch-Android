@@ -146,3 +146,22 @@ void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, 
     glDisable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
+
+void Compositor::scale(GLuint target, float factor, const IRect& rect) {
+    const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
+    if (area.empty() || !m_program) {
+        return;
+    }
+
+    bindCanvasPass(target, area);
+    // destino *= factor. La salida del shader no cuenta (GL_ZERO); se muestrea la textura
+    // 0 para no leer del FBO en el que se escribe.
+    glBlendColor(factor, factor, factor, factor);
+    glBlendFunc(GL_ZERO, GL_CONSTANT_COLOR);
+    drawQuad(0, 1.0f, nullptr);
+
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(0);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}

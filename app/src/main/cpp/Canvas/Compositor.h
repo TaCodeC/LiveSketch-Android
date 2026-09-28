@@ -26,6 +26,9 @@ public:
     // `rect`. Over: fuente encima con `opacity`. Erase: borra el destino según el alfa
     // de la fuente por `opacity`.
     void draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect);
+    // Multiplica el contenido del FBO `target` por `factor` dentro de `rect` (hornea la
+    // opacidad de una capa en sus píxeles).
+    void scale(GLuint target, float factor, const IRect& rect);
 
     const gfx::RenderTarget& composite() const { return m_composite; }
 

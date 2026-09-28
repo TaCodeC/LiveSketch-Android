@@ -261,8 +261,14 @@ bool Canvas::mergeDown(int index) {
 
     const Layer& upper = m_layers.at(index);
     Layer& lower = m_layers.at(index - 1);
-    m_compositor.draw(lower.target.fbo.id(), upper.target.texture.id(), upper.opacity, Compositor::Blend::Over,
-                      IRect::ofSize(width(), height()));
+    const IRect all = IRect::ofSize(width(), height());
+    // La opacidad de la capa de abajo se hornea en sus píxeles para que el resultado se
+    // vea igual que las dos capas por separado.
+    if (lower.opacity < 1.0f) {
+        m_compositor.scale(lower.target.fbo.id(), lower.opacity, all);
+        m_layers.setOpacity(index - 1, 1.0f);
+    }
+    m_compositor.draw(lower.target.fbo.id(), upper.target.texture.id(), upper.opacity, Compositor::Blend::Over, all);
     m_layers.remove(index);
     m_layers.setActive(index - 1);
     return true;
