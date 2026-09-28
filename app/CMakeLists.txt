@@ -125,3 +125,23 @@ else()
     add_executable(livesketch ${SRC_DIR}/main.cpp)
 endif()
 target_link_libraries(livesketch PRIVATE livesketch_core)
+
+# -----------------------------------------------------------------------------
+# Pruebas de escritorio (necesitan OpenGL ES 3.0; en Linux, Mesa)
+# -----------------------------------------------------------------------------
+option(LIVESKETCH_BUILD_TESTS "Compilar las pruebas de escritorio" OFF)
+if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
+    enable_testing()
+    set(TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    add_executable(livesketch_tests
+            ${TESTS_DIR}/TestMain.cpp
+            ${TESTS_DIR}/CameraTests.cpp
+            ${TESTS_DIR}/CanvasTests.cpp
+            ${TESTS_DIR}/ExportTests.cpp
+            ${TESTS_DIR}/LayerStackTests.cpp
+            ${TESTS_DIR}/NdiTests.cpp
+    )
+    target_compile_options(livesketch_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_link_libraries(livesketch_tests PRIVATE livesketch_core)
+    add_test(NAME livesketch_tests COMMAND livesketch_tests)
+endif()
