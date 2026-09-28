@@ -184,7 +184,7 @@ void App::onPenEvent(const SDL_Event& event) {
         }
         break;
 
-    case SDL_EVENT_PEN_DOWN: {
+    case SDL_EVENT_PEN_DOWN:
         m_pen.down = true;
         m_pen.lastActiveMs = now;
         m_pen.x = event.ptouch.x;
@@ -194,23 +194,16 @@ void App::onPenEvent(const SDL_Event& event) {
         }
         // El lápiz manda: lo que estuvieran haciendo los dedos (la palma) se termina.
         endGestures();
-        const glm::vec2 point = toCanvas(windowToPixels(m_pen.x, m_pen.y));
-        m_pen.drawing = m_canvas.beginStroke(point.x, point.y, m_pen.pressure, event.ptouch.eraser);
-        if (!m_pen.drawing) {
-            notifyHiddenLayer();
-        }
-        m_pen.pendingSample = false;
+        m_pen.drawing = true;
+        m_pen.strokePending = true;
+        m_pen.eraser = event.ptouch.eraser;
+        m_pen.pendingSample = true;
         break;
-    }
 
     case SDL_EVENT_PEN_UP:
         m_pen.down = false;
         m_pen.lastActiveMs = now;
-        if (m_pen.drawing) {
-            flushPenSample();
-            m_canvas.endStroke();
-            m_pen.drawing = false;
-        }
+        endPenStroke();
         break;
 
     default:
@@ -223,9 +216,26 @@ void App::flushPenSample() {
         return;
     }
     m_pen.pendingSample = false;
-    if (m_pen.drawing) {
-        const glm::vec2 point = toCanvas(windowToPixels(m_pen.x, m_pen.y));
+    if (!m_pen.drawing) {
+        return;
+    }
+    const glm::vec2 point = toCanvas(windowToPixels(m_pen.x, m_pen.y));
+    if (m_pen.strokePending) {
+        m_pen.strokePending = false;
+        m_pen.drawing = m_canvas.beginStroke(point.x, point.y, m_pen.pressure, m_pen.eraser);
+        if (!m_pen.drawing) {
+            notifyHiddenLayer();
+        }
+    } else {
         m_canvas.strokeTo(point.x, point.y, m_pen.pressure);
+    }
+}
+
+void App::endPenStroke() {
+    flushPenSample();
+    if (m_pen.drawing) {
+        m_canvas.endStroke();
+        m_pen.drawing = false;
     }
 }
 
@@ -404,11 +414,7 @@ void App::onKeyEvent(const SDL_Event& event) {
 }
 
 void App::endGestures() {
-    if (m_pen.drawing) {
-        flushPenSample();
-        m_canvas.endStroke();
-        m_pen.drawing = false;
-    }
+    endPenStroke();
     if (m_fingerDrawing) {
         m_canvas.endStroke();
         m_fingerDrawing = false;

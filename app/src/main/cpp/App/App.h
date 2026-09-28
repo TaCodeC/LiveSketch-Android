@@ -54,6 +54,7 @@ private:
 
     void onPenEvent(const SDL_Event& event);
     void flushPenSample();
+    void endPenStroke();
     void onFingerEvent(const SDL_Event& event);
     void onMouseEvent(const SDL_Event& event);
     void onKeyEvent(const SDL_Event& event);
@@ -86,12 +87,15 @@ private:
     uint64_t m_wakeAt = 0;
 
     // --- Estado de la entrada ---
-    // Lápiz. Android manda primero la posición y después la presión de cada muestra,
-    // así que la muestra se aplica cuando llega la siguiente o al dibujar el frame.
+    // Lápiz. SDL manda primero la posición y después la presión de cada muestra (en la
+    // web, también el toque llega antes que su presión), así que la muestra, y con la
+    // primera el inicio del trazo, se aplica cuando llega la siguiente o al dibujar el frame.
     struct PenState {
         bool inProximity = false;
         bool down = false;
-        bool drawing = false;       // el trazo empezó en el lienzo (no en la interfaz)
+        bool drawing = false;       // el trazo es del lienzo (tocó fuera de la interfaz)
+        bool strokePending = false; // el trazo empieza con la muestra pendiente
+        bool eraser = false;        // toca con la goma
         float x = 0.0f;             // coordenadas de ventana
         float y = 0.0f;
         float pressure = 1.0f;
