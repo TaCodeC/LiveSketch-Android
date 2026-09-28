@@ -106,6 +106,12 @@ void Menu::controls(Canvas& canvas, UiState& state, UiRequests& requests) {
         ImGui::Separator();
         brushPanel(canvas, state);
         ImGui::Separator();
+        ImGui::BeginDisabled(state.exporting);
+        if (ImGui::Button("Guardar PNG")) {
+            requests.savePng = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         if (ImGui::Button("Centrar lienzo")) {
             requests.fitView = true;
         }
@@ -370,10 +376,13 @@ void Menu::overlays(Canvas* canvas, UiRequests& requests) {
         ImGui::SetNextWindowPos(ImVec2(viewport->GetCenter().x, viewport->WorkPos.y + viewport->WorkSize.y - 24.0f),
                                 ImGuiCond_Always, ImVec2(0.5f, 1.0f));
         ImGui::SetNextWindowBgAlpha(0.85f);
-        ImGui::Begin("##notice", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+        ImGui::Begin("##notice", nullptr, flags);
+        ImGui::PushTextWrapPos(std::min(ImGui::GetFontSize() * 40.0f, viewport->WorkSize.x * 0.8f));
         ImGui::TextUnformatted(m_notice.c_str());
+        ImGui::PopTextWrapPos();
         ImGui::End();
     }
 }

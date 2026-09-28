@@ -3,6 +3,7 @@
 #include "Canvas/Camera.h"
 #include "Canvas/Canvas.h"
 #include "Canvas/CanvasView.h"
+#include "IO/ImageExport.h"
 #include "NDI/NdiOutput.h"
 #include "UI/Menu.h"
 
@@ -32,6 +33,9 @@ private:
     void updateWindowSize();
     void createCanvas(int width, int height);
     void setNdiEnabled(bool enabled);
+    void requestPngExport();
+    void exportPng();
+    void onPngSaved(const io::PngExporter::Result& result);
     void applyRequests(const UiRequests& requests);
     void renderFrame();
     void schedulePacing();
@@ -69,6 +73,11 @@ private:
     Menu m_menu;
     UiState m_ui;
     NdiOutput m_ndi;
+
+    // Guardar PNG: la lectura del lienzo es en el hilo de GL; la compresión, en otro.
+    io::PngExporter m_exporter;
+    bool m_awaitingPermission = false;   // Android 10 o anterior: permiso de almacenamiento
+    bool m_exportPending = false;        // permiso concedido: guardar en el próximo frame
 
     // Ritmo del bucle: a vsync mientras algo se mueve, dormido esperando eventos si no.
     int m_redrawFrames = 4;

@@ -48,9 +48,6 @@ public:
     // Mensaje de error del emisor, o vacío si va bien.
     std::string error() const;
 
-    // Quita el premultiplicado de un buffer RGBA8 (público para las pruebas).
-    static void unpremultiply(uint8_t* rgba, size_t pixelCount);
-
 private:
     struct Slot {
         gfx::Buffer pbo;

@@ -9,7 +9,9 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -22,16 +24,30 @@ constexpr size_t kSnapshotBudget = size_t{256} * 1024 * 1024;
 // Frames que se dibujan después de cada entrada (ver App::event).
 constexpr int kFramesAfterInput = 4;
 
-// Evento propio para despertar el bucle cuando está dormido esperando eventos.
-Uint32 g_wakeEventType = 0;
+// Eventos propios. Despiertan el bucle cuando está dormido esperando eventos; los
+// empujan un temporizador u otros hilos.
+Uint32 g_wakeEventType = 0;         // temporizador de App::wakeAt
+Uint32 g_exportEventType = 0;       // terminó un guardado de PNG
+Uint32 g_permissionEventType = 0;   // respuesta al permiso de almacenamiento (code: 1 si se concedió)
 
-Uint32 SDLCALL pushWakeEvent(void*, SDL_TimerID, Uint32) {
+void pushEvent(Uint32 type, Sint32 code = 0) {
     SDL_Event event;
     SDL_zero(event);
-    event.type = g_wakeEventType;
+    event.type = type;
+    event.user.code = code;
     SDL_PushEvent(&event);
+}
+
+Uint32 SDLCALL pushWakeEvent(void*, SDL_TimerID, Uint32) {
+    pushEvent(g_wakeEventType);
     return 0;
 }
+
+#ifdef SDL_PLATFORM_ANDROID
+void SDLCALL onStoragePermission(void*, const char*, bool granted) {
+    pushEvent(g_permissionEventType, granted ? 1 : 0);
+}
+#endif
 
 } // namespace
 
@@ -57,7 +73,14 @@ SDL_AppResult App::init(int, char**) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    g_wakeEventType = SDL_RegisterEvents(1);
+    const Uint32 firstEvent = SDL_RegisterEvents(3);
+    if (firstEvent == 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_RegisterEvents: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    g_wakeEventType = firstEvent;
+    g_exportEventType = firstEvent + 1;
+    g_permissionEventType = firstEvent + 2;
 
     if (!createWindow() || !initImGui()) {
         return SDL_APP_FAILURE;
@@ -140,6 +163,8 @@ void App::shutdownImGui() {
 }
 
 void App::quit() {
+    // Un PNG a medio guardar se termina antes de salir.
+    m_exporter.wait();
     if (m_wakeTimer) {
         SDL_RemoveTimer(m_wakeTimer);
         m_wakeTimer = 0;
@@ -207,6 +232,20 @@ SDL_AppResult App::event(const SDL_Event& event) {
 
     if (event.type == g_wakeEventType) {
         m_wakeTimer = 0;
+        m_redrawFrames = std::max(m_redrawFrames, 1);
+        return SDL_APP_CONTINUE;
+    }
+    if (event.type == g_exportEventType) {
+        m_redrawFrames = std::max(m_redrawFrames, 1);   // iterate() recoge el resultado
+        return SDL_APP_CONTINUE;
+    }
+    if (event.type == g_permissionEventType) {
+        m_awaitingPermission = false;
+        if (event.user.code != 0) {
+            m_exportPending = true;   // se lee el lienzo en iterate(), con el contexto actual
+        } else {
+            m_menu.notify("Sin el permiso de almacenamiento no se puede guardar en Descargas", 5000);
+        }
         m_redrawFrames = std::max(m_redrawFrames, 1);
         return SDL_APP_CONTINUE;
     }
@@ -303,6 +342,57 @@ void App::setNdiEnabled(bool enabled) {
     }
 }
 
+void App::requestPngExport() {
+    if (!m_canvas.ready() || m_exporter.busy() || m_awaitingPermission || m_exportPending) {
+        return;
+    }
+#ifdef SDL_PLATFORM_ANDROID
+    // Hasta Android 10 escribir en Descargas pide el permiso de almacenamiento. Si ya está
+    // concedido, SDL responde enseguida y se guarda en el frame siguiente.
+    if (SDL_GetAndroidSDKVersion() <= 29) {
+        m_awaitingPermission =
+            SDL_RequestAndroidPermission("android.permission.WRITE_EXTERNAL_STORAGE", onStoragePermission, nullptr);
+        if (!m_awaitingPermission) {
+            m_menu.notify("No se pudo pedir el permiso de almacenamiento");
+        }
+        return;
+    }
+#endif
+    exportPng();
+}
+
+void App::exportPng() {
+    if (!m_canvas.ready()) {
+        return;
+    }
+    // Se guarda el lienzo completo (sin el zoom de la pantalla), con transparencia si el
+    // fondo está oculto o borrado.
+    std::vector<uint8_t> pixels;
+    if (!m_canvas.readComposite(pixels)) {
+        m_menu.notify("No se pudo leer el lienzo para guardar el PNG", 5000);
+        return;
+    }
+    const std::string path = io::timestampedPath(io::downloadsFolder(), "LiveSketch", ".png");
+    if (!m_exporter.start(std::move(pixels), m_canvas.width(), m_canvas.height(), path,
+                          [] { pushEvent(g_exportEventType); })) {
+        m_menu.notify("No se pudo empezar a guardar el PNG", 5000);
+        return;
+    }
+    m_menu.notify("Guardando PNG…", 60000);
+}
+
+void App::onPngSaved(const io::PngExporter::Result& result) {
+    if (result.ok) {
+        io::announceFile(result.path, "image/png");
+        SDL_Log("PNG guardado en %s", result.path.c_str());
+        m_menu.notify("PNG guardado en " + result.path, 5000);
+    } else {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudo guardar %s: %s", result.path.c_str(),
+                     result.error.c_str());
+        m_menu.notify("No se pudo guardar el PNG: " + result.error, 8000);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Frame
 // -----------------------------------------------------------------------------
@@ -313,6 +403,13 @@ SDL_AppResult App::iterate() {
         return SDL_APP_CONTINUE;
     }
     flushPenSample();
+    if (m_exportPending) {
+        m_exportPending = false;
+        exportPng();
+    }
+    if (std::optional<io::PngExporter::Result> saved = m_exporter.takeResult()) {
+        onPngSaved(*saved);
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
@@ -321,6 +418,7 @@ SDL_AppResult App::iterate() {
     m_ui.ndiRunning = m_ndi.running();
     m_ui.ndiConnections = m_ndi.connections();
     m_ui.ndiError = m_ndi.error();
+    m_ui.exporting = m_awaitingPermission || m_exportPending || m_exporter.busy();
 
     UiRequests requests;
     if (m_canvas.ready()) {
@@ -353,6 +451,9 @@ void App::applyRequests(const UiRequests& requests) {
     }
     if (requests.fitView) {
         m_camera.fit();
+    }
+    if (requests.savePng) {
+        requestPngExport();
     }
     if (requests.ndi >= 0) {
         setNdiEnabled(requests.ndi == 1);

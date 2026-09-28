@@ -87,8 +87,10 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/Compositor.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
         ${SRC_DIR}/Gfx/GLObjects.cpp
+        ${SRC_DIR}/Gfx/Pixels.cpp
         ${SRC_DIR}/Gfx/Shader.cpp
         ${SRC_DIR}/IO/Assets.cpp
+        ${SRC_DIR}/IO/ImageExport.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
         ${SRC_DIR}/ThirdParty/stb_impl.cpp
         ${SRC_DIR}/UI/Menu.cpp

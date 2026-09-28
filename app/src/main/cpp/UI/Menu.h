@@ -13,6 +13,8 @@ struct UiState {
     bool ndiRunning = false;
     int ndiConnections = 0;
     std::string ndiError;
+
+    bool exporting = false;        // hay un PNG guardándose (o esperando el permiso)
 };
 
 // Lo que el menú pide a la app en este frame.
@@ -20,6 +22,7 @@ struct UiRequests {
     int canvasWidth = 0;    // > 0: crear el lienzo con este tamaño (pantalla de inicio)
     int canvasHeight = 0;
     bool fitView = false;
+    bool savePng = false;
     bool quit = false;
     int ndi = -1;           // 1: encender NDI, 0: apagarlo
 };
