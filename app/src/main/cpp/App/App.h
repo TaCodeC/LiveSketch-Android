@@ -3,6 +3,7 @@
 #include "Canvas/Camera.h"
 #include "Canvas/Canvas.h"
 #include "Canvas/CanvasView.h"
+#include "NDI/NdiOutput.h"
 #include "UI/Menu.h"
 
 #include <SDL3/SDL.h>
@@ -30,6 +31,7 @@ private:
     void onRenderDeviceReset();
     void updateWindowSize();
     void createCanvas(int width, int height);
+    void setNdiEnabled(bool enabled);
     void applyRequests(const UiRequests& requests);
     void renderFrame();
     void schedulePacing();
@@ -66,6 +68,7 @@ private:
     Camera m_camera;
     Menu m_menu;
     UiState m_ui;
+    NdiOutput m_ndi;
 
     // Ritmo del bucle: a vsync mientras algo se mueve, dormido esperando eventos si no.
     int m_redrawFrames = 4;

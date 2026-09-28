@@ -89,6 +89,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Gfx/GLObjects.cpp
         ${SRC_DIR}/Gfx/Shader.cpp
         ${SRC_DIR}/IO/Assets.cpp
+        ${SRC_DIR}/NDI/NdiOutput.cpp
         ${SRC_DIR}/ThirdParty/stb_impl.cpp
         ${SRC_DIR}/UI/Menu.cpp
 )
@@ -107,9 +108,12 @@ endif()
 
 if(LIVESKETCH_NDI_ENABLED)
     message(STATUS "LiveSketch: salida NDI activada (${NDI_LIBRARY})")
+    target_sources(livesketch_core PRIVATE ${SRC_DIR}/NDI/NdiSender.cpp)
     target_compile_definitions(livesketch_core PUBLIC LIVESKETCH_WITH_NDI=1)
     target_include_directories(livesketch_core PRIVATE ${NDI_SDK_DIR}/include)
     target_link_libraries(livesketch_core PUBLIC ${NDI_LIBRARY})
+else()
+    target_sources(livesketch_core PRIVATE ${SRC_DIR}/NDI/NoNdi.cpp)
 endif()
 
 if(ANDROID)

@@ -102,6 +102,8 @@ void Menu::controls(Canvas& canvas, UiState& state, UiRequests& requests) {
     if (ImGui::Begin("LiveSketch Control")) {
         layerPanel(canvas);
         ImGui::Separator();
+        ndiPanel(state, requests);
+        ImGui::Separator();
         brushPanel(canvas, state);
         ImGui::Separator();
         if (ImGui::Button("Centrar lienzo")) {
@@ -204,6 +206,33 @@ void Menu::layerPanel(Canvas& canvas) {
     float opacity = layers.active().opacity;
     if (ImGui::SliderFloat("Opacidad de capa", &opacity, 0.0f, 1.0f, "%.2f")) {
         layers.setOpacity(activeIndex(), opacity);
+    }
+}
+
+void Menu::ndiPanel(const UiState& state, UiRequests& requests) {
+    if (!state.ndiAvailable) {
+        bool off = false;
+        ImGui::BeginDisabled();
+        ImGui::Checkbox("NDI", &off);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(esta compilación no incluye NDI)");
+        return;
+    }
+
+    bool on = state.ndiRunning;
+    if (ImGui::Checkbox("NDI", &on)) {
+        requests.ndi = on ? 1 : 0;
+    }
+    if (!state.ndiRunning) {
+        return;
+    }
+    ImGui::SameLine();
+    if (!state.ndiError.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", state.ndiError.c_str());
+    } else {
+        const int n = state.ndiConnections;
+        ImGui::TextDisabled("Emitiendo «LiveSketch» · %d %s", n, n == 1 ? "receptor" : "receptores");
     }
 }
 

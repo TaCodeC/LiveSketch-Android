@@ -62,6 +62,9 @@ SDL_AppResult App::init(int, char**) {
     if (!createWindow() || !initImGui()) {
         return SDL_APP_FAILURE;
     }
+#ifdef LIVESKETCH_WITH_NDI
+    m_ui.ndiAvailable = true;
+#endif
     if (!m_view.init()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron compilar los shaders de la vista");
         return SDL_APP_FAILURE;
@@ -147,6 +150,7 @@ void App::quit() {
     if (!m_foreground || !m_glContext) {
         gfx::onContextRecreated();
     }
+    m_ndi.stop();
     m_canvas.destroy();
     m_view.destroy();
     shutdownImGui();
@@ -220,6 +224,8 @@ SDL_AppResult App::event(const SDL_Event& event) {
 void App::onWillEnterBackground() {
     m_foreground = false;
     endGestures();
+    // NDI sigue reenviando el último frame desde su hilo, que no usa GL.
+    m_ndi.dropInFlight();
     if (m_canvas.ready()) {
         m_canvas.update();
         m_canvas.takeSnapshot(kSnapshotBudget);
@@ -243,6 +249,7 @@ void App::onRenderDeviceReset() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplOpenGL3_Init(kGlslVersion);
     m_view.init();
+    m_ndi.recreateGpu();
 
     if (m_canvas.layers().count() > 0) {
         bool restored = false;
@@ -278,6 +285,24 @@ void App::createCanvas(int width, int height) {
     SDL_Log("Lienzo de %dx%d (hasta %d capas)", width, height, m_canvas.maxLayers());
 }
 
+void App::setNdiEnabled(bool enabled) {
+    if (!enabled) {
+        m_ndi.stop();
+        return;
+    }
+    if (m_ndi.running() || !m_canvas.ready()) {
+        return;
+    }
+    std::unique_ptr<FrameSink> sink = makeNdiSink("LiveSketch");
+    if (!sink) {
+        m_menu.notify("Esta compilación no incluye NDI");
+        return;
+    }
+    if (!m_ndi.start(std::move(sink), m_canvas.width(), m_canvas.height())) {
+        m_menu.notify("No se pudo iniciar NDI");
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Frame
 // -----------------------------------------------------------------------------
@@ -292,6 +317,10 @@ SDL_AppResult App::iterate() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+
+    m_ui.ndiRunning = m_ndi.running();
+    m_ui.ndiConnections = m_ndi.connections();
+    m_ui.ndiError = m_ndi.error();
 
     UiRequests requests;
     if (m_canvas.ready()) {
@@ -308,6 +337,9 @@ SDL_AppResult App::iterate() {
     applyRequests(requests);
 
     m_canvas.update();
+    if (m_ndi.running()) {
+        m_ndi.capture(m_canvas.composite().fbo.id(), m_canvas.version());
+    }
     renderFrame();
     schedulePacing();
     return SDL_APP_CONTINUE;
@@ -321,6 +353,9 @@ void App::applyRequests(const UiRequests& requests) {
     }
     if (requests.fitView) {
         m_camera.fit();
+    }
+    if (requests.ndi >= 0) {
+        setNdiEnabled(requests.ndi == 1);
     }
 }
 
@@ -337,7 +372,7 @@ void App::schedulePacing() {
     // Entradas que ImGui todavía no ha procesado o el oscurecido de un diálogo a medias.
     const bool imguiPending = g.InputEventsQueue.Size > 0 || (g.DimBgRatio > 0.0f && g.DimBgRatio < 1.0f);
     const bool busy = m_redrawFrames > 0 || imguiPending || canvasInteractionActive() || io.WantTextInput ||
-                      ImGui::IsAnyItemActive();
+                      ImGui::IsAnyItemActive() || m_ndi.busy();
     if (m_redrawFrames > 0) {
         --m_redrawFrames;
     }
@@ -349,7 +384,12 @@ void App::schedulePacing() {
         m_continuous = busy;
     }
     if (!busy) {
-        const uint64_t deadline = m_menu.noticeDeadline();
+        uint64_t deadline = m_menu.noticeDeadline();
+        if (m_ndi.running()) {
+            // Refresca cada segundo el número de receptores que muestra el menú.
+            const uint64_t refresh = SDL_GetTicks() + 1000;
+            deadline = deadline == 0 ? refresh : std::min(deadline, refresh);
+        }
         if (deadline != 0) {
             wakeAt(deadline);
         }

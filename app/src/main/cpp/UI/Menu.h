@@ -8,6 +8,11 @@ class Canvas;
 // Estado de la interfaz que no pertenece al lienzo.
 struct UiState {
     bool drawWithFinger = false;   // si no, los dedos solo mueven y hacen zoom
+
+    bool ndiAvailable = false;     // la app se compiló con el SDK de NDI
+    bool ndiRunning = false;
+    int ndiConnections = 0;
+    std::string ndiError;
 };
 
 // Lo que el menú pide a la app en este frame.
@@ -16,6 +21,7 @@ struct UiRequests {
     int canvasHeight = 0;
     bool fitView = false;
     bool quit = false;
+    int ndi = -1;           // 1: encender NDI, 0: apagarlo
 };
 
 // Menú de ImGui. Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a
@@ -42,6 +48,7 @@ public:
 
 private:
     void layerPanel(Canvas& canvas);
+    void ndiPanel(const UiState& state, UiRequests& requests);
     void brushPanel(Canvas& canvas, UiState& state);
 
     int m_preset = 5;   // "Full", como antes
