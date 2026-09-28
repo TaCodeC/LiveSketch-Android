@@ -9,18 +9,41 @@
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_time.h>
 
-#ifdef SDL_PLATFORM_ANDROID
+#if defined(SDL_PLATFORM_ANDROID)
 #include <SDL3/SDL_system.h>
 #include <jni.h>
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+#include <emscripten/em_js.h>
 #endif
 
 #include <cstdio>
 #include <system_error>
 
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+// Descarga en el navegador un archivo del sistema de archivos en memoria de Emscripten. La
+// página puede encargarse ella misma definiendo Module.saveFile(blob, nombre), que devuelve
+// true si lo hizo (por ejemplo, en un visor que no deja descargar con un enlace).
+EM_JS(void, liveSketchDownload, (const char* path, const char* name, const char* mimeType), {
+    const blob = new Blob([FS.readFile(UTF8ToString(path))], {type: UTF8ToString(mimeType)});
+    const fileName = UTF8ToString(name);
+    if (Module['saveFile'] && Module['saveFile'](blob, fileName)) {
+        return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+});
+#endif
+
 namespace io {
 namespace {
 
-std::string withTrailingSlash(std::string folder) {
+[[maybe_unused]] std::string withTrailingSlash(std::string folder) {
     if (!folder.empty() && folder.back() != '/') {
         folder += '/';
     }
@@ -144,7 +167,7 @@ void writeToStream(void* context, void* data, int size) {
 } // namespace
 
 std::string downloadsFolder() {
-#ifdef SDL_PLATFORM_ANDROID
+#if defined(SDL_PLATFORM_ANDROID)
     std::string folder;
     withJni([&folder](JNIEnv* env) { folder = androidDownloadsFolder(env); });
     if (folder.empty()) {
@@ -152,6 +175,8 @@ std::string downloadsFolder() {
     }
     SDL_CreateDirectory(folder.c_str());
     return withTrailingSlash(folder);
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    return "/tmp/";
 #else
     if (const char* downloads = SDL_GetUserFolder(SDL_FOLDER_DOWNLOADS)) {
         if (SDL_CreateDirectory(downloads)) {
@@ -213,8 +238,12 @@ bool writePng(const std::string& path, const uint8_t* rgba, int width, int heigh
 }
 
 void announceFile([[maybe_unused]] const std::string& path, [[maybe_unused]] const char* mimeType) {
-#ifdef SDL_PLATFORM_ANDROID
+#if defined(SDL_PLATFORM_ANDROID)
     withJni([&](JNIEnv* env) { androidScanFile(env, path, mimeType); });
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    const std::string name = path.substr(path.find_last_of('/') + 1);
+    liveSketchDownload(path.c_str(), name.c_str(), mimeType);
+    SDL_RemovePath(path.c_str());
 #endif
 }
 
@@ -263,6 +292,9 @@ bool PngExporter::start(std::vector<uint8_t> premultiplied, int width, int heigh
             onFinished();
         }
     };
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    save();
+#else
     try {
         m_thread = std::thread(std::move(save));
     } catch (const std::system_error&) {
@@ -270,6 +302,7 @@ bool PngExporter::start(std::vector<uint8_t> premultiplied, int width, int heigh
         m_busy = false;
         return false;
     }
+#endif
     return true;
 }
 

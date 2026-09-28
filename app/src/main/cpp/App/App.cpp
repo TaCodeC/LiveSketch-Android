@@ -118,8 +118,11 @@ bool App::createWindow() {
 
     // Redimensionable: en Android permite todas las orientaciones, como antes.
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-#ifdef SDL_PLATFORM_ANDROID
+#if defined(SDL_PLATFORM_ANDROID)
     flags |= SDL_WINDOW_FULLSCREEN;
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    // En el navegador ocupa toda la página y sigue su tamaño.
+    flags |= SDL_WINDOW_FILL_DOCUMENT;
 #endif
     m_window = SDL_CreateWindow("LiveSketch", 1280, 800, flags);
     if (!m_window) {
@@ -385,7 +388,12 @@ void App::onPngSaved(const io::PngExporter::Result& result) {
     if (result.ok) {
         io::announceFile(result.path, "image/png");
         SDL_Log("PNG guardado en %s", result.path.c_str());
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+        // El archivo estaba en la memoria de la página; lo guarda el navegador.
+        m_menu.notify("PNG descargado: " + result.path.substr(result.path.find_last_of('/') + 1), 5000);
+#else
         m_menu.notify("PNG guardado en " + result.path, 5000);
+#endif
     } else {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudo guardar %s: %s", result.path.c_str(),
                      result.error.c_str());

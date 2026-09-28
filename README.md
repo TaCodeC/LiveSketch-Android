@@ -12,6 +12,7 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 - NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom.
 - "Guardar PNG" saves the full canvas to Downloads as `LiveSketch_YYYYMMDD_HHMMSS.png`, with transparency.
 - The Android back button asks before exiting.
+- It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
 
 ## Building
 
@@ -55,6 +56,24 @@ cmake --build build
 
 The tests create a real OpenGL ES 3.0 context and also run without a display (SDL's offscreen driver).
 
+### Web (browser)
+
+The same code builds for the web with [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and runs on WebGL 2. A browser cannot send NDI, so that option is off, and "Guardar PNG" downloads the image.
+
+```sh
+# Emscripten SDK, once
+git clone https://github.com/emscripten-core/emsdk.git
+./emsdk/emsdk install latest && ./emsdk/emsdk activate latest
+source ./emsdk/emsdk_env.sh
+
+emcmake cmake -S app -B build-web -DCMAKE_BUILD_TYPE=Release
+cmake --build build-web
+```
+
+The result is a single file, `build-web/LiveSketch.html`, with the app and its brushes inside. Open it with a double click, or serve it from any web server (for example `npx serve build-web`). It needs a browser with WebGL 2: current Chrome, Edge, Firefox or Safari.
+
+With `-DLIVESKETCH_WEB_SINGLE_FILE=OFF` the build writes `LiveSketch.html`, `.js` and `.wasm` separately, which have to be served over HTTP. With `-DLIVESKETCH_BUILD_TESTS=ON` it also builds `livesketch_tests.html` (all tests except NDI), which shows the results on the page when served.
+
 ## Project layout
 
 ```
@@ -67,13 +86,13 @@ app/src/main/cpp/
   NDI/         NDI output (asynchronous readback and a sender thread)
   UI/          Dear ImGui menu
 app/src/main/java/   MainActivity (extends SDL's SDLActivity)
+app/src/web/         page for the web version
 app/tests/           desktop tests
 app/externals/       SDL3, glm, Dear ImGui
 ```
 
 ## Planned
 
-- Web version (the code already uses only OpenGL ES 3.0 / WebGL 2 and SDL3).
 - Saving and loading projects (`.lvskt`).
 
 ## Requirements / Credits

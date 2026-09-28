@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LiveSketch</title>
+<style>
+  /* Página de carga de la versión web: el mismo fondo y la misma cuadrícula de 35 px que
+     dibuja la app (CanvasView). En cuanto SDL crea la ventana, el lienzo ocupa toda la
+     página y este aviso queda oculto. */
+  :root {
+    color-scheme: dark;
+    --bg: #0d0d0d;
+    --grid: #171717;
+    --text: #e6e4e1;
+    --muted: #8e8a85;
+    --live: #e5484d;
+    --error: #ff8f7a;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  /* Sin ancho ni alto en CSS: SDL mide el lienzo para saber si puede ajustarlo a la página. */
+  #canvas { display: block; border: 0; outline: none; touch-action: none; }
+  #splash {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    place-content: center;
+    gap: 6px;
+    padding: 16px;
+    text-align: center;
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(to right, var(--grid) 2px, transparent 2px),
+      linear-gradient(to bottom, var(--grid) 2px, transparent 2px);
+    background-size: 35px 35px;
+    background-position: -1px -1px;
+  }
+  #splash h1 {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    font-size: 2.25rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  #splash h1::before {
+    content: "";
+    width: 0.32em;
+    height: 0.32em;
+    border-radius: 50%;
+    background: var(--live);
+    animation: live 1.6s ease-in-out infinite;
+  }
+  #status { margin: 0; color: var(--muted); max-width: 36em; text-wrap: balance; }
+  #status.error { color: var(--error); }
+  @keyframes live { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { #splash h1::before { animation: none; } }
+</style>
+</head>
+<body>
+<div id="splash">
+  <h1>LiveSketch</h1>
+  <p id="status" role="status">Cargando el lienzo…</p>
+  <noscript><p>LiveSketch necesita JavaScript.</p></noscript>
+</div>
+<canvas id="canvas" tabindex="-1"></canvas>
+<script>
+  (function () {
+    var splash = document.getElementById('splash');
+    var status = document.getElementById('status');
+    var canvas = document.getElementById('canvas');
+    function showError(text) {
+      if (status.classList.contains('error')) {
+        return;   // se queda el primer error, que es el que explica el resto
+      }
+      status.textContent = text;
+      status.classList.add('error');
+      // Con la app en marcha, SDL tiene escondido el aviso: se vuelve a mostrar encima.
+      if (splash.parentNode !== document.body) {
+        document.body.appendChild(splash);
+      }
+    }
+    // El botón derecho del ratón mueve la vista: sin menú contextual del navegador.
+    canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+
+    window.Module = {
+      canvas: canvas,
+      onAbort: function (what) {
+        if (/Refused to compile or instantiate WebAssembly/.test(String(what))) {
+          showError('Esta página no deja ejecutar WebAssembly, que LiveSketch necesita. ' +
+                    'Abre el archivo LiveSketch.html directamente en el navegador.');
+        } else {
+          showError('LiveSketch se detuvo por un error: ' + what);
+        }
+      },
+    };
+    // Solo mientras se ve este aviso: con la app en marcha, un error suelto de JavaScript
+    // no debe tapar el lienzo (lo que detiene la app llega por onAbort).
+    window.addEventListener('error', function (event) {
+      if (splash.parentNode === document.body) {
+        showError('LiveSketch no pudo arrancar: ' + event.message);
+      }
+    });
+    if (!document.createElement('canvas').getContext('webgl2')) {
+      Module.noInitialRun = true;
+      showError('Este navegador no tiene WebGL 2. Prueba con una versión reciente de Chrome, Edge, Firefox o Safari.');
+    }
+  })();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

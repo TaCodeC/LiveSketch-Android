@@ -1,6 +1,7 @@
 // Pruebas de escritorio de LiveSketch. Se compilan con -DLIVESKETCH_BUILD_TESTS=ON y se
 // ejecutan con ctest o directamente (`livesketch_tests [filtro]`). Usan un contexto
 // OpenGL ES 3.0 de verdad (Mesa en Linux); sin pantalla se usa el driver offscreen de SDL.
+// Con Emscripten salen como livesketch_tests.html y corren en el navegador, con WebGL 2.
 
 #include "Test.h"
 
@@ -33,9 +34,11 @@ void fail(const char* file, int line, const std::string& message) {
 }
 
 bool initGL() {
+#ifndef SDL_PLATFORM_EMSCRIPTEN
     if (!SDL_getenv("DISPLAY") && !SDL_getenv("WAYLAND_DISPLAY")) {
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         return false;
     }

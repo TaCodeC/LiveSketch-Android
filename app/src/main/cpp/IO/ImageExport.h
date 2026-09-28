@@ -11,7 +11,8 @@
 namespace io {
 
 // Carpeta donde se guardan las imágenes, terminada en '/'. En Android es la carpeta
-// pública Download; en escritorio, la de descargas del usuario o, si no hay, la actual.
+// pública Download; en escritorio, la de descargas del usuario o, si no hay, la actual;
+// en la web, una carpeta en la memoria de la página (ver announceFile).
 std::string downloadsFolder();
 
 // Ruta libre en `folder` con la fecha y hora local: LiveSketch_20260928_153012.png o, si
@@ -22,12 +23,14 @@ std::string timestampedPath(const std::string& folder, const char* prefix, const
 // archivo a medias y deja el motivo en SDL_GetError().
 bool writePng(const std::string& path, const uint8_t* rgba, int width, int height);
 
-// Avisa al sistema de un archivo nuevo para que aparezca enseguida en Descargas y en la
-// galería. Solo hace algo en Android.
+// Avisa al sistema de un archivo nuevo. En Android lo registra para que aparezca enseguida
+// en Descargas y en la galería; en la web se lo pasa al navegador como descarga y lo borra
+// de la memoria de la página. En escritorio no hace nada.
 void announceFile(const std::string& path, const char* mimeType);
 
 // Guarda el compuesto como PNG en un hilo aparte: quitar el premultiplicado y comprimir
-// un lienzo grande tarda demasiado para el hilo de GL.
+// un lienzo grande tarda demasiado para el hilo de GL. En la web no hay hilos (harían
+// falta cabeceras COOP/COEP en el servidor), así que se guarda dentro de start().
 class PngExporter {
 public:
     struct Result {
