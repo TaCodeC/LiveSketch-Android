@@ -535,7 +535,23 @@ Canvas::Edit Canvas::paste() {
     step.layerId = layer->id;
     step.index = position;
     step.bytes = layerBytes();
-    record(std::move(step));
+    if (!m_selection.active()) {
+        record(std::move(step));
+        return Edit::Done;
+    }
+    // Como en Photoshop o en Procreate, pegar quita la selección; deshacer la devuelve.
+    HistoryStep deselected;
+    deselected.kind = HistoryStep::Kind::Selection;
+    deselected.selectionBefore = m_selection.state();
+    deselected.selectionAfter = SelectionState{false, m_selection.state().content};
+    deselected.bytes = kSmallStepBytes;
+    setSelectionState(deselected.selectionAfter);
+    HistoryStep group;
+    group.kind = HistoryStep::Kind::Group;
+    group.bytes = step.bytes + deselected.bytes;
+    group.children.push_back(std::move(step));
+    group.children.push_back(std::move(deselected));
+    record(std::move(group));
     return Edit::Done;
 }
 
@@ -589,7 +605,7 @@ Canvas::Edit Canvas::duplicateSelection() {
 // Transformar
 // -----------------------------------------------------------------------------
 
-Canvas::Edit Canvas::beginTransform() {
+Canvas::Edit Canvas::beginTransform(bool wholeLayer) {
     if (!m_ready) {
         return Edit::Nothing;
     }
@@ -599,21 +615,23 @@ Canvas::Edit Canvas::beginTransform() {
         return Edit::Hidden;
     }
     Layer& layer = m_layers.at(index);
-    const bool masked = m_selection.active();
+    const bool masked = m_selection.active() && !wholeLayer;
     const IRect source = selectedContent(layer, masked);
     if (source.empty()) {
         return Edit::Nothing;
     }
+    // Un píxel transparente alrededor suaviza los bordes al girar; si con él no cabe en
+    // una textura (un lienzo del tamaño máximo), va sin él.
+    const int border = std::max(source.width(), source.height()) + 2 <= m_maxTextureSize ? 1 : 0;
     gfx::RenderTarget content;
-    if (!ensureStrokeBase() || !content.create(source.width() + 2, source.height() + 2)) {
+    if (!ensureStrokeBase() || !content.create(source.width() + 2 * border, source.height() + 2 * border)) {
         return Edit::NoMemory;
     }
     const IRect all = IRect::ofSize(width(), height());
 
-    // Lo que se transforma, con un píxel transparente alrededor (bordes suaves al girar).
     stageSelection(layer, source, masked);
     glDisable(GL_SCISSOR_TEST);
-    copyRect(m_strokeTarget.fbo.id(), source, content.fbo.id(), 1, 1);
+    copyRect(m_strokeTarget.fbo.id(), source, content.fbo.id(), border, border);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, content.texture.id());
     glGenerateMipmap(GL_TEXTURE_2D);
@@ -634,7 +652,9 @@ Canvas::Edit Canvas::beginTransform() {
     m_transform.layerId = layer.id;
     m_transform.source = source;
     m_transform.content = std::move(content);
+    m_transform.border = border;
     m_transform.masked = masked;
+    m_transform.movesSelection = m_selection.active();
     m_transform.homography = glm::mat3(1.0f);
     updateTransformPreview();
     return Edit::Done;
@@ -666,10 +686,10 @@ void Canvas::updateTransformPreview() {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
     // Del destino a la copia: deshacer la homografía y pasar a píxeles de la copia, que
-    // empieza un píxel antes que la caja de la fuente.
+    // empieza un píxel antes que la caja de la fuente (si lleva el borde).
     glm::mat3 toContent(1.0f);
-    toContent[2][0] = static_cast<float>(1 - source.x0);
-    toContent[2][1] = static_cast<float>(1 - source.y0);
+    toContent[2][0] = static_cast<float>(m_transform.border - source.x0);
+    toContent[2][1] = static_cast<float>(m_transform.border - source.y0);
     const glm::mat3 toSource = toContent * glm::inverse(m_transform.homography);
     m_warp.draw(m_strokeTarget.fbo.id(), width(), height(), m_transform.content.texture.id(),
                 m_transform.content.width, m_transform.content.height, toSource, dest, Warp::Mode::Over,
@@ -750,7 +770,7 @@ void Canvas::applyTransform() {
     m_layers.markDirty(region);
 
     // La selección se mueve con lo que se transformó.
-    if (m_transform.masked && m_selection.mask() && m_selection.ensureScratch()) {
+    if (m_transform.movesSelection && m_selection.mask() && m_selection.ensureScratch()) {
         const SelectionState before = m_selection.state();
         const IRect dest = warp::imageBounds(m_transform.homography, before.content, all);
         IRect maskRegion = before.content;

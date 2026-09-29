@@ -63,7 +63,9 @@ void SelectTool::press(Canvas& canvas, const ToolView& view, ImVec2 position, Se
     case Shape::Rectangle:
     case Shape::Ellipse:
         m_gesture = Gesture::Box;
-        m_anchor = p;
+        // El rectángulo va de píxel entero a píxel entero (ver boxCorner): bordes nítidos
+        // también en el lado donde empieza.
+        m_anchor = m_shape == Shape::Rectangle ? glm::vec2(std::round(p.x), std::round(p.y)) : p;
         m_current = p;
         m_constrain = false;
         break;

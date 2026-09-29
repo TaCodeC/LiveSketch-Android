@@ -324,11 +324,17 @@ void Ui::setCanvasTool(Canvas& canvas, CanvasTool tool) {
     }
 }
 
-bool Ui::enterTransform(Canvas& canvas, bool quiet) {
+bool Ui::enterTransform(Canvas& canvas, bool quiet, bool wholeLayer) {
     if (m_canvasTool == CanvasTool::Transform) {
-        return true;
+        if (canvas.transforming()) {
+            return true;
+        }
+        // Otra operación aplicó la transformación (pegar estando en Transformar): se
+        // vuelve a empezar con la capa activa.
+        m_transform.stop();
+        m_canvasTool = m_toolBeforeTransform;
     }
-    const Canvas::Edit edit = canvas.beginTransform();
+    const Canvas::Edit edit = canvas.beginTransform(wholeLayer);
     if (edit != Canvas::Edit::Done) {
         if (!quiet || edit != Canvas::Edit::Nothing) {
             report(*this, edit, nullptr, canvas.hasSelection() ? "No hay nada seleccionado en esta capa"
@@ -452,6 +458,12 @@ void Ui::selectionNotice(SelectTool::Result result) {
 // -----------------------------------------------------------------------------
 
 bool Ui::undoStep(Canvas& canvas, bool redo) {
+    // Un gesto a medias (arrastrando la caja o el umbral) solo se cancela: es lo que se
+    // deshace, como un trazo que aún no ha terminado.
+    if (!redo && (m_select.gestureActive() || m_transform.gestureActive())) {
+        toolCancel(canvas);
+        return true;
+    }
     // Lo que la herramienta tenga a medias va primero: los puntos del lazo y los pasos de
     // la transformación (sin ellos, deshacer la cancela).
     if (!redo && m_canvasTool == CanvasTool::Select) {
@@ -486,8 +498,8 @@ void Ui::pasteClipboard(Canvas& canvas) {
     report(*this, edit, "Pegado en una capa nueva", "No hay nada copiado");
     if (edit == Canvas::Edit::Done) {
         m_scrollToLayer = static_cast<int>(canvas.layers().active().id);
-        // Como al pegar en Procreate: se puede mover enseguida.
-        enterTransform(canvas, true);
+        // Se puede mover enseguida: toda la capa nueva, que ya es solo lo pegado.
+        enterTransform(canvas, true, true);
     }
 }
 
@@ -497,7 +509,8 @@ void Ui::duplicateSelection(Canvas& canvas) {
     report(*this, edit, "Duplicado en una capa nueva", nothing);
     if (edit == Canvas::Edit::Done) {
         m_scrollToLayer = static_cast<int>(canvas.layers().active().id);
-        enterTransform(canvas, true);
+        // La capa nueva ya es solo lo seleccionado: se toma entera (y la selección la sigue).
+        enterTransform(canvas, true, true);
     }
 }
 

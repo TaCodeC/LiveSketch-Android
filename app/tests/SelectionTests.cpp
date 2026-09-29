@@ -565,10 +565,15 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kRed, 0);
     CHECK_PIXEL(layerAt(canvas, 2, 24, 24), kClear, 0);
     CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    // Pegar quita la selección en el mismo paso: deshacer quita la capa y la devuelve.
+    CHECK(!canvas.hasSelection());
     REQUIRE(canvas.undo());
     CHECK_EQ(canvas.layers().count(), 2);
+    CHECK(canvas.hasSelection());
+    CHECK_RECT(canvas.selectionBounds(), (IRect{0, 0, 16, 16}));
     REQUIRE(canvas.redo());
     CHECK_EQ(canvas.layers().count(), 3);
+    CHECK(!canvas.hasSelection());
     CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kRed, 0);
     // Otra vez: otro nombre.
     CHECK(canvas.paste() == Canvas::Edit::Done);
@@ -611,6 +616,93 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     CHECK(canvas.duplicateSelection() == Canvas::Edit::Done);
     CHECK_EQ(canvas.layers().count(), 3);
     CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), original), 0);
+}
+
+TEST_CASE(selection_pasted_and_duplicated_layers_move_whole) {
+    Canvas canvas;
+    REQUIRE(canvas.init(64, 64));
+    fillLayer(canvas, 1, {0, 0, 32, 32}, 1.0f, 0.0f, 0.0f);
+    // Elipse de bordes suaves: lo copiado ya lleva esos bordes.
+    REQUIRE(canvas.selectPolygon(selection::ellipse({4.0f, 4.0f}, {28.0f, 28.0f}), SelectOp::Replace));
+    CHECK(canvas.copySelection() == Canvas::Edit::Done);
+
+    // Pegar y mover: se mueve toda la capa nueva, sin enmascararla otra vez (ni bordes
+    // más tenues ni restos en su sitio).
+    REQUIRE(canvas.paste() == Canvas::Edit::Done);
+    const std::vector<uint8_t> pasted = layerPixels(canvas, 2);
+    REQUIRE(canvas.beginTransform(true) == Canvas::Edit::Done);
+    glm::vec2 corners[4];
+    moved(canvas.transformSource(), 32.0f, 32.0f, corners);
+    REQUIRE(canvas.setTransform(corners, false));
+    canvas.applyTransform();
+    const std::vector<uint8_t> after = layerPixels(canvas, 2);
+    int ghost = 0;
+    int worst = 0;
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            ghost = std::max(ghost, static_cast<int>(test::pixelAt(after, 64, x, y)[3]));
+            const Pixel from = test::pixelAt(pasted, 64, x, y);
+            const Pixel to = test::pixelAt(after, 64, x + 32, y + 32);
+            for (size_t c = 0; c < 4; ++c) {
+                worst = std::max(worst, std::abs(from[c] - to[c]));
+            }
+        }
+    }
+    CHECK_EQ(ghost, 0);
+    CHECK(worst <= 1);
+    REQUIRE(canvas.undo());
+    REQUIRE(canvas.undo());
+    CHECK_EQ(canvas.layers().count(), 2);
+    REQUIRE(canvas.hasSelection());
+
+    // Duplicar y mover: igual, y la selección se mueve con lo duplicado.
+    REQUIRE(canvas.duplicateSelection() == Canvas::Edit::Done);
+    const std::vector<uint8_t> duplicated = layerPixels(canvas, 2);
+    const IRect selected = canvas.selectionBounds();
+    REQUIRE(canvas.beginTransform(true) == Canvas::Edit::Done);
+    moved(canvas.transformSource(), 32.0f, 0.0f, corners);
+    REQUIRE(canvas.setTransform(corners, false));
+    canvas.applyTransform();
+    const std::vector<uint8_t> shifted = layerPixels(canvas, 2);
+    ghost = 0;
+    worst = 0;
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            ghost = std::max(ghost, static_cast<int>(test::pixelAt(shifted, 64, x, y)[3]));
+            const Pixel from = test::pixelAt(duplicated, 64, x, y);
+            const Pixel to = test::pixelAt(shifted, 64, x + 32, y);
+            for (size_t c = 0; c < 4; ++c) {
+                worst = std::max(worst, std::abs(from[c] - to[c]));
+            }
+        }
+    }
+    CHECK_EQ(ghost, 0);
+    CHECK(worst <= 1);
+    CHECK(canvas.hasSelection());
+    CHECK_RECT(canvas.selectionBounds(), (IRect{selected.x0 + 32, selected.y0, selected.x1 + 32, selected.y1}));
+}
+
+TEST_CASE(selection_redo_does_not_commit_live_edits) {
+    Canvas canvas;
+    REQUIRE(canvas.init(32, 32));
+    REQUIRE(selectRect(canvas, {4, 4, 28, 28}));
+    setBrush(canvas, 0.0f, 0.0f, 1.0f, 1.0f, 3.0f);
+    drawLine(canvas, {8.0f, 16.0f}, {24.0f, 16.0f});
+    const std::vector<uint8_t> painted = layerPixels(canvas, 1);
+    REQUIRE(canvas.undo());
+    REQUIRE(canvas.canRedo());
+
+    // Difuminando en vivo no hay nada que rehacer, y rehacer no guarda el difuminado
+    // (eso borraría el trazo que se puede rehacer).
+    REQUIRE(canvas.beginFeather());
+    canvas.setFeather(2.0f);
+    CHECK(!canvas.canRedo());
+    CHECK(!canvas.redo());
+    CHECK(canvas.feathering());
+    canvas.endFeather(false);
+    REQUIRE(canvas.canRedo());
+    REQUIRE(canvas.redo());
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), painted), 0);
 }
 
 TEST_CASE(selection_copy_keeps_soft_edges_and_survives_new_canvas) {

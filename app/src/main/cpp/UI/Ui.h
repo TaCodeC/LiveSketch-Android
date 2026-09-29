@@ -280,7 +280,8 @@ private:
     bool toolKeys(Canvas& canvas);
     void selectionNotice(SelectTool::Result result);
     // Empieza a transformar. `quiet`: sin avisar si no hay nada que transformar.
-    bool enterTransform(Canvas& canvas, bool quiet);
+    // `wholeLayer`: toda la capa activa aunque haya selección (ver Canvas::beginTransform).
+    bool enterTransform(Canvas& canvas, bool quiet, bool wholeLayer = false);
     void copySelection(Canvas& canvas, bool cut);
     void pasteClipboard(Canvas& canvas);
     void duplicateSelection(Canvas& canvas);

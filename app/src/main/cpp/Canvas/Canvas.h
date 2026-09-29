@@ -170,7 +170,8 @@ public:
     Edit copySelection();
     Edit cutSelection();
     bool canPaste() const { return static_cast<bool>(m_clipboard.pixels); }
-    // En una capa nueva sobre la activa, en el sitio de donde se copió.
+    // En una capa nueva sobre la activa, en el sitio de donde se copió. Quita la
+    // selección (lo pegado no tiene por qué tener que ver con ella), en el mismo paso.
     Edit paste();
     // Lo seleccionado de la capa activa a una capa nueva (sin selección, duplica la capa).
     Edit duplicateSelection();
@@ -180,8 +181,10 @@ public:
     // la capa se ve con el resultado; setTransform lleva las esquinas de
     // transformSource() (arriba izquierda, arriba derecha, abajo derecha, abajo
     // izquierda) a `corners`. Aplicar lo funde en la capa (y mueve la selección igual);
-    // cancelar lo deja como estaba.
-    Edit beginTransform();
+    // cancelar lo deja como estaba. `wholeLayer`: toda la capa aunque haya selección (lo
+    // que se acaba de duplicar ya es solo lo seleccionado: la máscara no se aplica dos
+    // veces), y la selección se mueve con ella.
+    Edit beginTransform(bool wholeLayer = false);
     bool transforming() const { return m_transform.active; }
     IRect transformSource() const { return m_transform.source; }
     bool setTransform(const glm::vec2 corners[4], bool nearest);
@@ -262,6 +265,7 @@ private:
     void endTransform();
 
     bool m_ready = false;
+    int m_maxTextureSize = 0;          // lado máximo de una textura en esta GPU
     LayerStack m_layers;
     Compositor m_compositor;
     Brush m_brush;
@@ -326,7 +330,9 @@ private:
         uint32_t layerId = 0;
         IRect source;                  // caja de lo que se transforma
         gfx::RenderTarget content;     // eso, con 1 px transparente alrededor (con mipmaps)
-        bool masked = false;           // había selección: el resto de la capa se queda
+        int border = 1;                // ese píxel (0 si no cabe en una textura)
+        bool masked = false;           // se tomó por la selección: el resto de la capa se queda
+        bool movesSelection = false;   // al aplicar, la selección se mueve igual
         glm::mat3 homography{1.0f};    // fuente → destino, en píxeles del lienzo
         bool nearest = false;
         IRect drawn;                   // caja de lo dibujado en la vista previa

@@ -87,6 +87,8 @@ void Canvas::destroy() {
 bool Canvas::createGpuObjects() {
     const int w = m_layers.width();
     const int h = m_layers.height();
+    m_maxTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m_maxTextureSize);
     if (!m_compositor.init(w, h) || !m_brush.init() || !m_strokeTarget.create(w, h) || !m_selection.init(w, h) ||
         !m_bounds.init() || !m_warp.init()) {
         destroyGpuObjects();
@@ -856,7 +858,9 @@ bool Canvas::undo() {
 }
 
 bool Canvas::redo() {
-    if (!m_ready || m_transform.active) {
+    // Con algo a medias no hay nada que rehacer: cerrarlo guardaría un paso nuevo y eso
+    // descarta lo que se podía rehacer.
+    if (!m_ready || m_stroking || !canRedo()) {
         return false;
     }
     endStroke();
