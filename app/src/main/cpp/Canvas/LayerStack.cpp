@@ -117,6 +117,54 @@ void LayerStack::setOpacity(int index, float opacity) {
     }
 }
 
+void LayerStack::setBlend(int index, BlendMode blend) {
+    if (validIndex(index) && at(index).blend != blend) {
+        at(index).blend = blend;
+        markAllDirty();
+    }
+}
+
+void LayerStack::setAlphaLock(int index, bool locked) {
+    // Solo cambia cómo se pinta, no lo que se ve.
+    if (validIndex(index)) {
+        at(index).alphaLock = locked;
+    }
+}
+
+void LayerStack::setClipping(int index, bool clipping) {
+    if (validIndex(index) && at(index).clipping != clipping) {
+        at(index).clipping = clipping;
+        markAllDirty();
+    }
+}
+
+void LayerStack::setReference(int index) {
+    for (int i = 0; i < count(); ++i) {
+        at(i).reference = i == index;
+    }
+}
+
+int LayerStack::referenceIndex() const {
+    for (int i = 0; i < count(); ++i) {
+        if (at(i).reference) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int LayerStack::clipBase(int index) const {
+    if (!validIndex(index) || !at(index).clipping) {
+        return -1;
+    }
+    for (int i = index - 1; i >= 0; --i) {
+        if (!at(i).clipping) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 bool LayerStack::nameInUse(const std::string& name) const {
     return std::any_of(m_layers.begin(), m_layers.end(), [&](const auto& layer) { return layer->name == name; });
 }

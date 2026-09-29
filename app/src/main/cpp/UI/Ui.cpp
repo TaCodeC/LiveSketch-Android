@@ -342,6 +342,10 @@ bool Ui::closeTopmost() {
         m_layerMenu = false;
         return true;
     }
+    if (m_blendPage && m_panel == Panel::Layers) {
+        m_blendPage = false;   // vuelve a la lista de capas
+        return true;
+    }
     if (m_panel != Panel::None) {
         closePanels();
         return true;

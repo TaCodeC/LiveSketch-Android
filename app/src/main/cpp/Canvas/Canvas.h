@@ -13,8 +13,9 @@
 // El lienzo: capas, pincel, trazo en curso y compuesto. Todo en el hilo del contexto GL.
 //
 // El trazo en curso se pinta en un buffer aparte (tamaño del lienzo) y se ve encima de
-// la capa activa. Al terminar se funde con la capa aplicando la opacidad del pincel, o
-// se usa para borrar si el borrador está activo.
+// la capa activa. Al terminar se funde con la capa aplicando la opacidad del pincel (si
+// la capa tiene el alfa bloqueado, solo donde ya hay pintura), o se usa para borrar si
+// el borrador está activo.
 //
 // Los trazos y las operaciones de capas se pueden deshacer: antes de cambiar píxeles se
 // copia la zona afectada a una textura (en la GPU, sin pasar por la RAM).
@@ -36,9 +37,18 @@ public:
     const BrushSettings& brushSettings() const { return m_settings; }
     bool setBrushType(int type);
 
+    // Por qué no se puede pintar en la capa activa.
+    enum class StrokeBlock {
+        None,
+        Hidden,          // la capa está oculta
+        ClipBaseHidden,  // recorta con una capa oculta, así que no se ve
+        AlphaLocked,     // borrar en una capa con el alfa bloqueado
+    };
+    StrokeBlock strokeBlock(bool eraserTip = false) const;
+
     // Trazo en coordenadas del lienzo, con presión de 0 a 1. `eraserTip`: se usa la goma
     // del lápiz, así que el trazo borra aunque el borrador del menú esté apagado.
-    // beginStroke devuelve false (y no dibuja) si la capa activa está oculta.
+    // beginStroke devuelve false (y no dibuja) si strokeBlock() lo impide.
     bool beginStroke(float x, float y, float pressure, bool eraserTip = false);
     void strokeTo(float x, float y, float pressure);
     void endStroke();
@@ -52,20 +62,36 @@ public:
     bool duplicateLayer(int index); // la copia queda encima y activa
     bool removeLayer(int index);
     bool moveLayer(int from, int to);
+    // La capa se ve en el compuesto: está visible y, si recorta, su base también.
+    bool layerShown(int index) const;
     bool canMergeDown(int index) const;
-    bool mergeDown(int index);      // funde la capa con la de abajo
+    // Funde la capa con la de abajo tal como se ven (su modo de fusión y su recorte). La
+    // capa resultante conserva las propiedades de la de abajo, con la opacidad horneada.
+    bool mergeDown(int index);
     void clearLayer(int index);     // la deja transparente
+    // Rellena la capa con un color opaco; con el alfa bloqueado, solo donde hay pintura.
+    void fillLayer(int index, const float rgb[3]);
+    void invertLayer(int index);    // invierte sus colores (el alfa no cambia)
 
-    // Propiedades de capa. La opacidad se puede cambiar de forma continua (arrastrando):
-    // con `final` = false no se guarda paso de deshacer; lo guarda la llamada con `final`
-    // = true, desde el valor que tenía antes de empezar.
+    // Propiedades de capa. La opacidad y el modo de fusión se pueden cambiar de forma
+    // continua (arrastrando, probando modos): con `final` = false no se guarda paso de
+    // deshacer; lo guarda la llamada con `final` = true, o finishLayerEdit(), desde el
+    // valor que tenía antes de empezar.
     void setLayerVisible(int index, bool visible);
     void setLayerOpacity(int index, float opacity, bool final = true);
+    void setLayerBlend(int index, BlendMode blend, bool final = true);
+    void finishLayerEdit();
+    void setLayerAlphaLock(int index, bool locked);
+    // Máscara de recorte. La capa de abajo del todo no puede recortar.
+    bool canClip(int index) const { return m_layers.validIndex(index) && index > 0; }
+    void setLayerClipping(int index, bool clipping);
+    // Capa de referencia del relleno (como mucho una). -1 la quita.
+    void setReferenceLayer(int index);
     void renameLayer(int index, std::string name);
 
-    // Deshacer y rehacer. Terminan antes el trazo en curso.
-    bool canUndo() const { return m_history.canUndo(); }
-    bool canRedo() const { return m_history.canRedo(); }
+    // Deshacer y rehacer. Terminan antes el trazo en curso y el cambio de propiedades.
+    bool canUndo() const { return m_history.canUndo() || editPending(); }
+    bool canRedo() const { return m_history.canRedo() && !editPending(); }
     bool undo();
     bool redo();
     const History& history() const { return m_history; }
@@ -99,14 +125,21 @@ private:
     void flushDabs();
     void commitStroke();
     void clearStrokeBuffer(const IRect& rect);
+    // Cambia los píxeles de toda la capa con `change` y guarda el paso de deshacer.
+    template <typename Change>
+    void changePixels(int index, Change change);
 
     // Deshacer.
     LayerProperties properties(int index) const;
+    void applyProperties(int index, const LayerProperties& properties);
+    // Guarda un paso si las propiedades de la capa ya no son `before`.
+    void recordProperties(int index, const LayerProperties& before);
+    void beginLayerEdit(int index);
+    bool editPending() const;
     bool saveRegion(const Layer& layer, const IRect& rect, gfx::RenderTarget& out);
     void swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stored);
     void record(HistoryStep step);
     void applyStep(HistoryStep& step, bool undo);
-    void finishOpacityEdit();
     size_t layerBytes() const;
 
     bool m_ready = false;
@@ -119,16 +152,16 @@ private:
     bool m_stroking = false;
     IRect m_strokeBounds;
     float m_strokeOpacity = 1.0f;
-    bool m_strokeErase = false;
+    StrokePreview::Mode m_strokeMode = StrokePreview::Mode::Paint;
     float m_strokeColor[3] = {0.0f, 0.0f, 0.0f};
 
     uint64_t m_version = 0;
     std::vector<std::vector<uint8_t>> m_snapshot; // una entrada por capa, de abajo arriba
 
     History m_history;
-    struct OpacityEdit {
+    struct LayerEdit {
         bool active = false;
         uint32_t layerId = 0;
-        float before = 1.0f;
-    } m_opacityEdit;
+        LayerProperties before;
+    } m_layerEdit;
 };

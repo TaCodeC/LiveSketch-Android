@@ -190,6 +190,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/CanvasTests.cpp
             ${TESTS_DIR}/ExportTests.cpp
             ${TESTS_DIR}/HistoryTests.cpp
+            ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
     )
     target_compile_options(livesketch_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)

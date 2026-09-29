@@ -203,6 +203,7 @@ private:
     void ndiPanel(Canvas& canvas, UiRequests& requests);
     void brushesPanel();
     void layersPanel(Canvas& canvas);
+    void blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view);
     void layerMenu(Canvas& canvas);
     void colorPanel(Canvas& canvas);
     void syncHsv(const float rgb[3]);
@@ -227,6 +228,9 @@ private:
     Panel m_panel = Panel::None;
     int m_actionsTab = 0;           // Acciones: 0 lienzo, 1 compartir, 2 preferencias, 3 ayuda
     bool m_layerMenu = false;
+    bool m_blendPage = false;       // el panel de capas muestra la lista de modos de fusión
+    bool m_blendEditing = false;    // se han probado modos: al salir de la lista se guarda el paso
+    bool m_blendScroll = false;     // al abrir la lista, mostrar el modo de la capa
     ImRect m_activeRow;             // fila de la capa activa (para situar su menú)
     ImRect m_layersRect;            // panel de capas en pantalla
     bool m_layerOpacityDragging = false;

@@ -10,11 +10,16 @@
 #include <memory>
 #include <string>
 
-// Propiedades de una capa que se pueden deshacer.
+// Propiedades de una capa que se pueden deshacer (la referencia va aparte: es de la pila).
 struct LayerProperties {
     std::string name;
     bool visible = true;
     float opacity = 1.0f;
+    BlendMode blend = BlendMode::Normal;
+    bool alphaLock = false;
+    bool clipping = false;
+
+    bool operator==(const LayerProperties&) const = default;
 };
 
 // Un paso de deshacer. Cada paso es simétrico: deshacerlo lo deja listo para rehacerlo y
@@ -27,19 +32,19 @@ struct HistoryStep {
         RemoveLayer,
         MoveLayer,
         MergeDown,
-        Properties,   // nombre, visibilidad u opacidad
+        Properties,   // nombre, visibilidad, opacidad, fusión, bloqueo alfa o recorte
+        Reference,    // cambia la capa de referencia
     };
 
     Kind kind = Kind::Pixels;
-    uint32_t layerId = 0;          // capa afectada (MergeDown: la de abajo)
-    uint32_t otherId = 0;          // MergeDown: la de arriba
+    uint32_t layerId = 0;          // capa afectada (MergeDown: la de abajo; Reference: la nueva o 0)
+    uint32_t otherId = 0;          // MergeDown: la de arriba; Reference: la anterior o 0
     IRect rect;                    // Pixels y MergeDown: zona guardada, en píxeles del lienzo
     gfx::RenderTarget pixels;      // esos píxeles
     std::unique_ptr<Layer> layer;  // capa fuera de la pila
     int index = 0;                 // posición de la capa (Move: origen)
     int target = 0;                // Move: destino
-    float opacity = 1.0f;          // MergeDown: opacidad de la capa de abajo
-    LayerProperties before;
+    LayerProperties before;        // Properties y MergeDown (la capa de abajo)
     LayerProperties after;
     size_t bytes = 0;              // memoria de GPU que puede ocupar el paso
 };

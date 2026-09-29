@@ -47,6 +47,16 @@ public:
     void rename(int index, std::string name);
     void setVisible(int index, bool visible);
     void setOpacity(int index, float opacity);
+    void setBlend(int index, BlendMode blend);
+    void setAlphaLock(int index, bool locked);
+    void setClipping(int index, bool clipping);
+    // Capa de referencia del relleno: como mucho una. -1 la quita.
+    void setReference(int index);
+    int referenceIndex() const;
+
+    // Base de una capa con máscara de recorte: la primera de debajo que no recorta. -1 si
+    // la capa no recorta o no tiene base (está abajo del todo): entonces se ve entera.
+    int clipBase(int index) const;
 
     // Nombre "<base> N" que no usa ninguna capa.
     std::string uniqueName(const std::string& base) const;

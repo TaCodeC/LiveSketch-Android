@@ -36,6 +36,64 @@ constexpr ImU32 kPalette[12] = {
     IM_COL32(94, 92, 230, 255),   IM_COL32(191, 90, 242, 255),  IM_COL32(255, 55, 95, 255),
 };
 
+// Modos de fusión, en el orden de BlendMode: nombre en la lista y nombre corto (el pie
+// del panel y las filas de las capas).
+struct BlendName {
+    const char* name;
+    const char* shortName;
+};
+constexpr BlendName kBlendNames[kBlendModeCount] = {
+    {"Normal", "Normal"},
+    {"Multiplicar", "Multiplicar"},
+    {"Oscurecer", "Oscurecer"},
+    {"Subexposición de color", "Subexp. color"},
+    {"Subexposición lineal", "Subexp. lineal"},
+    {"Color más oscuro", "Más oscuro"},
+    {"Aclarar", "Aclarar"},
+    {"Trama", "Trama"},
+    {"Sobreexposición de color", "Sobreexp. color"},
+    {"Añadir", "Añadir"},
+    {"Color más claro", "Más claro"},
+    {"Superponer", "Superponer"},
+    {"Luz suave", "Luz suave"},
+    {"Luz fuerte", "Luz fuerte"},
+    {"Luz intensa", "Luz intensa"},
+    {"Luz lineal", "Luz lineal"},
+    {"Luz focal", "Luz focal"},
+    {"Mezcla definida", "Mezcla definida"},
+    {"Diferencia", "Diferencia"},
+    {"Exclusión", "Exclusión"},
+    {"Restar", "Restar"},
+    {"Dividir", "Dividir"},
+    {"Tono", "Tono"},
+    {"Saturación", "Saturación"},
+    {"Color", "Color"},
+    {"Luminosidad", "Luminosidad"},
+};
+
+// Rótulo del grupo de modos que empieza en `mode` (null si no empieza ninguno).
+const char* blendGroup(BlendMode mode) {
+    switch (mode) {
+    case BlendMode::Multiply:
+        return "OSCURECEN";
+    case BlendMode::Lighten:
+        return "ACLARAN";
+    case BlendMode::Overlay:
+        return "CONTRASTE";
+    case BlendMode::Difference:
+        return "DIFERENCIA";
+    case BlendMode::Hue:
+        return "COLOR Y LUZ";
+    default:
+        return nullptr;
+    }
+}
+
+// Medidas de la lista de modos (pt).
+constexpr float kBlendRow = 38.0f;
+constexpr float kBlendSection = 30.0f;
+constexpr float kBlendPad = 6.0f;
+
 // Pestañas de Acciones, como las de Procreate.
 constexpr const char* kActionTabs[4] = {"Lienzo", "Compartir", "Preferencias", "Ayuda"};
 
@@ -683,6 +741,16 @@ void Ui::layersPanel(Canvas& canvas) {
     LayerStack& layers = canvas.layers();
     const int count = layers.count();
 
+    // Los modos que se prueban en la lista de fusión son un solo paso de deshacer: se
+    // guarda al salir de ella (volver, cerrar el panel o el botón atrás).
+    if (m_panel != Panel::Layers) {
+        m_blendPage = false;
+    }
+    if (m_blendEditing && !m_blendPage) {
+        canvas.finishLayerEdit();
+        m_blendEditing = false;
+    }
+
     // Miniatura con la proporción del lienzo, en una columna de 64 pt.
     const float aspect = static_cast<float>(std::max(canvas.width(), 1)) / static_cast<float>(std::max(canvas.height(), 1));
     const float thumbWidth = std::min(64.0f, 48.0f * aspect);
@@ -690,9 +758,13 @@ void Ui::layersPanel(Canvas& canvas) {
     const float rowHeight = std::max(thumbHeight, 36.0f) + 12.0f;
     constexpr float kRowGap = 4.0f;
     constexpr float kListPad = 8.0f;
-    constexpr float kFooter = 10.0f + 34.0f + 12.0f;   // opacidad con su margen
+    constexpr float kFooter = 10.0f + 34.0f + 12.0f;   // opacidad y fusión con su margen
     const float listHeight = rowHeight * static_cast<float>(count) + kRowGap * static_cast<float>(count - 1);
-    const float content = th::kHeaderHeight + kListPad + listHeight + kListPad + kFooter;
+    const float listContent = th::kHeaderHeight + kListPad + listHeight + kListPad + kFooter;
+    // La lista de modos pide más alto que unas pocas capas (y se desplaza si no cabe). El
+    // panel cambia de alto con una animación.
+    const float target = m_blendPage ? std::max(listContent, th::kHeaderHeight + 400.0f + kFooter) : listContent;
+    const float content = ui::anim::follow(ImHashStr("##layers-height"), target, 20.0f, 0.2f);
     const float width = pt(340.0f);
     const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * 2.5f);
     PanelFrame f;
@@ -701,12 +773,34 @@ void Ui::layersPanel(Canvas& canvas) {
         return;
     }
     m_layersRect = f.rect;
+    m_activeRow = ImRect();
     ImDrawList* dl = f.dl;
     float y = f.content.Min.y;
 
-    // Cabecera: cuántas hay y añadir.
-    const float cy = panelHeader(dl, f.content, y, "Capas");
-    {
+    if (m_blendPage) {
+        // Cabecera de la lista de modos: volver, el título y la capa a la que se aplica.
+        const float cy = y + pt(th::kHeaderHeight * 0.5f);
+        const ImRect back(ImVec2(f.content.Min.x + pt(8.0f), cy - pt(16.0f)),
+                          ImVec2(f.content.Min.x + pt(8.0f + 32.0f), cy + pt(16.0f)));
+        const ImGuiID backId = ImGui::GetID("##blend-back");
+        const Press backPress = ui::pressable(backId, back);
+        pressFeedback(dl, backId, back, backPress, pt(9.0f));
+        ui::icon(dl, icon::kChevronLeft, back.GetCenter(), 20.0f, th::kLabel);
+        const float titleX = back.Max.x + pt(4.0f);
+        ui::label(dl, Weight::SemiBold, th::kPanelTitle, ImVec2(titleX, cy), Align::Left, th::kLabel, "Fusión");
+        const float nameLeft = titleX + ui::measure(Weight::SemiBold, th::kPanelTitle, "Fusión").x + pt(16.0f);
+        const float nameRight = f.content.Max.x - pt(16.0f);
+        if (nameRight > nameLeft) {
+            ui::label(dl, Weight::Regular, th::kCaption, ImVec2(nameRight, cy), Align::Right,
+                      IM_COL32(235, 235, 245, 102), layers.active().name.c_str(), nameRight - nameLeft);
+        }
+        ui::separator(dl, f.content.Min.x, f.content.Max.x, y + pt(th::kHeaderHeight) - ui::hairline(), th::kRule);
+        if (backPress.clicked) {
+            m_blendPage = false;
+        }
+    } else {
+        // Cabecera: cuántas hay y añadir.
+        const float cy = panelHeader(dl, f.content, y, "Capas");
         const ImRect add(ImVec2(f.content.Max.x - pt(10.0f + 32.0f), cy - pt(16.0f)),
                          ImVec2(f.content.Max.x - pt(10.0f), cy + pt(16.0f)));
         const ImGuiID id = ImGui::GetID("##add");
@@ -732,138 +826,179 @@ void Ui::layersPanel(Canvas& canvas) {
     }
     y += pt(th::kHeaderHeight);
 
-    // Lista, de la capa de arriba a la de abajo.
     const float listBottom = f.content.Max.y - pt(kFooter);
     const ImRect view(ImVec2(f.content.Min.x, y), ImVec2(f.content.Max.x, listBottom));
-    const float left = f.content.Min.x + pt(8.0f);
-    const float right = f.content.Max.x - pt(8.0f);
-    const int rows = layers.count();
-    const float rowsHeight = pt(kListPad * 2.0f + rowHeight * static_cast<float>(rows) +
-                                kRowGap * static_cast<float>(rows - 1));
-    if (m_scrollToLayer >= 0) {
-        const int index = layers.indexOf(static_cast<uint32_t>(m_scrollToLayer));
-        if (index >= 0) {
-            const float top = pt(kListPad + (rowHeight + kRowGap) * static_cast<float>(rows - 1 - index));
-            ui::scrollIntoView("##list", top - pt(kListPad), top + pt(rowHeight + kListPad), view.GetHeight());
-        }
-        m_scrollToLayer = -1;
-    }
-    const float scroll = ui::beginScroll("##list", view, rowsHeight);
-    const float pixels = m_status.pixelsPerUnit;
-    const int thumbPixelsW = static_cast<int>(std::lround(pt(thumbWidth) * pixels));
-    const int thumbPixelsH = static_cast<int>(std::lround(pt(thumbHeight) * pixels));
-    const int checker = std::max(1, static_cast<int>(std::lround(pt(4.0f) * pixels)));
-    m_activeRow = ImRect();
-    for (int visual = 0; visual < rows; ++visual) {
-        const int index = rows - 1 - visual;
-        Layer& layer = layers.at(index);
-        const float top = y + pt(kListPad) - scroll + pt((rowHeight + kRowGap) * static_cast<float>(visual));
-        const ImRect row(ImVec2(left, top), ImVec2(right, top + pt(rowHeight)));
-        const bool active = index == layers.activeIndex();
-        if (active) {
-            m_activeRow = row;
-        }
-        if (row.Max.y < view.Min.y || row.Min.y > view.Max.y) {
-            continue;
-        }
-        ImGui::PushID(static_cast<int>(layer.id));
-        const float rowCy = row.GetCenter().y;
-        // Primero los botones de dentro de la fila: se quedan el toque antes que la fila.
-        const ImRect visibility(ImVec2(row.Max.x - pt(4.0f + 40.0f), rowCy - pt(20.0f)),
-                                ImVec2(row.Max.x - pt(4.0f), rowCy + pt(20.0f)));
-        const Press visibilityPress = ui::pressable("##visible", visibility);
-        ImRect more;
-        Press morePress;
-        if (active) {
-            more = ImRect(ImVec2(visibility.Min.x - pt(2.0f + 32.0f), rowCy - pt(16.0f)),
-                          ImVec2(visibility.Min.x - pt(2.0f), rowCy + pt(16.0f)));
-            morePress = ui::pressable("##more", more);
-        }
-        const ImGuiID rowId = ImGui::GetID("##row");
-        const Press rowPress = ui::pressable(rowId, row);
-
-        const float on = ui::anim::follow(rowId + 7u, active ? 1.0f : 0.0f, 20.0f);
-        if (on > 0.002f) {
-            dl->AddRectFilled(row.Min, row.Max, ui::withAlpha(th::kAccent, on), pt(th::kRowRadius));
-        }
-        pressFeedback(dl, rowId, row, rowPress, pt(th::kRowRadius));
-
-        const float dim = layer.visible ? 1.0f : 0.5f;
-        // Miniatura real de la capa sobre un damero.
-        const ImVec2 thumbMin(row.Min.x + pt(6.0f) + pt(64.0f - thumbWidth) * 0.5f, rowCy - pt(thumbHeight) * 0.5f);
-        const ImVec2 thumbMax(thumbMin.x + pt(thumbWidth), thumbMin.y + pt(thumbHeight));
-        const GLuint texture = m_previews.layerThumbnail(layer, thumbPixelsW, thumbPixelsH, checker);
-        const float thumbRadius = pt(6.0f);
-        if (texture != 0) {
-            dl->AddImageRounded(ImTextureRef(textureId(texture)), thumbMin, thumbMax, ImVec2(0.0f, 0.0f),
-                                ImVec2(1.0f, 1.0f), ui::withAlpha(IM_COL32_WHITE, dim), thumbRadius);
-        } else {
-            dl->AddRectFilled(thumbMin, thumbMax, ui::withAlpha(IM_COL32_WHITE, dim), thumbRadius);
-        }
-        dl->AddRect(thumbMin, thumbMax, IM_COL32(255, 255, 255, 36), thumbRadius, 0, ui::hairline());
-
-        // Nombre y opacidad (u "Oculta").
-        const float textX = row.Min.x + pt(6.0f + 64.0f + 12.0f);
-        const float textRight = (active ? more.Min.x : visibility.Min.x) - pt(6.0f);
-        ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(textX, rowCy - pt(8.0f)), Align::Left,
-                  ui::withAlpha(th::kLabel, dim), layer.name.c_str(), textRight - textX);
-        char detail[32];
-        if (layer.visible) {
-            std::snprintf(detail, sizeof(detail), "%d %%", static_cast<int>(std::lround(layer.opacity * 100.0f)));
-        } else {
-            std::snprintf(detail, sizeof(detail), "Oculta");
-        }
-        ui::label(dl, Weight::Regular, th::kCaption, ImVec2(textX, rowCy + pt(10.0f)), Align::Left,
-                  ui::mix(IM_COL32(235, 235, 245, 153), IM_COL32(255, 255, 255, 204), on), detail);
-
-        // Opciones de la capa activa.
-        if (active) {
-            const float t = ui::anim::follow(ImGui::GetID("##more") + 5u, morePress.held ? 1.0f : 0.0f, 24.0f);
-            dl->AddRectFilled(more.Min, more.Max, IM_COL32(255, 255, 255, static_cast<int>(51 + 30 * t)), pt(9.0f));
-            ui::icon(dl, icon::kEllipsis, more.GetCenter(), 18.0f, th::kLabel);
-        }
-
-        // Casilla de visibilidad.
-        const ImVec2 boxCenter = visibility.GetCenter();
-        const ImRect box(ImVec2(boxCenter.x - pt(11.0f), boxCenter.y - pt(11.0f)),
-                         ImVec2(boxCenter.x + pt(11.0f), boxCenter.y + pt(11.0f)));
-        const float shown = ui::anim::follow(ImGui::GetID("##visible") + 5u, layer.visible ? 1.0f : 0.0f, 22.0f);
-        const ImU32 fill = active ? IM_COL32_WHITE : th::kAccent;
-        const float boxRadius = pt(6.0f);
-        if (shown < 0.999f) {
-            ui::outline(dl, box, boxRadius,
-                        ui::withAlpha(active ? IM_COL32(255, 255, 255, 204) : IM_COL32(255, 255, 255, 102), 1.0f - shown),
-                        pt(1.5f));
-        }
-        if (shown > 0.001f) {
-            dl->AddRectFilled(box.Min, box.Max, ui::withAlpha(fill, shown), boxRadius);
-            ui::icon(dl, icon::kCheck, boxCenter, 14.0f, ui::withAlpha(active ? th::kAccent : IM_COL32_WHITE, shown));
-        }
-        if (visibilityPress.held) {
-            dl->AddRectFilled(box.Min, box.Max, IM_COL32(255, 255, 255, 40), boxRadius);
-        }
-
-        if (visibilityPress.clicked) {
-            canvas.setLayerVisible(index, !layer.visible);
-        } else if (active && morePress.clicked) {
-            m_layerMenu = !m_layerMenu;
-        } else if (rowPress.clicked) {
-            if (active) {
-                m_layerMenu = !m_layerMenu;   // tocar la capa activa abre sus opciones
-            } else {
-                canvas.selectLayer(index);
-                m_layerMenu = false;
+    if (m_blendPage) {
+        blendList(canvas, dl, view);
+    } else {
+        // Lista, de la capa de arriba a la de abajo.
+        const float left = f.content.Min.x + pt(8.0f);
+        const float right = f.content.Max.x - pt(8.0f);
+        const int rows = layers.count();
+        const float rowsHeight = pt(kListPad * 2.0f + rowHeight * static_cast<float>(rows) +
+                                    kRowGap * static_cast<float>(rows - 1));
+        if (m_scrollToLayer >= 0) {
+            const int index = layers.indexOf(static_cast<uint32_t>(m_scrollToLayer));
+            if (index >= 0) {
+                const float top = pt(kListPad + (rowHeight + kRowGap) * static_cast<float>(rows - 1 - index));
+                ui::scrollIntoView("##list", top - pt(kListPad), top + pt(rowHeight + kListPad), view.GetHeight());
             }
+            m_scrollToLayer = -1;
         }
-        ImGui::PopID();
-    }
-    ui::endScroll();
+        const float scroll = ui::beginScroll("##list", view, rowsHeight);
+        const float pixels = m_status.pixelsPerUnit;
+        const int thumbPixelsW = static_cast<int>(std::lround(pt(thumbWidth) * pixels));
+        const int thumbPixelsH = static_cast<int>(std::lround(pt(thumbHeight) * pixels));
+        const int checker = std::max(1, static_cast<int>(std::lround(pt(4.0f) * pixels)));
+        for (int visual = 0; visual < rows; ++visual) {
+            const int index = rows - 1 - visual;
+            Layer& layer = layers.at(index);
+            const float top = y + pt(kListPad) - scroll + pt((rowHeight + kRowGap) * static_cast<float>(visual));
+            const ImRect row(ImVec2(left, top), ImVec2(right, top + pt(rowHeight)));
+            const bool active = index == layers.activeIndex();
+            if (active) {
+                m_activeRow = row;
+            }
+            if (row.Max.y < view.Min.y || row.Min.y > view.Max.y) {
+                continue;
+            }
+            ImGui::PushID(static_cast<int>(layer.id));
+            const float rowCy = row.GetCenter().y;
+            // Primero los botones de dentro de la fila: se quedan el toque antes que la fila.
+            const ImRect visibility(ImVec2(row.Max.x - pt(4.0f + 40.0f), rowCy - pt(20.0f)),
+                                    ImVec2(row.Max.x - pt(4.0f), rowCy + pt(20.0f)));
+            const Press visibilityPress = ui::pressable("##visible", visibility);
+            ImRect more;
+            Press morePress;
+            if (active) {
+                more = ImRect(ImVec2(visibility.Min.x - pt(2.0f + 32.0f), rowCy - pt(16.0f)),
+                              ImVec2(visibility.Min.x - pt(2.0f), rowCy + pt(16.0f)));
+                morePress = ui::pressable("##more", more);
+            }
+            const ImGuiID rowId = ImGui::GetID("##row");
+            const Press rowPress = ui::pressable(rowId, row);
 
-    // Opacidad de la capa activa: barra de relleno.
+            const float on = ui::anim::follow(rowId + 7u, active ? 1.0f : 0.0f, 20.0f);
+            if (on > 0.002f) {
+                dl->AddRectFilled(row.Min, row.Max, ui::withAlpha(th::kAccent, on), pt(th::kRowRadius));
+            }
+            pressFeedback(dl, rowId, row, rowPress, pt(th::kRowRadius));
+
+            // Una capa con máscara de recorte va sangrada, con una flecha hacia su base.
+            const bool shown = canvas.layerShown(index);
+            const float dim = shown ? 1.0f : 0.5f;
+            const ImU32 detailColor = ui::mix(IM_COL32(235, 235, 245, 153), IM_COL32(255, 255, 255, 204), on);
+            const float indent = layers.clipBase(index) >= 0 ? pt(18.0f) : 0.0f;
+            // Miniatura real de la capa sobre un damero.
+            const ImVec2 thumbMin(row.Min.x + pt(6.0f) + indent + pt(64.0f - thumbWidth) * 0.5f,
+                                  rowCy - pt(thumbHeight) * 0.5f);
+            const ImVec2 thumbMax(thumbMin.x + pt(thumbWidth), thumbMin.y + pt(thumbHeight));
+            if (indent > 0.0f) {
+                // Pegada a la miniatura, que en lienzos verticales no llena su hueco.
+                ui::icon(dl, icon::kClip, ImVec2(thumbMin.x - indent * 0.5f, rowCy), 15.0f,
+                         ui::withAlpha(detailColor, dim));
+            }
+            const GLuint texture = m_previews.layerThumbnail(layer, thumbPixelsW, thumbPixelsH, checker);
+            const float thumbRadius = pt(6.0f);
+            if (texture != 0) {
+                dl->AddImageRounded(ImTextureRef(textureId(texture)), thumbMin, thumbMax, ImVec2(0.0f, 0.0f),
+                                    ImVec2(1.0f, 1.0f), ui::withAlpha(IM_COL32_WHITE, dim), thumbRadius);
+            } else {
+                dl->AddRectFilled(thumbMin, thumbMax, ui::withAlpha(IM_COL32_WHITE, dim), thumbRadius);
+            }
+            dl->AddRect(thumbMin, thumbMax, IM_COL32(255, 255, 255, 36), thumbRadius, 0, ui::hairline());
+
+            // Nombre y, debajo, el modo de fusión y la opacidad (u "Oculta"), con iconos del
+            // bloqueo alfa y de la referencia.
+            const float textX = row.Min.x + pt(6.0f + 64.0f + 12.0f) + indent;
+            const float textRight = (active ? more.Min.x : visibility.Min.x) - pt(6.0f);
+            ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(textX, rowCy - pt(8.0f)), Align::Left,
+                      ui::withAlpha(th::kLabel, dim), layer.name.c_str(), textRight - textX);
+            char detail[64];
+            const int percent = static_cast<int>(std::lround(layer.opacity * 100.0f));
+            if (!layer.visible) {
+                std::snprintf(detail, sizeof(detail), "Oculta");
+            } else if (!shown) {
+                std::snprintf(detail, sizeof(detail), "Base oculta");
+            } else if (layer.blend != BlendMode::Normal) {
+                std::snprintf(detail, sizeof(detail), "%s · %d %%", kBlendNames[static_cast<int>(layer.blend)].shortName,
+                              percent);
+            } else {
+                std::snprintf(detail, sizeof(detail), "%d %%", percent);
+            }
+            const char* badges[2] = {};
+            int badgeCount = 0;
+            if (layer.alphaLock) {
+                badges[badgeCount++] = icon::kLock;
+            }
+            if (layer.reference) {
+                badges[badgeCount++] = icon::kBookmark;
+            }
+            const float badgeSpace = pt(16.0f) * static_cast<float>(badgeCount);
+            const float detailY = rowCy + pt(10.0f);
+            const std::string fitted = ui::fitText(Weight::Regular, th::kCaption, detail,
+                                                   std::max(pt(20.0f), textRight - textX - badgeSpace));
+            ui::label(dl, Weight::Regular, th::kCaption, ImVec2(textX, detailY), Align::Left, detailColor,
+                      fitted.c_str());
+            float badgeX = textX + ui::measure(Weight::Regular, th::kCaption, fitted.c_str()).x + pt(4.0f + 7.0f);
+            for (int b = 0; b < badgeCount; ++b) {
+                ui::icon(dl, badges[b], ImVec2(badgeX, detailY), 12.0f, detailColor);
+                badgeX += pt(16.0f);
+            }
+
+            // Opciones de la capa activa.
+            if (active) {
+                const float t = ui::anim::follow(ImGui::GetID("##more") + 5u, morePress.held ? 1.0f : 0.0f, 24.0f);
+                dl->AddRectFilled(more.Min, more.Max, IM_COL32(255, 255, 255, static_cast<int>(51 + 30 * t)), pt(9.0f));
+                ui::icon(dl, icon::kEllipsis, more.GetCenter(), 18.0f, th::kLabel);
+            }
+
+            // Casilla de visibilidad.
+            const ImVec2 boxCenter = visibility.GetCenter();
+            const ImRect box(ImVec2(boxCenter.x - pt(11.0f), boxCenter.y - pt(11.0f)),
+                             ImVec2(boxCenter.x + pt(11.0f), boxCenter.y + pt(11.0f)));
+            const float visible = ui::anim::follow(ImGui::GetID("##visible") + 5u, layer.visible ? 1.0f : 0.0f, 22.0f);
+            const ImU32 fill = active ? IM_COL32_WHITE : th::kAccent;
+            const float boxRadius = pt(6.0f);
+            if (visible < 0.999f) {
+                ui::outline(dl, box, boxRadius,
+                            ui::withAlpha(active ? IM_COL32(255, 255, 255, 204) : IM_COL32(255, 255, 255, 102),
+                                          1.0f - visible),
+                            pt(1.5f));
+            }
+            if (visible > 0.001f) {
+                dl->AddRectFilled(box.Min, box.Max, ui::withAlpha(fill, visible), boxRadius);
+                ui::icon(dl, icon::kCheck, boxCenter, 14.0f, ui::withAlpha(active ? th::kAccent : IM_COL32_WHITE, visible));
+            }
+            if (visibilityPress.held) {
+                dl->AddRectFilled(box.Min, box.Max, IM_COL32(255, 255, 255, 40), boxRadius);
+            }
+
+            if (visibilityPress.clicked) {
+                canvas.setLayerVisible(index, !layer.visible);
+            } else if (active && morePress.clicked) {
+                m_layerMenu = !m_layerMenu;
+            } else if (rowPress.clicked) {
+                if (active) {
+                    m_layerMenu = !m_layerMenu;   // tocar la capa activa abre sus opciones
+                } else {
+                    canvas.selectLayer(index);
+                    m_layerMenu = false;
+                }
+            }
+            ImGui::PopID();
+        }
+        ui::endScroll();
+    }
+
+    // Pie: opacidad de la capa activa (barra de relleno) y su modo de fusión, que abre la
+    // lista de modos.
     ui::separator(dl, f.content.Min.x, f.content.Max.x, listBottom, th::kRule);
     const int activeIndex = layers.activeIndex();
-    const ImRect bar(ImVec2(f.content.Min.x + pt(12.0f), listBottom + pt(10.0f)),
-                     ImVec2(f.content.Max.x - pt(12.0f), listBottom + pt(10.0f + 34.0f)));
+    const float footerTop = listBottom + pt(10.0f);
+    const float chipWidth = pt(124.0f);
+    const ImRect bar(ImVec2(f.content.Min.x + pt(12.0f), footerTop),
+                     ImVec2(f.content.Max.x - pt(12.0f + 8.0f) - chipWidth, footerTop + pt(34.0f)));
     float opacity = layers.active().opacity;
     bool dragging = false;
     if (ui::barSlider("##opacity", bar, &opacity, "Opacidad", &dragging)) {
@@ -873,11 +1008,88 @@ void Ui::layersPanel(Canvas& canvas) {
         canvas.setLayerOpacity(activeIndex, layers.active().opacity, true);
     }
     m_layerOpacityDragging = dragging;
+
+    const ImRect chip(ImVec2(bar.Max.x + pt(8.0f), footerTop), ImVec2(f.content.Max.x - pt(12.0f), footerTop + pt(34.0f)));
+    const ui::Choice blend = ui::choice("##blend", chip, m_blendPage);
+    const float chipCy = chip.GetCenter().y;
+    ui::icon(dl, icon::kBlend, ImVec2(chip.Min.x + pt(10.0f + 8.0f), chipCy), 16.0f,
+             ui::mix(th::kMutedIcon, th::kAccentText, blend.on));
+    const float chipText = chip.Min.x + pt(10.0f + 16.0f + 8.0f);
+    ui::label(dl, Weight::SemiBold, th::kFootnote, ImVec2(chipText, chipCy), Align::Left,
+              ui::mix(th::kLabel, th::kAccentText, blend.on),
+              kBlendNames[static_cast<int>(layers.active().blend)].shortName, chip.Max.x - pt(10.0f) - chipText);
+    if (blend.press.clicked) {
+        m_blendPage = !m_blendPage;
+        m_blendScroll = m_blendPage;
+        m_layerMenu = false;
+    }
     endPanel(f);
 }
 
+void Ui::blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view) {
+    const int index = canvas.layers().activeIndex();
+    const BlendMode current = canvas.layers().active().blend;
+    const float left = view.Min.x + pt(8.0f);
+    const float right = view.Max.x - pt(8.0f);
+
+    // Posición de cada modo en la lista (los grupos llevan un rótulo delante).
+    float tops[kBlendModeCount];
+    float height = kBlendPad;
+    for (int i = 0; i < kBlendModeCount; ++i) {
+        if (blendGroup(static_cast<BlendMode>(i))) {
+            height += kBlendSection;
+        }
+        tops[i] = height;
+        height += kBlendRow;
+    }
+    height += kBlendPad;
+    if (m_blendScroll) {
+        const float top = tops[static_cast<int>(current)];
+        ui::scrollIntoView("##blend", pt(top - kBlendSection), pt(top + kBlendRow + kBlendPad), view.GetHeight());
+        m_blendScroll = false;
+    }
+
+    const float scroll = ui::beginScroll("##blend", view, pt(height));
+    for (int i = 0; i < kBlendModeCount; ++i) {
+        const BlendMode mode = static_cast<BlendMode>(i);
+        const float top = view.Min.y - scroll + pt(tops[i]);
+        if (const char* group = blendGroup(mode)) {
+            const float labelY = top - pt(kBlendSection * 0.5f - 2.0f);
+            if (labelY > view.Min.y - pt(kBlendSection) && labelY < view.Max.y + pt(kBlendSection)) {
+                ui::sectionLabel(dl, left + pt(12.0f), right - pt(12.0f), labelY, group);
+            }
+        }
+        const ImRect row(ImVec2(left, top), ImVec2(right, top + pt(kBlendRow)));
+        if (row.Max.y < view.Min.y || row.Min.y > view.Max.y) {
+            continue;
+        }
+        ImGui::PushID(i);
+        const ImGuiID id = ImGui::GetID("##mode");
+        const Press press = ui::pressable(id, row);
+        ImGui::PopID();
+        const bool selected = mode == current;
+        const float on = ui::anim::follow(id + 7u, selected ? 1.0f : 0.0f, 20.0f);
+        if (on > 0.002f) {
+            dl->AddRectFilled(row.Min, row.Max, ui::withAlpha(th::kAccent, on), pt(th::kControlRadius));
+        }
+        pressFeedback(dl, id, row, press, pt(th::kControlRadius));
+        const float cy = row.GetCenter().y;
+        ui::label(dl, Weight::Regular, th::kSubhead, ImVec2(row.Min.x + pt(12.0f), cy), Align::Left, th::kLabel,
+                  kBlendNames[i].name, row.GetWidth() - pt(12.0f + 36.0f));
+        if (on > 0.002f) {
+            ui::icon(dl, icon::kCheck, ImVec2(row.Max.x - pt(12.0f + 8.0f), cy), 16.0f, ui::withAlpha(th::kLabel, on));
+        }
+        // Cada modo se ve en el lienzo en cuanto se toca.
+        if (press.clicked && !selected) {
+            canvas.setLayerBlend(index, mode, false);
+            m_blendEditing = true;
+        }
+    }
+    ui::endScroll();
+}
+
 void Ui::layerMenu(Canvas& canvas) {
-    const bool open = m_layerMenu && m_panel == Panel::Layers;
+    const bool open = m_layerMenu && m_panel == Panel::Layers && !m_blendPage;
     const ImGuiID menuId = ImHashStr("##layer-menu");
     const float p = ui::anim::followFrom(menuId, 0.0f, open ? 1.0f : 0.0f, open ? 20.0f : 26.0f);
     if (!open && p <= 0.002f) {
@@ -886,25 +1098,33 @@ void Ui::layerMenu(Canvas& canvas) {
     const Layout& L = m_layout;
     LayerStack& layers = canvas.layers();
     const int index = layers.activeIndex();
-    const float width = pt(284.0f);
+    const Layer& layer = layers.at(index);
+    constexpr int kRows = 5;
+    const float width = pt(296.0f);
     const float pad = pt(8.0f);
+    const float gap = pt(6.0f);
     const float divider = pt(6.0f + 1.0f + 6.0f);
-    // Fichas y filas algo más bajas si no cabe bajo las barras (un teléfono en horizontal).
+    // Fichas y filas algo más bajas si no cabe (un teléfono en horizontal).
     float tile = pt(60.0f);
+    float toggleTile = pt(52.0f);
     float item = pt(44.0f);
-    const float available = L.bottom - L.popoverTop - pad * 2.0f - divider;
-    if (tile + item * 3.0f > available) {
-        const float k = std::max(available / (tile + item * 3.0f), 0.75f);
+    const float fixed = pad * 2.0f + gap + divider;
+    const float needed = tile + toggleTile + item * static_cast<float>(kRows);
+    const float available = L.bottom - L.top - fixed;
+    if (needed > available) {
+        const float k = std::max(available / needed, 0.7f);
         tile *= k;
+        toggleTile *= k;
         item *= k;
     }
-    const float height = pad * 2.0f + divider + tile + item * 3.0f;
+    const float height = fixed + tile + toggleTile + item * static_cast<float>(kRows);
     float x = 0.0f;
     float y = 0.0f;
     ImVec2 anchor;
     if (L.narrow) {
         x = L.right - width;
         y = std::max(L.leftBar.Max.y + pt(8.0f), m_layersRect.Min.y - height - pt(8.0f));
+        y = std::max(L.top, std::min(y, L.bottom - height));
         anchor = ImVec2(x + width, y + height);
     } else {
         x = std::max(L.left, m_layersRect.Min.x - pt(12.0f) - width);
@@ -925,32 +1145,40 @@ void Ui::layerMenu(Canvas& canvas) {
     ui::popUnclipped(dl);
     ui::glass(dl, rect, radius, IM_COL32(24, 24, 28, 224));
 
-    // Acciones: 0 renombrar, 1 duplicar, 2 combinar, 3 subir, 4 bajar, 5 limpiar, 6 eliminar.
+    enum Action { Rename, Duplicate, Up, Down, AlphaLock, Clip, Reference, Fill, Invert, Merge, Clear, Delete };
     struct Item {
-        int action;
+        Action action;
         const char* label;
         const char* glyph;
         bool enabled;
+        bool on;   // interruptores
     };
     const Item tiles[4] = {
-        {0, "Renombrar", icon::kPencil, true},
-        {1, "Duplicar", icon::kCopy, layers.count() < canvas.maxLayers()},
-        {3, "Subir", icon::kArrowUp, index < layers.count() - 1},
-        {4, "Bajar", icon::kArrowDown, index > 0},
+        {Rename, "Renombrar", icon::kPencil, true, false},
+        {Duplicate, "Duplicar", icon::kCopy, layers.count() < canvas.maxLayers(), false},
+        {Up, "Subir", icon::kArrowUp, index < layers.count() - 1, false},
+        {Down, "Bajar", icon::kArrowDown, index > 0, false},
     };
-    const Item rows[3] = {
-        {2, "Combinar con la de abajo", icon::kMerge, canvas.canMergeDown(index)},
-        {5, "Limpiar capa", icon::kBrushCleaning, true},
-        {6, "Eliminar capa", icon::kTrash, layers.count() > 1},
+    const Item toggles[3] = {
+        {AlphaLock, "Bloqueo alfa", icon::kLock, true, layer.alphaLock},
+        {Clip, "Recorte", icon::kClip, canvas.canClip(index) || layer.clipping, layer.clipping},
+        {Reference, "Referencia", icon::kBookmark, true, layer.reference},
+    };
+    const Item rows[kRows] = {
+        {Fill, "Rellenar con el color", icon::kPaintBucket, true, false},
+        {Invert, "Invertir colores", icon::kContrast, true, false},
+        {Merge, "Combinar con la de abajo", icon::kMerge, canvas.canMergeDown(index), false},
+        {Clear, "Limpiar capa", icon::kBrushCleaning, true, false},
+        {Delete, "Eliminar capa", icon::kTrash, layers.count() > 1, false},
     };
     int chosen = -1;
 
-    // Arriba, las cuatro más usadas como fichas con icono.
-    const float gap = pt(6.0f);
+    // Arriba, las cuatro acciones más usadas como fichas con icono.
+    float top = rect.Min.y + pad;
     const float tileWidth = (width - pad * 2.0f - gap * 3.0f) / 4.0f;
     for (int i = 0; i < 4; ++i) {
         const float x0 = rect.Min.x + pad + (tileWidth + gap) * static_cast<float>(i);
-        const ImRect r(ImVec2(x0, rect.Min.y + pad), ImVec2(x0 + tileWidth, rect.Min.y + pad + tile));
+        const ImRect r(ImVec2(x0, top), ImVec2(x0 + tileWidth, top + tile));
         ImGui::PushID(i);
         const ImGuiID id = ImGui::GetID("##tile");
         const Press press = ui::pressable(id, r, tiles[i].enabled);
@@ -966,55 +1194,96 @@ void Ui::layerMenu(Canvas& canvas) {
             chosen = tiles[i].action;
         }
     }
-    float top = rect.Min.y + pad + tile + pt(6.0f);
+    top += tile + gap;
+
+    // Debajo, los interruptores de la capa: se encienden con el color de acento.
+    const float toggleWidth = (width - pad * 2.0f - gap * 2.0f) / 3.0f;
+    for (int i = 0; i < 3; ++i) {
+        const float x0 = rect.Min.x + pad + (toggleWidth + gap) * static_cast<float>(i);
+        const ImRect r(ImVec2(x0, top), ImVec2(x0 + toggleWidth, top + toggleTile));
+        ImGui::PushID(20 + i);
+        const ui::Choice c = ui::choice("##toggle", r, toggles[i].on, toggles[i].enabled);
+        ImGui::PopID();
+        const ImU32 color = toggles[i].enabled ? ui::mix(th::kLabel, th::kAccentText, c.on)
+                                               : ui::withAlpha(th::kLabel, 0.3f);
+        const float middle = r.GetCenter().y;
+        ui::icon(dl, toggles[i].glyph, ImVec2(r.GetCenter().x, middle - toggleTile * 0.15f), 17.0f, color);
+        ui::label(dl, Weight::Regular, th::kMicro, ImVec2(r.GetCenter().x, middle + toggleTile * 0.24f), Align::Center,
+                  color, toggles[i].label, toggleWidth - pt(6.0f));
+        if (c.press.clicked) {
+            chosen = toggles[i].action;
+        }
+    }
+    top += toggleTile + pt(6.0f);
     ui::separator(dl, rect.Min.x + pad + pt(4.0f), rect.Max.x - pad - pt(4.0f), top, th::kRule);
     top += pt(1.0f + 6.0f);
 
-    // Debajo, el resto en filas; eliminar, en rojo.
-    for (int i = 0; i < 3; ++i) {
+    // El resto en filas; eliminar, en rojo. Rellenar muestra el color que se usará.
+    for (int i = 0; i < kRows; ++i) {
         const ImRect r(ImVec2(rect.Min.x + pad, top), ImVec2(rect.Max.x - pad, top + item));
         ImGui::PushID(10 + i);
         if (menuRow(dl, "##row", r, rows[i].glyph, rows[i].label, nullptr, false, rows[i].enabled,
-                    rows[i].action == 6 ? th::kRed : th::kLabel)) {
+                    rows[i].action == Delete ? th::kRed : th::kLabel)) {
             chosen = rows[i].action;
         }
         ImGui::PopID();
+        if (rows[i].action == Fill) {
+            const ImVec2 center(r.Max.x - pt(10.0f + 9.0f), r.GetCenter().y);
+            dl->AddCircleFilled(center, pt(8.0f), ui::fromFloat(canvas.brushSettings().color), 0);
+            dl->AddCircle(center, pt(8.0f), IM_COL32(255, 255, 255, 64), 0, ui::hairline());
+        }
         top += item;
     }
     ui::transform(mark, anchor, 0.92f + 0.08f * p, ImVec2(0.0f, 0.0f), std::min(1.0f, p * 1.3f));
     ui::endSurface();
 
     switch (chosen) {
-    case 0:
+    case Rename:
         openDialog(Dialog::RenameLayer, &canvas);
         break;
-    case 1:
+    case Duplicate:
         if (!canvas.duplicateLayer(index)) {
             notify("No hay memoria para otra capa", Notice::Error);
         } else {
             m_scrollToLayer = static_cast<int>(layers.active().id);
         }
         break;
-    case 2:
-        canvas.mergeDown(index);
-        break;
-    case 3:
+    case Up:
         canvas.moveLayer(index, index + 1);
         break;
-    case 4:
+    case Down:
         canvas.moveLayer(index, index - 1);
         break;
-    case 5:
+    case AlphaLock:
+        canvas.setLayerAlphaLock(index, !layer.alphaLock);
+        break;
+    case Clip:
+        canvas.setLayerClipping(index, !layer.clipping);
+        break;
+    case Reference:
+        canvas.setReferenceLayer(layer.reference ? -1 : index);
+        break;
+    case Fill:
+        canvas.fillLayer(index, canvas.brushSettings().color);
+        break;
+    case Invert:
+        canvas.invertLayer(index);
+        break;
+    case Merge:
+        canvas.mergeDown(index);
+        break;
+    case Clear:
         canvas.clearLayer(index);
         break;
-    case 6:
+    case Delete:
         openDialog(Dialog::DeleteLayer, &canvas);
         break;
     default:
         break;
     }
-    // Subir y bajar dejan el menú abierto para mover varias posiciones seguidas.
-    if (chosen >= 0 && chosen != 3 && chosen != 4) {
+    // Subir, bajar y los interruptores dejan el menú abierto (para seguir cambiando cosas).
+    if (chosen >= 0 && chosen != Up && chosen != Down && chosen != AlphaLock && chosen != Clip &&
+        chosen != Reference) {
         m_layerMenu = false;
     }
 }

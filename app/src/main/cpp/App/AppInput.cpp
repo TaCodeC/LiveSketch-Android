@@ -90,9 +90,19 @@ bool App::canvasInteractionActive() const {
            m_pick.source != PickSource::None;
 }
 
-void App::notifyHiddenLayer() {
-    if (m_canvas.ready() && !m_canvas.layers().active().visible) {
+void App::notifyStrokeBlocked(bool eraserTip) {
+    switch (m_canvas.strokeBlock(eraserTip)) {
+    case Canvas::StrokeBlock::Hidden:
         m_ui.notify("La capa activa está oculta", Notice::Warning);
+        break;
+    case Canvas::StrokeBlock::ClipBaseHidden:
+        m_ui.notify("La capa recorta con una capa oculta", Notice::Warning);
+        break;
+    case Canvas::StrokeBlock::AlphaLocked:
+        m_ui.notify("Con el alfa bloqueado no se puede borrar", Notice::Warning);
+        break;
+    case Canvas::StrokeBlock::None:
+        break;
     }
 }
 
@@ -100,7 +110,7 @@ bool App::beginCanvasStroke(glm::vec2 pixels, float pressure, bool eraserTip) {
     m_ui.prepareStroke(m_canvas, eraserTip);
     const glm::vec2 point = toCanvas(pixels);
     if (!m_canvas.beginStroke(point.x, point.y, pressure, eraserTip)) {
-        notifyHiddenLayer();
+        notifyStrokeBlocked(eraserTip);
         return false;
     }
     m_ui.strokeStarted(m_canvas, eraserTip || m_canvas.brushSettings().eraser);

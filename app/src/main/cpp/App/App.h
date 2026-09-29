@@ -56,7 +56,7 @@ private:
     bool penBlocksFingers() const;
     bool canvasInteractionActive() const;
     void resetGestureReference();
-    void notifyHiddenLayer();
+    void notifyStrokeBlocked(bool eraserTip);
     // Empieza un trazo con los ajustes de la herramienta (o del borrador, con la goma
     // del lápiz). `pixels`: posición en la ventana, en píxeles.
     bool beginCanvasStroke(glm::vec2 pixels, float pressure, bool eraserTip);
