@@ -42,5 +42,13 @@ inline constexpr const char* kGripVertical  = "\xee\x83\xab"; // grip-vertical U
 inline constexpr const char* kEye           = "\xee\x82\xba"; // eye U+E0BA
 inline constexpr const char* kEyeOff        = "\xee\x82\xbb"; // eye-off U+E0BB
 inline constexpr const char* kUsers         = "\xee\x86\xa4"; // users U+E1A4
+inline constexpr const char* kFrame         = "\xee\x8a\x91"; // frame U+E291
+inline constexpr const char* kShare         = "\xee\x85\x95"; // share U+E155
+inline constexpr const char* kSliders       = "\xee\x8a\x9a"; // sliders-horizontal U+E29A
+inline constexpr const char* kHelp          = "\xee\x82\x82"; // circle-help U+E082
+inline constexpr const char* kProportions   = "\xee\x97\x8f"; // proportions U+E5CF
+inline constexpr const char* kArrowUp       = "\xee\x81\x8a"; // arrow-up U+E04A
+inline constexpr const char* kArrowDown     = "\xee\x81\x82"; // arrow-down U+E042
+inline constexpr const char* kArrowRight    = "\xee\x81\x89"; // arrow-right U+E049
 
 } // namespace icon

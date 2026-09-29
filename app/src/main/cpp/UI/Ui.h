@@ -43,9 +43,9 @@ enum class Notice { Info, Success, Warning, Error, Progress, Undo, Redo };
 
 enum class Tool { Brush, Eraser };
 
-// Interfaz al estilo de Procreate con acabado de iOS: barras flotantes de cristal arriba,
-// barra lateral con tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se
-// abren desde las barras (hojas desde abajo en un teléfono en vertical).
+// Interfaz al estilo de Procreate: barras flotantes de cristal arriba, barra lateral con
+// tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se abren desde las
+// barras (hojas desde abajo en un teléfono en vertical).
 //
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
@@ -225,6 +225,7 @@ private:
     Tool m_tool = Tool::Brush;
     ToolPreset m_presets[2];
     Panel m_panel = Panel::None;
+    int m_actionsTab = 0;           // Acciones: 0 lienzo, 1 compartir, 2 preferencias, 3 ayuda
     bool m_layerMenu = false;
     ImRect m_activeRow;             // fila de la capa activa (para situar su menú)
     ImRect m_layersRect;            // panel de capas en pantalla

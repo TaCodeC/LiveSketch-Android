@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -186,6 +187,13 @@ void fillRoundedBelow(ImDrawList* dl, const ImRect& r, float radius, float yCut,
     if (polygon.size() >= 3) {
         dl->AddConvexPolyFilled(polygon.data(), static_cast<int>(polygon.size()), color);
     }
+}
+
+// Borde de `thickness` por dentro del rectángulo (AddRect lo centra en el contorno).
+void insideBorder(ImDrawList* dl, const ImRect& r, float radius, ImU32 color, float thickness) {
+    const float half = thickness * 0.5f;
+    dl->AddRect(ImVec2(r.Min.x + half, r.Min.y + half), ImVec2(r.Max.x - half, r.Max.y - half), color,
+                std::max(0.0f, radius - half), 0, thickness);
 }
 
 } // namespace
@@ -463,18 +471,27 @@ void pushUnclipped(ImDrawList* dl) {
 
 void popUnclipped(ImDrawList* dl) { dl->PopClipRect(); }
 
-void group(ImDrawList* dl, const ImRect& rect, float radius) {
-    dl->AddRectFilled(rect.Min, rect.Max, theme::kGroupFill, radius);
-}
-
 void separator(ImDrawList* dl, float x0, float x1, float y, ImU32 color) {
     const float top = snap(y);
     dl->AddRectFilled(ImVec2(x0, top), ImVec2(x1, top + hairline()), color);
 }
 
-void iconTile(ImDrawList* dl, const ImRect& rect, ImU32 color, const char* glyph, float iconPoints) {
-    dl->AddRectFilled(rect.Min, rect.Max, color, rect.GetWidth() * 0.25f);
-    icon(dl, glyph, rect.GetCenter(), iconPoints, IM_COL32_WHITE);
+void outline(ImDrawList* dl, const ImRect& rect, float radius, ImU32 color, float thickness) {
+    insideBorder(dl, rect, radius, color, thickness);
+}
+
+void sectionLabel(ImDrawList* dl, float x0, float x1, float y, const char* text) {
+    constexpr float kTracking = 0.08f;
+    tracked(dl, Weight::Bold, theme::kMicro, ImVec2(x0, y), theme::kSectionLabel, text, kTracking);
+    const float start = x0 + trackedWidth(Weight::Bold, theme::kMicro, text, kTracking) + pt(10.0f);
+    if (start < x1) {
+        separator(dl, start, x1, y, theme::kRule);
+    }
+}
+
+void iconBadge(ImDrawList* dl, const ImRect& rect, ImU32 color, const char* glyph, float iconPoints) {
+    dl->AddRectFilled(rect.Min, rect.Max, withAlpha(color, 0.16f), rect.GetWidth() * 0.3f);
+    icon(dl, glyph, rect.GetCenter(), iconPoints, color);
 }
 
 void spinner(ImDrawList* dl, ImVec2 center, float radius, ImU32 color) {
@@ -688,88 +705,96 @@ void highlight(ImDrawList* dl, ImGuiID id, const ImRect& rect, float radius, boo
 
 bool toggle(const char* strId, ImVec2 pos, bool* value, bool enabled) {
     const ImGuiID id = ImGui::GetID(strId);
-    const ImRect bb(pos, ImVec2(pos.x + toggleSize().x, pos.y + toggleSize().y));
-    const Press press = pressable(id, bb, enabled);
+    const ImVec2 size = toggleSize();
+    const ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+    // Se toca en una zona algo más grande que el dibujo.
+    const ImRect touch(ImVec2(bb.Min.x - pt(6.0f), bb.Min.y - pt(10.0f)), ImVec2(bb.Max.x + pt(6.0f), bb.Max.y + pt(10.0f)));
+    const Press press = pressable(id, touch, enabled);
     if (press.clicked) {
         *value = !*value;
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float t = anim::follow(id, *value ? 1.0f : 0.0f, 16.0f);
-    const float squeeze = anim::follow(id + 1u, press.held ? 1.0f : 0.0f, 20.0f);
-    const float radius = bb.GetHeight() * 0.5f;
-    ImU32 track = mix(IM_COL32(120, 120, 128, 92), theme::kGreen, t);
-    if (!enabled) {
-        track = withAlpha(track, 0.45f);
+    const float t = anim::follow(id, *value ? 1.0f : 0.0f, 18.0f);
+    const float alpha = enabled ? 1.0f : 0.4f;
+    const float radius = pt(8.0f);
+    dl->AddRectFilled(bb.Min, bb.Max, withAlpha(mix(theme::kControl, theme::kAccent, t), alpha), radius);
+    insideBorder(dl, bb, radius, withAlpha(mix(theme::kControlBorderStrong, theme::kAccentBorder, t), alpha), pt(1.0f));
+    const float touchLevel = anim::follow(id + 1u, press.held ? 1.0f : (press.hovered ? 0.5f : 0.0f), 24.0f);
+    if (touchLevel > 0.002f) {
+        dl->AddRectFilled(bb.Min, bb.Max, withAlpha(IM_COL32(255, 255, 255, 26), touchLevel), radius);
     }
-    dl->AddRectFilled(bb.Min, bb.Max, track, radius);
 
-    // La bolita se estira un poco mientras se mantiene pulsada, como en iOS.
-    const float inset = pt(2.0f);
-    const float knobRadius = radius - inset;
-    const float stretch = pt(7.0f) * squeeze;
-    const float left = lerp(bb.Min.x + inset, bb.Max.x - inset - knobRadius * 2.0f - stretch, t);
-    const ImRect knob(ImVec2(left, bb.Min.y + inset), ImVec2(left + knobRadius * 2.0f + stretch, bb.Max.y - inset));
-    shadow(dl, knob, knobRadius, pt(6.0f), pt(2.0f), enabled ? 0.28f : 0.12f);
-    dl->AddRectFilled(knob.Min, knob.Max, enabled ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 170), knobRadius);
+    // Tirador cuadrado a 4 pt de los bordes: gris a la izquierda, blanco a la derecha.
+    const float inset = pt(4.0f);
+    const float knob = size.y - inset * 2.0f;
+    const float x = lerp(bb.Min.x + inset, bb.Max.x - inset - knob, t);
+    dl->AddRectFilled(ImVec2(x, bb.Min.y + inset), ImVec2(x + knob, bb.Max.y - inset),
+                      withAlpha(mix(IM_COL32(255, 255, 255, 140), IM_COL32_WHITE, t), alpha), pt(5.0f));
     return press.clicked;
 }
 
-bool segmented(const char* strId, const ImRect& rect, const char* const* labels, int count, int* selected,
-               bool enabled) {
-    if (count <= 0) {
-        return false;
-    }
-    const float alpha = enabled ? 1.0f : 0.4f;
-    ImGui::PushID(strId);
-    const ImGuiID id = ImGui::GetID("##track");
+Choice choice(const char* strId, const ImRect& rect, bool selected, bool enabled, bool bordered) {
+    const ImGuiID id = ImGui::GetID(strId);
+    Choice c;
+    c.press = pressable(id, rect, enabled);
+    c.on = anim::follow(id + 7u, selected ? 1.0f : 0.0f, 20.0f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(rect.Min, rect.Max, theme::kFillSoft, pt(9.0f));
-
-    const float pad = pt(2.0f);
-    const float width = (rect.GetWidth() - 2.0f * pad) / static_cast<float>(count);
-    const float x = anim::follow(id, static_cast<float>(*selected), 20.0f, 0.001f);
-    const ImRect pill(ImVec2(rect.Min.x + pad + x * width, rect.Min.y + pad),
-                      ImVec2(rect.Min.x + pad + (x + 1.0f) * width, rect.Max.y - pad));
-    shadow(dl, pill, pt(7.0f), pt(8.0f), pt(3.0f), 0.22f * alpha);
-    dl->AddRectFilled(pill.Min, pill.Max, withAlpha(theme::kGray2, alpha), pt(7.0f));
-
-    bool changed = false;
-    for (int i = 0; i < count; ++i) {
-        const ImRect segment(ImVec2(rect.Min.x + pad + static_cast<float>(i) * width, rect.Min.y),
-                             ImVec2(rect.Min.x + pad + static_cast<float>(i + 1) * width, rect.Max.y));
-        ImGui::PushID(i);
-        const Press press = pressable("##segment", segment, enabled);
-        ImGui::PopID();
-        const bool on = i == *selected;
-        if (!on && press.held) {
-            dl->AddRectFilled(ImVec2(segment.Min.x, segment.Min.y + pad), ImVec2(segment.Max.x, segment.Max.y - pad),
-                              theme::kHover, pt(7.0f));
-        }
-        textCentered(dl, on ? Weight::SemiBold : Weight::Regular, theme::kFootnote, segment.GetCenter(),
-                     withAlpha(theme::kLabel, alpha), labels[i]);
-        if (press.clicked && !on) {
-            *selected = i;
-            changed = true;
-        }
+    const float radius = pt(theme::kControlRadius);
+    const float alpha = enabled ? 1.0f : 0.4f;
+    // Sin borde (pestañas) el fondo solo aparece al elegirla.
+    const ImU32 idle = bordered ? theme::kControlSoft : (theme::kAccentSoft & ~IM_COL32_A_MASK);
+    const ImU32 fill = mix(idle, theme::kAccentSoft, c.on);
+    if (((fill >> IM_COL32_A_SHIFT) & 0xFF) != 0) {
+        dl->AddRectFilled(rect.Min, rect.Max, withAlpha(fill, alpha), radius);
     }
-    ImGui::PopID();
-    return changed;
+    if (bordered) {
+        insideBorder(dl, rect, radius, withAlpha(mix(theme::kControlBorder, theme::kAccent, c.on), alpha), pt(1.0f));
+    }
+    const float touch = anim::follow(id + 5u, c.press.held ? 1.0f : (c.press.hovered ? 0.5f : 0.0f), 24.0f);
+    if (touch > 0.002f) {
+        dl->AddRectFilled(rect.Min, rect.Max, withAlpha(IM_COL32(255, 255, 255, 20), touch), radius);
+    }
+    return c;
 }
 
-bool slider(const char* strId, const ImRect& rect, float* value, float min, float max, bool* active) {
+Press buttonFrame(const char* strId, const ImRect& rect, ButtonStyle style, bool enabled, float radius) {
+    const ImGuiID id = ImGui::GetID(strId);
+    const Press press = pressable(id, rect, enabled);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (radius < 0.0f) {
+        radius = pt(theme::kControlRadius);
+    }
+    const float touch = anim::follow(id + 5u, press.held ? 1.0f : (press.hovered ? 0.4f : 0.0f), 24.0f);
+    const float alpha = enabled ? 1.0f : 0.4f;
+    if (style == ButtonStyle::Secondary) {
+        dl->AddRectFilled(rect.Min, rect.Max, withAlpha(mix(theme::kControl, IM_COL32(255, 255, 255, 38), touch), alpha),
+                          radius);
+        insideBorder(dl, rect, radius, withAlpha(theme::kControlBorder, alpha), pt(1.0f));
+    } else {
+        // Al pulsarlo se oscurece un poco.
+        const ImU32 base = style == ButtonStyle::Primary ? theme::kAccent : theme::kRed;
+        dl->AddRectFilled(rect.Min, rect.Max, withAlpha(mix(base, IM_COL32(0, 0, 0, 255), 0.22f * touch), alpha),
+                          radius);
+    }
+    return press;
+}
+
+bool button(const char* strId, const ImRect& rect, const char* text, ButtonStyle style, bool enabled) {
+    const Press press = buttonFrame(strId, rect, style, enabled);
+    label(ImGui::GetWindowDrawList(), Weight::SemiBold, theme::kSubhead, rect.GetCenter(), Align::Center,
+          withAlpha(theme::kLabel, enabled ? 1.0f : 0.6f), text, rect.GetWidth() - pt(16.0f));
+    return press.clicked;
+}
+
+bool barSlider(const char* strId, const ImRect& rect, float* value, const char* text, bool* active) {
     const ImGuiID id = ImGui::GetID(strId);
     ImGui::ItemAdd(rect, id);
     bool hovered = false;
     bool held = false;
     ImGui::ButtonBehavior(rect, id, &hovered, &held, ImGuiButtonFlags_PressedOnClick | ImGuiButtonFlags_NoNavFocus);
-
-    const float knobRadius = pt(14.0f);
-    const float x0 = rect.Min.x + knobRadius;
-    const float x1 = rect.Max.x - knobRadius;
     bool changed = false;
-    if (held && x1 > x0) {
-        const float t = std::clamp((ImGui::GetIO().MousePos.x - x0) / (x1 - x0), 0.0f, 1.0f);
-        const float v = min + (max - min) * t;
+    if (held && rect.GetWidth() > 0.0f) {
+        const float v = std::clamp((ImGui::GetIO().MousePos.x - rect.Min.x) / rect.GetWidth(), 0.0f, 1.0f);
         changed = v != *value;
         *value = v;
     }
@@ -778,18 +803,32 @@ bool slider(const char* strId, const ImRect& rect, float* value, float min, floa
     }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float t = max > min ? std::clamp((*value - min) / (max - min), 0.0f, 1.0f) : 0.0f;
+    const float radius = pt(theme::kControlRadius);
+    const float focus = anim::follow(id, held ? 1.0f : 0.0f, 20.0f);
+    dl->AddRectFilled(rect.Min, rect.Max, mix(theme::kControl, IM_COL32(255, 255, 255, 28), focus), radius);
+    // El relleno es el rectángulo entero recortado hasta el valor: redondo solo a la izquierda.
+    const float shown = anim::follow(id + 1u, std::clamp(*value, 0.0f, 1.0f), 30.0f, 0.0005f);
+    const float cut = rect.Min.x + rect.GetWidth() * shown;
+    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
+    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(255, 255, 255, 235), radius);
+    dl->PopClipRect();
+    insideBorder(dl, rect, radius, theme::kControlBorder, pt(1.0f));
+
+    // Los textos, oscuros sobre el relleno y claros fuera de él.
+    char valueText[16];
+    std::snprintf(valueText, sizeof(valueText), "%d %%", static_cast<int>(std::lround(*value * 100.0f)));
     const float cy = rect.GetCenter().y;
-    const float track = pt(2.0f);
-    const float knobX = x0 + (x1 - x0) * t;
-    dl->AddRectFilled(ImVec2(rect.Min.x, cy - track), ImVec2(rect.Max.x, cy + track), IM_COL32(120, 120, 128, 102),
-                      track);
-    dl->AddRectFilled(ImVec2(rect.Min.x, cy - track), ImVec2(knobX, cy + track), theme::kAccent, track);
-    const float grow = anim::follow(id, held ? 1.0f : 0.0f, 20.0f);
-    const float r = knobRadius * (1.0f + 0.06f * grow);
-    const ImRect knob(ImVec2(knobX - r, cy - r), ImVec2(knobX + r, cy + r));
-    shadow(dl, knob, r, pt(8.0f), pt(2.0f), 0.3f);
-    dl->AddCircleFilled(ImVec2(knobX, cy), r, IM_COL32_WHITE, 0);
+    const float pad = pt(12.0f);
+    auto texts = [&](ImU32 color) {
+        label(dl, Weight::SemiBold, theme::kFootnote, ImVec2(rect.Min.x + pad, cy), Align::Left, color, text);
+        label(dl, Weight::SemiBold, theme::kFootnote, ImVec2(rect.Max.x - pad, cy), Align::Right, color, valueText);
+    };
+    dl->PushClipRect(ImVec2(cut, rect.Min.y), rect.Max, true);
+    texts(theme::kLabel);
+    dl->PopClipRect();
+    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
+    texts(IM_COL32(28, 28, 30, 255));
+    dl->PopClipRect();
     return changed;
 }
 
@@ -822,13 +861,13 @@ bool fillSlider(const char* strId, const ImRect& rect, float* t, bool* active) {
 
 bool textField(const char* id, const ImRect& rect, char* buffer, size_t size, bool focus, const char* placeholder) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(0, 0, 0, 90), pt(9.0f));
-    dl->AddRect(rect.Min, rect.Max, IM_COL32(255, 255, 255, 30), pt(9.0f), 0, hairline());
+    const float radius = pt(8.0f);
+    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(0, 0, 0, 64), radius);
 
     const float size16 = fontSize(theme::kBody);
     ImGui::PushFont(font(Weight::Regular), size16);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pt(10.0f), (rect.GetHeight() - size16) * 0.5f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, pt(9.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, radius);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
@@ -847,6 +886,9 @@ bool textField(const char* id, const ImRect& rect, char* buffer, size_t size, bo
     ImGui::PopStyleColor(7);
     ImGui::PopStyleVar(3);
     ImGui::PopFont();
+    // Mientras se escribe, el borde toma el color de acento.
+    const float editing = anim::follow(ImGui::GetItemID() + 3u, ImGui::IsItemActive() ? 1.0f : 0.0f, 20.0f);
+    insideBorder(dl, rect, radius, mix(IM_COL32(255, 255, 255, 31), theme::kAccent, editing), pt(1.0f));
     if (buffer[0] == '\0' && placeholder) {
         text(dl, Weight::Regular, theme::kBody, ImVec2(rect.Min.x + pt(10.0f), rect.GetCenter().y - size16 * 0.5f),
              theme::kTertiaryLabel, placeholder);
@@ -942,15 +984,20 @@ void scrollIntoView(const char* strId, float top, float bottom, float viewHeight
     }
 }
 
-bool swatch(const char* strId, ImVec2 center, float radius, ImU32 color, bool selected) {
-    const ImRect bb(ImVec2(center.x - radius, center.y - radius), ImVec2(center.x + radius, center.y + radius));
-    const Press press = pressable(strId, bb);
+bool swatch(const char* strId, const ImRect& rect, ImU32 color, bool selected) {
+    const Press press = pressable(strId, rect);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float r = press.held ? radius * 0.92f : radius;
-    dl->AddCircleFilled(center, r, color, 0);
-    dl->AddCircle(center, r - hairline() * 0.5f, IM_COL32(255, 255, 255, 41), 0, hairline());
+    const float radius = pt(8.0f);
+    ImRect r = rect;
+    if (press.held) {
+        r.Expand(-pt(1.5f));
+    }
+    dl->AddRectFilled(r.Min, r.Max, color, radius);
+    insideBorder(dl, r, radius, IM_COL32(255, 255, 255, 41), hairline());
     if (selected) {
-        dl->AddCircle(center, radius + pt(3.0f), IM_COL32_WHITE, 0, pt(2.0f));
+        ImRect ring = rect;
+        ring.Expand(pt(4.0f));
+        insideBorder(dl, ring, radius + pt(4.0f), IM_COL32_WHITE, pt(2.0f));
     }
     return press.clicked;
 }

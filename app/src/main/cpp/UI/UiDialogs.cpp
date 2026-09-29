@@ -1,5 +1,6 @@
-// Diálogos: alertas al estilo de iOS (eliminar y renombrar capa, salir) y la tarjeta de
-// lienzo nuevo, que también es la pantalla de inicio.
+// Diálogos: confirmaciones (eliminar y renombrar capa, salir) y la tarjeta de lienzo
+// nuevo, que también es la pantalla de inicio. Son tarjetas alineadas a la izquierda:
+// un icono, el título, la explicación y botones abajo a la derecha.
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
@@ -25,18 +26,19 @@ struct CanvasPreset {
     const char* name;
     int width;    // 0: el tamaño de la pantalla
     int height;
-    ImU32 color;
 };
 
 constexpr CanvasPreset kCanvasPresets[] = {
-    {"Pantalla completa", 0, 0, th::kAccent},
-    {"HD 720p", 1280, 720, th::kIndigo},
-    {"Full HD 1080p", 1920, 1080, th::kGreen},
-    {"QHD 1440p", 2560, 1440, th::kOrange},
-    {"4K UHD", 3840, 2160, IM_COL32(255, 55, 95, 255)},
-    {"Pequeño", 640, 360, th::kGray},
+    {"Pantalla completa", 0, 0},
+    {"HD 720p", 1280, 720},
+    {"Full HD 1080p", 1920, 1080},
+    {"QHD 1440p", 2560, 1440},
+    {"4K UHD", 3840, 2160},
+    {"Pequeño", 640, 360},
 };
 constexpr int kCanvasPresetCount = static_cast<int>(sizeof(kCanvasPresets) / sizeof(kCanvasPresets[0]));
+// Área del tamaño más grande (4K): la forma de cada ficha crece con sus píxeles.
+constexpr float kLargestArea = 3840.0f * 2160.0f;
 
 // Opacidad del oscurecido de detrás de los diálogos.
 constexpr float kDimAlpha = static_cast<float>((th::kDim >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
@@ -50,12 +52,19 @@ std::string trimmed(const char* text) {
     return s.substr(first, s.find_last_not_of(' ') - first + 1);
 }
 
-// Campo de texto quieto (mientras la alerta desaparece), con el aspecto de ui::textField.
+// Campo de texto quieto (mientras la tarjeta desaparece), con el aspecto de ui::textField.
 void staticField(ImDrawList* dl, const ImRect& rect, const char* text) {
-    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(0, 0, 0, 90), pt(9.0f));
-    dl->AddRect(rect.Min, rect.Max, IM_COL32(255, 255, 255, 30), pt(9.0f), 0, ui::hairline());
+    const float radius = pt(8.0f);
+    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(0, 0, 0, 64), radius);
+    ui::outline(dl, rect, radius, IM_COL32(255, 255, 255, 31), pt(1.0f));
     ui::label(dl, Weight::Regular, th::kBody, ImVec2(rect.Min.x + pt(10.0f), rect.GetCenter().y), Align::Left,
               th::kLabel, text, rect.GetWidth() - pt(20.0f));
+}
+
+// Rectángulo hueco de `size` centrado en `center`: la forma de un lienzo.
+ImRect frameRect(ImVec2 center, ImVec2 size) {
+    return ImRect(ImVec2(ui::snap(center.x - size.x * 0.5f), ui::snap(center.y - size.y * 0.5f)),
+                  ImVec2(ui::snap(center.x + size.x * 0.5f), ui::snap(center.y + size.y * 0.5f)));
 }
 
 // Mancha de luz difusa (fondo de la pantalla de inicio): degradado radial con muchos
@@ -144,7 +153,7 @@ void Ui::askExit() {
 }
 
 // -----------------------------------------------------------------------------
-// Alertas
+// Confirmaciones
 // -----------------------------------------------------------------------------
 
 void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
@@ -163,7 +172,7 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
     const Layout& L = m_layout;
 
     // Oscurece lo de detrás y se queda con los toques de fuera. Tocar fuera cierra la
-    // tarjeta de lienzo nuevo; las alertas, como en iOS, no.
+    // tarjeta de lienzo nuevo; una confirmación espera a que se elija un botón.
     const ImRect screen(ImVec2(0.0f, 0.0f), L.display);
     ui::beginSurface("##dim", screen, open, true);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -185,61 +194,72 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
         return;
     }
 
+    // Cada confirmación lleva su icono, su explicación y el botón que la acepta.
     const bool rename = m_dialogShown == Dialog::RenameLayer;
+    const char* glyph = icon::kPencil;
+    ImU32 tone = th::kAccent;
     const char* message = nullptr;
     const char* confirmLabel = "Aceptar";
-    bool destructive = false;
+    ui::ButtonStyle confirmStyle = ui::ButtonStyle::Primary;
     if (m_dialogShown == Dialog::DeleteLayer) {
-        message = "Podrás recuperarla con Deshacer.";
+        glyph = icon::kTrash;
+        tone = th::kRed;
+        message = "La capa y su dibujo desaparecen. Puedes recuperarla con Deshacer.";
         confirmLabel = "Eliminar";
-        destructive = true;
+        confirmStyle = ui::ButtonStyle::Destructive;
     } else if (m_dialogShown == Dialog::Exit) {
+        glyph = icon::kLogOut;
+        tone = th::kRed;
         message = "Lo que no hayas guardado como PNG se perderá.";
         confirmLabel = "Salir";
-        destructive = true;
+        confirmStyle = ui::ButtonStyle::Destructive;
     }
 
-    const float width = std::min(pt(290.0f), L.display.x - L.margin * 2.0f);
+    const float width = std::min(pt(340.0f), L.display.x - L.margin * 2.0f);
     const float pad = pt(20.0f);
     const float textWidth = width - pad * 2.0f;
+    const float badge = pt(40.0f);
     const float titleHeight = ui::paragraph(nullptr, Weight::SemiBold, th::kHeadline, ImVec2(0.0f, 0.0f), textWidth,
-                                            Align::Center, 0, m_dialogTitle.c_str(), 1.25f);
-    const float messageHeight = message ? ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f),
-                                                        textWidth, Align::Center, 0, message)
+                                            Align::Left, 0, m_dialogTitle.c_str(), 1.25f);
+    const float messageHeight = message ? ui::paragraph(nullptr, Weight::Regular, th::kCallout, ImVec2(0.0f, 0.0f),
+                                                        textWidth, Align::Left, 0, message, 1.45f)
                                         : 0.0f;
-    const float fieldHeight = pt(36.0f);
-    const float buttonsHeight = pt(46.0f);
-    const float height = pad + titleHeight + (message ? pt(4.0f) + messageHeight : 0.0f) +
-                         (rename ? pt(14.0f) + fieldHeight : 0.0f) + pt(18.0f) + buttonsHeight;
+    const float fieldHeight = pt(40.0f);
+    const float buttonHeight = pt(42.0f);
+    const float height = pad + badge + pt(14.0f) + titleHeight + (message ? pt(6.0f) + messageHeight : 0.0f) +
+                         (rename ? pt(14.0f) + fieldHeight : 0.0f) + pt(20.0f) + buttonHeight + pad;
     // Renombrar va más arriba: en un teléfono el teclado tapa la mitad de abajo.
     const float centerY = L.display.y * (rename ? 0.36f : 0.5f);
     const float x = std::round((L.display.x - width) * 0.5f);
     const float y = std::round(std::clamp(centerY - height * 0.5f, L.top, std::max(L.top, L.bottom - height)));
     const ImRect rect(x, y, x + width, y + height);
-    const float radius = pt(20.0f);
+    const float radius = pt(th::kDialogRadius);
 
     ui::beginSurface("##alert", rect, open, true);
     dl = ImGui::GetWindowDrawList();
     const ui::DrawMark mark = ui::mark(dl);
     ui::pushUnclipped(dl);
-    ui::shadow(dl, rect, radius, pt(44.0f), pt(16.0f), 0.36f);
+    ui::shadow(dl, rect, radius, pt(60.0f), pt(24.0f), 0.45f);
     ui::popUnclipped(dl);
     ui::glass(dl, rect, radius, th::kDialogTint, 0, kDimAlpha * p);
 
+    const float left = rect.Min.x + pad;
     float top = rect.Min.y + pad;
-    ui::paragraph(dl, Weight::SemiBold, th::kHeadline, ImVec2(rect.Min.x + pad, top), textWidth, Align::Center,
-                  th::kLabel, m_dialogTitle.c_str(), 1.25f);
+    ui::iconBadge(dl, ImRect(ImVec2(left, top), ImVec2(left + badge, top + badge)), tone, glyph, 20.0f);
+    top += badge + pt(14.0f);
+    ui::paragraph(dl, Weight::SemiBold, th::kHeadline, ImVec2(left, top), textWidth, Align::Left, th::kLabel,
+                  m_dialogTitle.c_str(), 1.25f);
     top += titleHeight;
     if (message) {
-        top += pt(4.0f);
-        ui::paragraph(dl, Weight::Regular, th::kFootnote, ImVec2(rect.Min.x + pad, top), textWidth, Align::Center,
-                      IM_COL32(235, 235, 245, 200), message);
+        top += pt(6.0f);
+        ui::paragraph(dl, Weight::Regular, th::kCallout, ImVec2(left, top), textWidth, Align::Left, th::kSecondaryLabel,
+                      message, 1.45f);
         top += messageHeight;
     }
     bool enter = false;
     if (rename) {
         top += pt(14.0f);
-        const ImRect field(ImVec2(rect.Min.x + pad, top), ImVec2(rect.Max.x - pad, top + fieldHeight));
+        const ImRect field(ImVec2(left, top), ImVec2(left + textWidth, top + fieldHeight));
         if (open) {
             enter = ui::textField("##rename", field, m_renameBuffer, sizeof(m_renameBuffer), m_dialogFocus,
                                   "Nombre de la capa");
@@ -249,43 +269,37 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
         }
     }
 
-    // Botones: Cancelar a la izquierda, como en iOS.
-    const float buttonsTop = rect.Max.y - buttonsHeight;
-    const float middle = ui::snap(rect.GetCenter().x);
-    ui::separator(dl, rect.Min.x, rect.Max.x, buttonsTop, IM_COL32(255, 255, 255, 36));
-    dl->AddRectFilled(ImVec2(middle, buttonsTop), ImVec2(middle + ui::hairline(), rect.Max.y),
-                      IM_COL32(255, 255, 255, 36));
-    const ImRect cancelRect(ImVec2(rect.Min.x, buttonsTop), ImVec2(middle, rect.Max.y));
-    const ImRect confirmRect(ImVec2(middle, buttonsTop), rect.Max);
+    // Botones abajo a la derecha, la acción al final. Si no caben a su ancho, se reparten
+    // la fila.
     const std::string newName = rename ? trimmed(m_renameBuffer) : std::string();
     const bool canConfirm = !rename || !newName.empty();
-    const Press cancel = ui::pressable("##cancel", cancelRect, open);
-    const Press confirm = ui::pressable("##confirm", confirmRect, open && canConfirm);
-    auto pressedFill = [&](const Press& press, const ImRect& r, ImDrawFlags corners) {
-        if (press.held || press.hovered) {
-            dl->AddRectFilled(r.Min, r.Max, press.held ? th::kPressed : th::kHover, radius, corners);
-        }
+    const float gap = pt(10.0f);
+    auto buttonWidth = [](const char* text) {
+        return std::max(pt(104.0f), ui::measure(Weight::SemiBold, th::kSubhead, text).x + pt(32.0f));
     };
-    pressedFill(cancel, cancelRect, ImDrawFlags_RoundCornersBottomLeft);
-    pressedFill(confirm, confirmRect, ImDrawFlags_RoundCornersBottomRight);
-    // La acción preferida va en negrita: Aceptar al renombrar; si no, Cancelar.
-    ui::label(dl, rename ? Weight::Regular : Weight::SemiBold, th::kHeadline, cancelRect.GetCenter(), Align::Center,
-              th::kAccent, "Cancelar");
-    ImU32 confirmColor = destructive ? th::kRed : th::kAccent;
-    if (!canConfirm) {
-        confirmColor = ui::withAlpha(confirmColor, 0.35f);
+    float cancelWidth = buttonWidth("Cancelar");
+    float confirmWidth = buttonWidth(confirmLabel);
+    if (cancelWidth + gap + confirmWidth > textWidth) {
+        cancelWidth = (textWidth - gap) * 0.5f;
+        confirmWidth = cancelWidth;
     }
-    ui::label(dl, destructive ? Weight::Regular : Weight::SemiBold, th::kHeadline, confirmRect.GetCenter(),
-              Align::Center, confirmColor, confirmLabel);
+    const float buttonsTop = rect.Max.y - pad - buttonHeight;
+    const float right = rect.Max.x - pad;
+    const ImRect confirmRect(ImVec2(right - confirmWidth, buttonsTop), ImVec2(right, buttonsTop + buttonHeight));
+    const ImRect cancelRect(ImVec2(confirmRect.Min.x - gap - cancelWidth, buttonsTop),
+                            ImVec2(confirmRect.Min.x - gap, buttonsTop + buttonHeight));
+    const bool cancel = ui::button("##cancel", cancelRect, "Cancelar", ui::ButtonStyle::Secondary);
+    const bool confirm = ui::button("##confirm", confirmRect, confirmLabel, confirmStyle, canConfirm);
 
-    // Aparece creciendo un poco desde más grande; desaparece solo con un fundido.
-    ui::transform(mark, rect.GetCenter(), open ? 1.1f - 0.1f * p : 1.0f, ImVec2(0.0f, 0.0f), p);
+    // Aparece subiendo un poco; al cerrarse baja mientras se desvanece.
+    const float e = ui::anim::easeOutCubic(std::clamp(p, 0.0f, 1.0f));
+    ui::transform(mark, rect.GetCenter(), 0.98f + 0.02f * e, ImVec2(0.0f, pt(12.0f) * (1.0f - e)), p);
     ui::endSurface();
 
     if (!open) {
         return;
     }
-    if (confirm.clicked || (enter && canConfirm)) {
+    if (confirm || (enter && canConfirm)) {
         LayerStack* layers = canvas ? &canvas->layers() : nullptr;
         const int index = layers ? layers->indexOf(m_dialogLayerId) : -1;
         switch (m_dialogShown) {
@@ -306,7 +320,7 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
             break;
         }
         m_dialog = Dialog::None;
-    } else if (cancel.clicked) {
+    } else if (cancel) {
         m_dialog = Dialog::None;
     }
 }
@@ -346,26 +360,39 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         m_preset = 0;
     }
 
+    // Medidas: cabecera, rejilla de tamaños, orientación y la barra de crear.
     const bool compact = L.compact;
-    const float pad = pt(compact ? 20.0f : 24.0f);
-    const float width = std::min(pt(468.0f), L.right - L.left);
+    const float pad = pt(20.0f);
+    const float width = std::min(pt(520.0f), L.right - L.left);
     const float inner = width - pad * 2.0f;
+    const float closeSize = pt(32.0f);
+    const float headerWidth = inner - (modal ? closeSize + pt(12.0f) : 0.0f);
     const char* description =
-        modal ? "Elige el tamaño del lienzo nuevo. El dibujo actual se descartará: guárdalo antes como PNG si "
-                "quieres conservarlo."
-              : "Elige el tamaño. NDI y el PNG usan el lienzo entero a este tamaño, sin importar el zoom.";
-    const float descriptionHeight =
-        ui::paragraph(nullptr, Weight::Regular, th::kSubhead, ImVec2(0.0f, 0.0f), inner, Align::Left, 0, description,
-                      1.35f);
-    const float row = pt(58.0f);
-    const float listHeight = row * static_cast<float>(kCanvasPresetCount);
-    const float content = pad + pt(16.0f + 10.0f + 36.0f + 8.0f) + descriptionHeight + pt(18.0f) + listHeight +
-                          pt(16.0f + 32.0f + 20.0f + 50.0f) + pad;
+        modal ? "El dibujo actual se descartará: guárdalo antes como PNG si quieres conservarlo."
+              : "NDI y el PNG usan el lienzo entero a este tamaño, sin importar el zoom.";
+    const float descriptionHeight = ui::paragraph(nullptr, Weight::Regular, th::kCallout, ImVec2(0.0f, 0.0f),
+                                                  headerWidth, Align::Left, 0, description, 1.45f);
+    constexpr float kBrand = 14.0f;
+    const float titleHeight = ui::fontSize(th::kTitle);
+    const float headerHeight = pt(kBrand + 6.0f) + titleHeight + pt(6.0f) + descriptionHeight;
+    constexpr float kSectionGap = 18.0f;
+    constexpr float kSectionLabel = 14.0f + 10.0f;   // rótulo de sección y su hueco
+    const float tileGap = pt(8.0f);
+    // Tres columnas si las fichas caben holgadas; si no (un teléfono), dos.
+    const int columns = (inner - tileGap * 2.0f) / 3.0f >= pt(128.0f) ? 3 : 2;
+    const int gridRows = (kCanvasPresetCount + columns - 1) / columns;
+    const float tileWidth = (inner - tileGap * static_cast<float>(columns - 1)) / static_cast<float>(columns);
+    const float tileHeight = pt(compact ? 92.0f : 108.0f);
+    const float gridHeight = tileHeight * static_cast<float>(gridRows) + tileGap * static_cast<float>(gridRows - 1);
+    const float chipHeight = pt(42.0f);
+    const float createHeight = pt(50.0f);
+    const float content = pad + headerHeight + pt(kSectionGap + kSectionLabel) + gridHeight +
+                          pt(kSectionGap + kSectionLabel) + chipHeight + pt(kSectionGap) + createHeight + pad;
     const float height = std::min(content, L.bottom - L.top);
     const float x = std::round((L.left + L.right - width) * 0.5f);
     const float y = std::round((L.top + L.bottom - height) * 0.5f);
     const ImRect rect(x, y, x + width, y + height);
-    const float radius = pt(30.0f);
+    const float radius = pt(th::kDialogRadius);
 
     ui::beginSurface(modal ? "##new-canvas" : "##start-card", rect, interactive, true);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -373,11 +400,11 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
     ui::pushUnclipped(dl);
     ui::shadow(dl, rect, radius, pt(70.0f), pt(26.0f), 0.5f);
     ui::popUnclipped(dl);
-    // Desde Acciones va sobre el oscurecido: más opaca, como una hoja de iOS.
     if (modal) {
-        ui::glass(dl, rect, radius, IM_COL32(34, 34, 38, 226), 0, kDimAlpha * presence);
+        ui::glass(dl, rect, radius, IM_COL32(24, 24, 28, 230), 0, kDimAlpha * presence);
     } else {
-        ui::glass(dl, rect, radius, IM_COL32(40, 40, 44, 184));
+        // Al empezar no hay lienzo que desenfocar: deja ver un poco las luces del fondo.
+        ui::glass(dl, rect, radius, IM_COL32(24, 24, 28, 170));
     }
 
     // Si no cabe, el contenido se desplaza (por debajo de las esquinas redondeadas no).
@@ -388,114 +415,141 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
     const float right = rect.Max.x - pad;
     float top = rect.Min.y + pad - scroll;
 
-    // Marca, título y explicación.
-    dl->AddCircleFilled(ImVec2(left + pt(4.0f), top + pt(8.0f)), pt(4.0f), th::kLive, 0);
-    ui::tracked(dl, Weight::Bold, th::kFootnote, ImVec2(left + pt(14.0f), top + pt(8.0f)), th::kSecondaryLabel,
-                "LIVESKETCH", 0.08f);
-    top += pt(16.0f + 10.0f);
-    ui::label(dl, Weight::Bold, 30.0f, ImVec2(left, top + pt(18.0f)), Align::Left, th::kLabel, "Nuevo lienzo");
-    top += pt(36.0f + 8.0f);
-    ui::paragraph(dl, Weight::Regular, th::kSubhead, ImVec2(left, top), inner, Align::Left, th::kSecondaryLabel,
-                  description, 1.35f);
-    top += descriptionHeight + pt(18.0f);
-
-    // Tamaños.
-    const ImRect list(ImVec2(left, top), ImVec2(right, top + listHeight));
-    dl->AddRectFilled(list.Min, list.Max, th::kGroupFill, pt(18.0f));
-    for (int i = 0; i < kCanvasPresetCount; ++i) {
-        const CanvasPreset& preset = kCanvasPresets[i];
-        const Size size = sizeOf(i);
-        const ImRect bounds(ImVec2(left, top), ImVec2(right, top + row));
-        const ImRect inset(ImVec2(bounds.Min.x + pt(4.0f), bounds.Min.y + pt(4.0f)),
-                           ImVec2(bounds.Max.x - pt(4.0f), bounds.Max.y - pt(4.0f)));
-        ImGui::PushID(i);
-        const ImGuiID id = ImGui::GetID("##preset");
-        const Press press = ui::pressable(id, bounds, interactive && size.supported);
-        ImGui::PopID();
-        const bool selected = i == m_preset;
-        const float on = ui::anim::follow(id + 7u, selected ? 1.0f : 0.0f, 20.0f);
-        if (on > 0.002f) {
-            dl->AddRectFilled(inset.Min, inset.Max, ui::withAlpha(th::kAccent, 0.2f * on), pt(14.0f));
+    // Cabecera: la marca, el título, la explicación y (desde Acciones) cerrar.
+    {
+        const float headerTop = top;
+        const float brandCy = top + pt(kBrand * 0.5f);
+        dl->AddRectFilled(ImVec2(left, brandCy - pt(4.0f)), ImVec2(left + pt(8.0f), brandCy + pt(4.0f)), th::kRed,
+                          pt(2.0f));
+        ui::tracked(dl, Weight::Bold, th::kMicro, ImVec2(left + pt(16.0f), brandCy), IM_COL32(235, 235, 245, 140),
+                    "LIVESKETCH", 0.12f);
+        top += pt(kBrand + 6.0f);
+        ui::label(dl, Weight::Bold, th::kTitle, ImVec2(left, top + titleHeight * 0.5f), Align::Left, th::kLabel,
+                  "Nuevo lienzo", headerWidth);
+        top += titleHeight + pt(6.0f);
+        ui::paragraph(dl, Weight::Regular, th::kCallout, ImVec2(left, top), headerWidth, Align::Left,
+                      IM_COL32(235, 235, 245, 153), description, 1.45f);
+        top += descriptionHeight;
+        if (modal) {
+            const ImRect close(ImVec2(right - closeSize, headerTop), ImVec2(right, headerTop + closeSize));
+            const Press press = ui::buttonFrame("##close", close, ui::ButtonStyle::Secondary, true, pt(9.0f));
+            ui::icon(dl, icon::kX, close.GetCenter(), 16.0f, IM_COL32(235, 235, 245, 204));
+            if (press.clicked) {
+                m_dialog = Dialog::None;
+            }
         }
-        const float touch = ui::anim::follow(id + 5u, press.held ? 1.0f : (press.hovered ? 0.5f : 0.0f), 24.0f);
-        if (touch > 0.002f) {
-            dl->AddRectFilled(inset.Min, inset.Max, ui::withAlpha(th::kPressed, touch), pt(14.0f));
-        }
-        // Entre filas, salvo junto a la elegida (que ya tiene su fondo).
-        if (i > 0 && i != m_preset && i - 1 != m_preset) {
-            ui::separator(dl, bounds.Min.x + pt(60.0f), bounds.Max.x - pt(14.0f), bounds.Min.y);
-        }
-
-        const float alpha = size.supported ? 1.0f : 0.4f;
-        const float cy = bounds.GetCenter().y;
-        // Icono: un rectángulo con la proporción del lienzo.
-        const ImRect tile(ImVec2(bounds.Min.x + pt(14.0f), cy - pt(16.0f)), ImVec2(bounds.Min.x + pt(46.0f), cy + pt(16.0f)));
-        dl->AddRectFilled(tile.Min, tile.Max, ui::withAlpha(preset.color, alpha), pt(8.0f));
-        const float aspect = static_cast<float>(size.width) / static_cast<float>(std::max(size.height, 1));
-        const float longSide = pt(18.0f);
-        const float shortSide = std::max(pt(8.0f), longSide / std::max(aspect, 1.0f / aspect));
-        const ImVec2 shape = aspect >= 1.0f ? ImVec2(longSide, shortSide) : ImVec2(shortSide, longSide);
-        const ImVec2 c = tile.GetCenter();
-        dl->AddRect(ImVec2(c.x - shape.x * 0.5f, c.y - shape.y * 0.5f), ImVec2(c.x + shape.x * 0.5f, c.y + shape.y * 0.5f),
-                    ui::withAlpha(IM_COL32_WHITE, alpha), pt(2.5f), 0, pt(1.6f));
-
-        char detail[48];
-        std::snprintf(detail, sizeof(detail), "%d × %d", size.width, size.height);
-        const float textX = bounds.Min.x + pt(60.0f);
-        const float textRight = bounds.Max.x - pt(size.supported ? 44.0f : 96.0f);
-        ui::label(dl, Weight::Regular, th::kBody, ImVec2(textX, cy - pt(9.0f)), Align::Left,
-                  ui::withAlpha(th::kLabel, alpha), preset.name, textRight - textX);
-        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(textX, cy + pt(11.0f)), Align::Left,
-                  ui::withAlpha(th::kSecondaryLabel, alpha), detail, textRight - textX);
-        if (!size.supported) {
-            ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(bounds.Max.x - pt(14.0f), cy), Align::Right,
-                      th::kTertiaryLabel, "No admitido");
-        } else if (on > 0.002f) {
-            ui::icon(dl, icon::kCheck, ImVec2(bounds.Max.x - pt(14.0f + 10.0f), cy), 20.0f,
-                     ui::withAlpha(th::kAccent, on));
-        }
-        if (press.clicked) {
-            m_preset = i;
-        }
-        top += row;
     }
-    top += pt(16.0f);
 
-    // Orientación (la pantalla completa ya tiene la suya).
+    // Tamaños: cada ficha dibuja la forma del lienzo a escala (su proporción, y más grande
+    // cuantos más píxeles tiene).
+    top += pt(kSectionGap);
+    ui::sectionLabel(dl, left, right, top + pt(7.0f), "TAMAÑO");
+    top += pt(kSectionLabel);
+    {
+        const float boxHeight = pt(compact ? 40.0f : 48.0f);
+        const ImVec2 shapeMax = compact ? pt(44.0f, 36.0f) : pt(48.0f, 44.0f);
+        const float stack = boxHeight + pt(8.0f + 16.0f + 2.0f + 15.0f);   // forma, nombre y medidas
+        for (int i = 0; i < kCanvasPresetCount; ++i) {
+            const Size size = sizeOf(i);
+            const float x0 = left + (tileWidth + tileGap) * static_cast<float>(i % columns);
+            const float y0 = top + (tileHeight + tileGap) * static_cast<float>(i / columns);
+            const ImRect tile(ImVec2(x0, y0), ImVec2(x0 + tileWidth, y0 + tileHeight));
+            ImGui::PushID(i);
+            const ui::Choice c = ui::choice("##preset", tile, i == m_preset, size.supported);
+            ImGui::PopID();
+            const float alpha = size.supported ? 1.0f : 0.4f;
+            const float cx = tile.GetCenter().x;
+            const float stackTop = tile.Min.y + (tileHeight - stack) * 0.5f;
+
+            const float w = static_cast<float>(size.width);
+            const float h = static_cast<float>(size.height);
+            const float grow = 0.55f + 0.45f * std::sqrt(std::min(w * h / kLargestArea, 1.0f));
+            const float fit = std::min(shapeMax.x / w, shapeMax.y / h) * grow;
+            const ImRect shape = frameRect(ImVec2(cx, stackTop + boxHeight * 0.5f),
+                                           ImVec2(std::max(w * fit, pt(8.0f)), std::max(h * fit, pt(8.0f))));
+            if (c.on > 0.002f) {
+                dl->AddRectFilled(shape.Min, shape.Max, ui::withAlpha(th::kAccent, 0.22f * c.on), pt(4.0f));
+            }
+            ui::outline(dl, shape, pt(4.0f), ui::withAlpha(ui::mix(IM_COL32(235, 235, 245, 140), th::kAccent, c.on), alpha),
+                        pt(2.0f));
+
+            const float nameCy = stackTop + boxHeight + pt(8.0f + 8.0f);
+            ui::label(dl, Weight::SemiBold, 13.0f, ImVec2(cx, nameCy), Align::Center, ui::withAlpha(th::kLabel, alpha),
+                      kCanvasPresets[i].name, tileWidth - pt(12.0f));
+            char detail[48];
+            if (size.supported) {
+                std::snprintf(detail, sizeof(detail), "%d × %d", size.width, size.height);
+            } else {
+                std::snprintf(detail, sizeof(detail), "No admitido");
+            }
+            ui::label(dl, Weight::Regular, th::kCaption, ImVec2(cx, nameCy + pt(8.0f + 2.0f + 7.5f)), Align::Center,
+                      size.supported ? ui::mix(IM_COL32(235, 235, 245, 128), th::kAccentText, c.on) : th::kTertiaryLabel,
+                      detail, tileWidth - pt(12.0f));
+            if (c.press.clicked) {
+                m_preset = i;
+            }
+        }
+        top += gridHeight;
+    }
+
+    // Orientación (la pantalla completa sigue la de la pantalla: se muestra sin poder
+    // cambiarla).
+    top += pt(kSectionGap);
+    ui::sectionLabel(dl, left, right, top + pt(7.0f), "ORIENTACIÓN");
+    top += pt(kSectionLabel);
     {
         const bool full = kCanvasPresets[m_preset].width == 0;
-        const ImRect control(ImVec2(right - std::min(pt(220.0f), inner * 0.62f), top), ImVec2(right, top + pt(32.0f)));
-        ui::label(dl, Weight::Regular, th::kSubhead, ImVec2(left + pt(2.0f), control.GetCenter().y), Align::Left,
-                  full ? th::kSecondaryLabel : th::kLabel, "Orientación", control.Min.x - left - pt(10.0f));
-        const char* labels[2] = {"Horizontal", "Vertical"};
         const Size size = sizeOf(m_preset);
-        int shown = full ? (size.width >= size.height ? 0 : 1) : m_orientation;
-        if (ui::segmented("##orientation", control, labels, 2, &shown, interactive && !full) && !full) {
-            m_orientation = shown;
+        const int shown = full ? (size.width >= size.height ? 0 : 1) : m_orientation;
+        const float chipWidth = (inner - tileGap) * 0.5f;
+        const char* labels[2] = {"Horizontal", "Vertical"};
+        for (int i = 0; i < 2; ++i) {
+            const float x0 = left + (chipWidth + tileGap) * static_cast<float>(i);
+            const ImRect chip(ImVec2(x0, top), ImVec2(x0 + chipWidth, top + chipHeight));
+            ImGui::PushID(i);
+            const ui::Choice c = ui::choice("##orientation", chip, shown == i, !full);
+            ImGui::PopID();
+            const ImU32 color = ui::withAlpha(ui::mix(IM_COL32(235, 235, 245, 191), th::kLabel, c.on), full ? 0.4f : 1.0f);
+            const ImVec2 glyph = i == 0 ? pt(20.0f, 14.0f) : pt(14.0f, 20.0f);
+            const float textWidth = ui::measure(Weight::SemiBold, th::kCallout, labels[i]).x;
+            const float groupX = chip.GetCenter().x - (glyph.x + pt(10.0f) + textWidth) * 0.5f;
+            const float cy = chip.GetCenter().y;
+            ui::outline(dl, frameRect(ImVec2(groupX + glyph.x * 0.5f, cy), glyph), pt(3.0f), color, pt(2.0f));
+            ui::label(dl, Weight::SemiBold, th::kCallout, ImVec2(groupX + glyph.x + pt(10.0f), cy), Align::Left, color,
+                      labels[i]);
+            if (c.press.clicked && !full) {
+                m_orientation = i;
+            }
         }
-        top += pt(32.0f + 20.0f);
+        top += chipHeight;
     }
 
-    // Crear.
+    // Crear: una barra con el tamaño que saldrá.
+    top += pt(kSectionGap);
     {
-        const ImRect button(ImVec2(left, top), ImVec2(right, top + pt(50.0f)));
-        const ImGuiID id = ImGui::GetID("##create");
-        const Press press = ui::pressable(id, button, interactive);
-        const float held = ui::anim::follow(id + 5u, press.held ? 1.0f : (press.hovered ? 0.4f : 0.0f), 24.0f);
-        ui::shadow(dl, button, pt(25.0f), pt(26.0f), pt(8.0f), 0.42f * (1.0f - 0.5f * held), 0, th::kAccent);
-        dl->AddRectFilled(button.Min, button.Max, ui::mix(th::kAccent, IM_COL32(0, 60, 150, 255), 0.35f * held),
-                          pt(25.0f));
-        ui::label(dl, Weight::SemiBold, th::kHeadline, button.GetCenter(), Align::Center, th::kLabel, "Crear lienzo");
+        const ImRect bar(ImVec2(left, top), ImVec2(right, top + createHeight));
+        const float barRadius = pt(12.0f);
+        ui::shadow(dl, bar, barRadius, pt(26.0f), pt(10.0f), 0.3f, 0, th::kAccent);
+        const Press press = ui::buttonFrame("##create", bar, ui::ButtonStyle::Primary, true, barRadius);
+        const Size size = sizeOf(m_preset);
+        const float cy = bar.GetCenter().y;
+        const ImVec2 arrow(bar.Max.x - pt(16.0f + 9.0f), cy);
+        ui::icon(dl, icon::kArrowRight, arrow, 18.0f, th::kLabel);
+        char detail[48];
+        std::snprintf(detail, sizeof(detail), "%d × %d", size.width, size.height);
+        const float detailRight = arrow.x - pt(9.0f + 10.0f);
+        ui::label(dl, Weight::Regular, th::kCallout, ImVec2(detailRight, cy), Align::Right, IM_COL32(255, 255, 255, 199),
+                  detail);
+        const float textX = bar.Min.x + pt(18.0f);
+        ui::label(dl, Weight::SemiBold, th::kBody, ImVec2(textX, cy), Align::Left, th::kLabel, "Crear lienzo",
+                  detailRight - ui::measure(Weight::Regular, th::kCallout, detail).x - pt(10.0f) - textX);
         const bool enter = interactive && !ImGui::GetIO().WantTextInput &&
                            (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
-        if (press.clicked || enter) {
-            const Size size = sizeOf(m_preset);
-            if (size.supported) {
-                requests.canvasWidth = size.width;
-                requests.canvasHeight = size.height;
-                if (modal) {
-                    m_dialog = Dialog::None;
-                }
+        if ((press.clicked || enter) && size.supported) {
+            requests.canvasWidth = size.width;
+            requests.canvasHeight = size.height;
+            if (modal) {
+                m_dialog = Dialog::None;
             }
         }
     }
@@ -503,36 +557,24 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         ui::endScroll();
     }
 
-    // Cerrar (solo desde Acciones: al empezar hay que elegir un lienzo).
-    if (modal) {
-        const ImVec2 center(rect.Max.x - pt(16.0f + 15.0f), rect.Min.y + pt(16.0f + 15.0f));
-        const ImRect close(ImVec2(center.x - pt(15.0f), center.y - pt(15.0f)), ImVec2(center.x + pt(15.0f), center.y + pt(15.0f)));
-        const ImGuiID id = ImGui::GetID("##close");
-        const Press press = ui::pressable(id, close, interactive);
-        const float t = ui::anim::follow(id + 5u, press.held ? 1.0f : (press.hovered ? 0.5f : 0.0f), 24.0f);
-        dl->AddCircleFilled(center, pt(15.0f), ui::mix(IM_COL32(118, 118, 128, 61), IM_COL32(118, 118, 128, 110), t), 0);
-        ui::icon(dl, icon::kX, center, 16.0f, IM_COL32(235, 235, 245, 180));
-        if (press.clicked) {
-            m_dialog = Dialog::None;
-        }
-    }
-
     const float e = ui::anim::easeOutCubic(std::clamp(presence, 0.0f, 1.0f));
-    ui::transform(mark, rect.GetCenter(), 0.94f + 0.06f * e, ImVec2(0.0f, pt(24.0f) * (1.0f - e)), std::min(1.0f, presence * 1.4f));
+    ui::transform(mark, rect.GetCenter(), 0.97f + 0.03f * e, ImVec2(0.0f, pt(16.0f) * (1.0f - e)),
+                  std::min(1.0f, presence * 1.4f));
     ui::endSurface();
 }
 
 void Ui::startScreen(UiRequests& requests) {
     const Layout& L = m_layout;
 
-    // Fondo: casi negro con dos luces de color muy suaves detrás de la tarjeta.
+    // Fondo: casi negro con dos luces muy suaves detrás de la tarjeta, del azul de los
+    // controles y del rojo de la marca.
     const ImRect screen(ImVec2(0.0f, 0.0f), L.display);
     ui::beginSurface("##start-background", screen, false, false);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(screen.Min, screen.Max, IM_COL32(12, 12, 14, 255));
     const float extent = std::max(L.display.x, L.display.y);
-    glow(dl, ImVec2(L.display.x * 0.28f, L.display.y * 0.25f), extent * 0.5f, th::kAccent, 0.2f);
-    glow(dl, ImVec2(L.display.x * 0.76f, L.display.y * 0.8f), extent * 0.45f, IM_COL32(191, 90, 242, 255), 0.14f);
+    glow(dl, ImVec2(L.display.x * 0.34f, L.display.y * 0.2f), extent * 0.5f, th::kAccent, 0.2f);
+    glow(dl, ImVec2(L.display.x * 0.72f, L.display.y * 0.9f), extent * 0.42f, th::kRed, 0.12f);
     ui::endSurface();
 
     // Atrás (Android) aquí no pierde nada: sale sin preguntar.

@@ -6,9 +6,9 @@
 <title>LiveSketch</title>
 <style>
   /* Página de carga de la versión web: el mismo fondo que la pantalla de inicio de la app
-     (casi negro con una luz azul y otra violeta, ver Ui::startScreen), así el paso de uno
-     a otra no se nota. En cuanto SDL crea la ventana, el lienzo ocupa toda la página y
-     este aviso queda oculto. */
+     (casi negro con una luz azul y otra roja, ver Ui::startScreen), así el paso de uno a
+     otra no se nota. En cuanto SDL crea la ventana, el lienzo ocupa toda la página y este
+     aviso queda oculto. */
   :root {
     color-scheme: dark;
     --bg: #0c0c0e;
@@ -39,14 +39,14 @@
     text-align: center;
     /* Las luces caen como las de la app: exp(-3t²)(1 - t²) desde el centro. */
     background:
-      radial-gradient(circle 50vmax at 28% 25%, rgb(10 132 255 / 0.2), rgb(10 132 255 / 0.188) 12.5%,
+      radial-gradient(circle 50vmax at 34% 20%, rgb(10 132 255 / 0.2), rgb(10 132 255 / 0.188) 12.5%,
                       rgb(10 132 255 / 0.155) 25%, rgb(10 132 255 / 0.113) 37.5%, rgb(10 132 255 / 0.071) 50%,
                       rgb(10 132 255 / 0.038) 62.5%, rgb(10 132 255 / 0.016) 75%, rgb(10 132 255 / 0.005) 87.5%,
                       rgb(10 132 255 / 0) 100%),
-      radial-gradient(circle 45vmax at 76% 80%, rgb(191 90 242 / 0.14), rgb(191 90 242 / 0.132) 12.5%,
-                      rgb(191 90 242 / 0.109) 25%, rgb(191 90 242 / 0.079) 37.5%, rgb(191 90 242 / 0.05) 50%,
-                      rgb(191 90 242 / 0.026) 62.5%, rgb(191 90 242 / 0.011) 75%, rgb(191 90 242 / 0.003) 87.5%,
-                      rgb(191 90 242 / 0) 100%),
+      radial-gradient(circle 42vmax at 72% 90%, rgb(255 69 58 / 0.12), rgb(255 69 58 / 0.113) 12.5%,
+                      rgb(255 69 58 / 0.093) 25%, rgb(255 69 58 / 0.068) 37.5%, rgb(255 69 58 / 0.043) 50%,
+                      rgb(255 69 58 / 0.023) 62.5%, rgb(255 69 58 / 0.01) 75%, rgb(255 69 58 / 0.003) 87.5%,
+                      rgb(255 69 58 / 0) 100%),
       var(--bg);
   }
   .brand {
@@ -59,7 +59,7 @@
     letter-spacing: 0.08em;
     color: var(--muted);
   }
-  .brand::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
+  .brand::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--live); }
   /* Indicador de actividad de iOS: ocho radios que giran a saltos. */
   .spinner { width: 28px; height: 28px; color: var(--muted); animation: spin 0.8s steps(8) infinite; }
   #status { margin: 0; color: var(--muted); max-width: 32em; text-wrap: balance; }

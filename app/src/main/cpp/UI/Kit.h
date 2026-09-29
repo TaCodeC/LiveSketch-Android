@@ -8,9 +8,9 @@
 #include <cstddef>
 #include <string>
 
-// Kit de la interfaz con aspecto de iOS. ImGui pone la entrada, el texto y los IDs; el
-// aspecto se dibuja aquí con ImDrawList: cristal que desenfoca el lienzo, sombras suaves,
-// iconos de Lucide y controles como los de UIKit.
+// Kit de la interfaz. ImGui pone la entrada, el texto y los IDs; el aspecto se dibuja
+// aquí con ImDrawList: cristal que desenfoca el lienzo, sombras suaves, iconos de Lucide
+// y los controles de los menús (interruptores, fichas, botones, barras de relleno).
 //
 // Todas las medidas de diseño van en puntos (pt): pt() las pasa a unidades de ImGui
 // (las coordenadas de la ventana de SDL), según la densidad de la pantalla y el tamaño
@@ -92,13 +92,16 @@ void glass(ImDrawList* dl, const ImRect& rect, float radius, ImU32 tint, ImDrawF
 void pushUnclipped(ImDrawList* dl);
 void popUnclipped(ImDrawList* dl);
 
-// Fondo de un grupo de filas (como las listas agrupadas de Ajustes).
-void group(ImDrawList* dl, const ImRect& rect, float radius);
 // Línea horizontal de un píxel.
 void separator(ImDrawList* dl, float x0, float x1, float y, ImU32 color = theme::kSeparator);
-// Icono blanco sobre un cuadrado redondeado de color (filas de Ajustes).
-void iconTile(ImDrawList* dl, const ImRect& rect, ImU32 color, const char* glyph, float iconPoints);
-// Indicador de actividad de iOS (ocho radios que giran). Mantiene el bucle despierto.
+// Borde de `thickness` por dentro de un rectángulo redondeado.
+void outline(ImDrawList* dl, const ImRect& rect, float radius, ImU32 color, float thickness);
+// Rótulo de sección: texto pequeño en mayúsculas y una línea que sigue hasta `x1`. `y`
+// es su centro vertical.
+void sectionLabel(ImDrawList* dl, float x0, float x1, float y, const char* text);
+// Icono de un color sobre un cuadrado redondeado del mismo color, muy suave (diálogos).
+void iconBadge(ImDrawList* dl, const ImRect& rect, ImU32 color, const char* glyph, float iconPoints);
+// Indicador de actividad (ocho radios que giran). Mantiene el bucle despierto.
 void spinner(ImDrawList* dl, ImVec2 center, float radius, ImU32 color);
 // Rectángulo redondeado con un degradado lineal de `from` a `to` (bordes suavizados).
 void linearGradient(ImDrawList* dl, const ImRect& rect, float radius, ImVec2 from, ImVec2 to, ImU32 colorFrom,
@@ -140,16 +143,30 @@ Press pressable(const char* id, const ImRect& bb, bool enabled = true);
 void highlight(ImDrawList* dl, ImGuiID id, const ImRect& rect, float radius, bool on, const Press& press,
                ImU32 onColor = theme::kPressed);
 
-// Interruptor de 51×31 pt con la esquina superior izquierda en `pos`.
+// Interruptor cuadrado de 40×24 pt con la esquina superior izquierda en `pos`.
 bool toggle(const char* id, ImVec2 pos, bool* value, bool enabled = true);
-inline ImVec2 toggleSize() { return pt(51.0f, 31.0f); }
+inline ImVec2 toggleSize() { return pt(40.0f, 24.0f); }
 
-// Control segmentado.
-bool segmented(const char* id, const ImRect& rect, const char* const* labels, int count, int* selected,
-               bool enabled = true);
+// Ficha que se puede elegir (tamaños, orientación, pestañas). Dibuja el fondo (y el
+// borde con `bordered`), que pasan al color de acento al elegirla; lo de dentro lo dibuja
+// quien la llama, con `on` (0..1, animado) para mezclar sus colores.
+struct Choice {
+    Press press;
+    float on = 0.0f;
+};
+Choice choice(const char* id, const ImRect& rect, bool selected, bool enabled = true, bool bordered = true);
 
-// Deslizador horizontal (pista de 4 pt y bolita de 28 pt). `active`: se está arrastrando.
-bool slider(const char* id, const ImRect& rect, float* value, float min, float max, bool* active = nullptr);
+enum class ButtonStyle { Primary, Destructive, Secondary };
+// Fondo de un botón con su respuesta al toque; lo de dentro lo dibuja quien lo llama.
+// `radius` < 0: el de los controles.
+Press buttonFrame(const char* id, const ImRect& rect, ButtonStyle style, bool enabled = true, float radius = -1.0f);
+// Botón con el texto centrado.
+bool button(const char* id, const ImRect& rect, const char* text, ButtonStyle style, bool enabled = true);
+
+// Barra de relleno horizontal de 0 a 1 (opacidad de la capa): el valor sigue al dedo
+// desde que se toca. `text` va a la izquierda y el valor en tanto por ciento a la
+// derecha, oscuros donde los cubre el relleno. `active`: se está arrastrando.
+bool barSlider(const char* id, const ImRect& rect, float* value, const char* text, bool* active = nullptr);
 
 // Deslizador vertical de relleno de la barra lateral: `t` va de 0 (abajo) a 1 (arriba) y
 // se mueve con el arrastre, sin saltar al punto que se toca.
@@ -165,7 +182,7 @@ void endScroll();
 // Mueve la lista para que se vea el tramo [top, bottom] del contenido.
 void scrollIntoView(const char* id, float top, float bottom, float viewHeight);
 
-// Círculo de color con anillo de selección.
-bool swatch(const char* id, ImVec2 center, float radius, ImU32 color, bool selected);
+// Muestra de color cuadrada con anillo de selección.
+bool swatch(const char* id, const ImRect& rect, ImU32 color, bool selected);
 
 } // namespace ui

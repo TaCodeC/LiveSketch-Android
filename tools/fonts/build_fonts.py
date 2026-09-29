@@ -80,6 +80,14 @@ ICONS = {
     "kEye": "eye",
     "kEyeOff": "eye-off",
     "kUsers": "users",
+    "kFrame": "frame",
+    "kShare": "share",
+    "kSliders": "sliders-horizontal",
+    "kHelp": "circle-help",
+    "kProportions": "proportions",
+    "kArrowUp": "arrow-up",
+    "kArrowDown": "arrow-down",
+    "kArrowRight": "arrow-right",
 }
 
 
