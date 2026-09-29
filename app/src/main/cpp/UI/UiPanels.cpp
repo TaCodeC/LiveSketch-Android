@@ -7,6 +7,7 @@
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
 #include "UI/Icons.h"
+#include "UI/PanelParts.h"
 
 #include <SDL3/SDL_platform_defines.h>
 
@@ -22,12 +23,13 @@ using ui::Align;
 using ui::Press;
 using ui::Weight;
 using ui::pt;
+using ui::parts::panelHeader;
+using ui::parts::pressFeedback;
+using ui::parts::tag;
+using ui::parts::textureId;
+using ui::parts::toggleRow;
 
 namespace {
-
-constexpr const char* kBrushNames[BrushSettings::kTypeCount] = {"Básico", "Texturizado", "Caligráfico", "Acuarela"};
-constexpr const char* kBrushNotes[BrushSettings::kTypeCount] = {"Redondo y suave", "Cerdas secas", "Punta cuadrada",
-                                                                "Mancha difusa"};
 
 constexpr ImU32 kPalette[12] = {
     IM_COL32(255, 255, 255, 255), IM_COL32(142, 142, 147, 255), IM_COL32(28, 28, 30, 255),
@@ -128,8 +130,6 @@ constexpr float kKeyColumn = 72.0f;
 constexpr float kHelpHeight = 8.0f + kHelpSection + kGestureRow * kGestureCount + 6.0f + kHelpSection +
                               kShortcutRow * kShortcutCount + 12.0f + 16.0f + 12.0f;
 
-ImTextureID textureId(GLuint texture) { return static_cast<ImTextureID>(texture); }
-
 void toFloat(ImU32 color, float rgb[3]) {
     rgb[0] = static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
     rgb[1] = static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
@@ -171,41 +171,6 @@ bool parseHex(const char* text, float rgb[3]) {
     return true;
 }
 
-// Resalte de una fila o un botón al pulsarlo (o con el ratón encima).
-void pressFeedback(ImDrawList* dl, ImGuiID id, const ImRect& rect, const Press& press, float radius) {
-    const float t = ui::anim::follow(id + 5u, press.held ? 1.0f : (press.hovered ? 0.5f : 0.0f), 24.0f);
-    if (t > 0.002f) {
-        dl->AddRectFilled(rect.Min, rect.Max, ui::withAlpha(th::kPressed, t), radius);
-    }
-}
-
-// Cabecera de un panel: el título a la izquierda y una línea debajo. Devuelve su centro
-// vertical, para lo que va a la derecha.
-float panelHeader(ImDrawList* dl, const ImRect& content, float top, const char* title) {
-    const float cy = top + pt(th::kHeaderHeight * 0.5f);
-    ui::label(dl, Weight::SemiBold, th::kPanelTitle, ImVec2(content.Min.x + pt(16.0f), cy), Align::Left, th::kLabel,
-              title);
-    ui::separator(dl, content.Min.x, content.Max.x, top + pt(th::kHeaderHeight) - ui::hairline(), th::kRule);
-    return cy;
-}
-
-// Etiqueta en mayúsculas sobre un fondo suave, con un punto delante si `dot` no es 0.
-// `right` es su borde derecho y `cy` su centro.
-void tag(ImDrawList* dl, float right, float cy, const char* text, ImU32 fill, ImU32 color, ImU32 dot = 0) {
-    constexpr float kPoints = 10.5f;
-    constexpr float kTracking = 0.08f;
-    const float dotSpace = dot ? pt(6.0f + 6.0f) : 0.0f;
-    const float width = pt(8.0f) + dotSpace + ui::trackedWidth(Weight::Bold, kPoints, text, kTracking) + pt(8.0f);
-    const ImRect r(ImVec2(right - width, cy - pt(11.0f)), ImVec2(right, cy + pt(11.0f)));
-    dl->AddRectFilled(r.Min, r.Max, fill, pt(6.0f));
-    float x = r.Min.x + pt(8.0f);
-    if (dot) {
-        dl->AddCircleFilled(ImVec2(x + pt(3.0f), cy), pt(3.0f), dot, 0);
-        x += dotSpace;
-    }
-    ui::tracked(dl, Weight::Bold, kPoints, ImVec2(x, cy), color, text, kTracking);
-}
-
 // Fila de menú: icono atenuado, título y, a la derecha, un valor. `filled`: con fondo
 // suave (la acción principal de su grupo). Sin `id` es solo información.
 bool menuRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyph, const char* title,
@@ -239,18 +204,6 @@ bool menuRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyp
     ui::label(dl, Weight::Regular, th::kSubhead, ImVec2(x, cy), Align::Left, textColor, title,
               std::max(pt(40.0f), right - x));
     return press.clicked;
-}
-
-// Fila con un interruptor a la derecha.
-bool toggleRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyph, const char* title, bool* value) {
-    const float cy = row.GetCenter().y;
-    const ImVec2 size = ui::toggleSize();
-    ui::icon(dl, glyph, ImVec2(row.Min.x + pt(10.0f + 9.0f), cy), 18.0f, th::kMutedIcon);
-    const float x = row.Min.x + pt(10.0f + 18.0f + 12.0f);
-    const float toggleX = row.Max.x - pt(10.0f) - size.x;
-    ui::label(dl, Weight::Regular, th::kSubhead, ImVec2(x, cy), Align::Left, th::kLabel, title,
-              std::max(pt(40.0f), toggleX - pt(10.0f) - x));
-    return ui::toggle(id, ImVec2(toggleX, cy - size.y * 0.5f), value);
 }
 
 // Tecla o gesto de la ayuda: texto pequeño en un recuadro de `width` (centrado en `cy`).
@@ -660,75 +613,6 @@ void Ui::ndiPanel(Canvas& canvas, UiRequests& requests) {
     }
     ui::paragraph(dl, Weight::Regular, th::kFootnote, ImVec2(left + pt(4.0f), y), textWidth, Align::Left,
                   IM_COL32(235, 235, 245, 140), note, 1.4f);
-    endPanel(f);
-}
-
-// -----------------------------------------------------------------------------
-// Pinceles
-// -----------------------------------------------------------------------------
-
-void Ui::brushesPanel() {
-    const Layout& L = m_layout;
-    constexpr float kRow = 66.0f;
-    constexpr float kRowGap = 4.0f;
-    const float content = th::kHeaderHeight + 8.0f + kRow * BrushSettings::kTypeCount +
-                          kRowGap * (BrushSettings::kTypeCount - 1) + 8.0f;
-    const float width = pt(340.0f);
-    const int toolIndex = static_cast<int>(m_tool);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * (0.5f + toolIndex));
-    PanelFrame f;
-    if (!beginPanel(f, Panel::Brushes, "##panel-brushes", L.rightBar.Max.x - width, width, pt(content), anchorX,
-                    true)) {
-        return;
-    }
-    ImDrawList* dl = f.dl;
-    float y = f.content.Min.y - f.scroll;
-    const float cy = panelHeader(dl, f.content, y, "Pinceles");
-    tag(dl, f.content.Max.x - pt(12.0f), cy, m_tool == Tool::Brush ? "PINCEL" : "BORRADOR", IM_COL32(255, 255, 255, 20),
-        IM_COL32(235, 235, 245, 179));
-    y += pt(th::kHeaderHeight + 8.0f);
-    const float left = f.content.Min.x + pt(8.0f);
-    const float right = f.content.Max.x - pt(8.0f);
-
-    ToolPreset& preset = m_presets[toolIndex];
-    const float pixels = m_status.pixelsPerUnit;
-    for (int i = 0; i < BrushSettings::kTypeCount; ++i) {
-        const ImRect row(left, y, right, y + pt(kRow));
-        ImGui::PushID(i);
-        const ImGuiID id = ImGui::GetID("##row");
-        const Press press = ui::pressable(id, row);
-        ImGui::PopID();
-        const bool selected = preset.type == i;
-        const float on = ui::anim::follow(id + 7u, selected ? 1.0f : 0.0f, 20.0f);
-        if (on > 0.002f) {
-            dl->AddRectFilled(row.Min, row.Max, ui::withAlpha(th::kAccent, on), pt(th::kRowRadius));
-        }
-        pressFeedback(dl, id, row, press, pt(th::kRowRadius));
-
-        const float cy2 = row.GetCenter().y;
-        const float nameWidth = pt(118.0f);
-        ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(row.Min.x + pt(12.0f), cy2 - pt(9.0f)), Align::Left,
-                  th::kLabel, kBrushNames[i], nameWidth);
-        ui::label(dl, Weight::Regular, th::kCaption, ImVec2(row.Min.x + pt(12.0f), cy2 + pt(10.0f)), Align::Left,
-                  ui::mix(IM_COL32(235, 235, 245, 153), IM_COL32(255, 255, 255, 204), on), kBrushNotes[i],
-                  nameWidth);
-
-        // Trazo de muestra hecho con el propio pincel.
-        const float previewWidth = std::min(pt(176.0f), row.GetWidth() - pt(12.0f + 118.0f + 8.0f + 12.0f));
-        const float previewHeight = previewWidth * 44.0f / 176.0f;
-        const ImRect preview(ImVec2(row.Max.x - pt(12.0f) - previewWidth, cy2 - previewHeight * 0.5f),
-                             ImVec2(row.Max.x - pt(12.0f), cy2 + previewHeight * 0.5f));
-        const GLuint texture = m_previews.brushPreview(i, static_cast<int>(std::lround(previewWidth * pixels)),
-                                                       static_cast<int>(std::lround(previewHeight * pixels)));
-        if (texture != 0) {
-            dl->AddImage(ImTextureRef(textureId(texture)), preview.Min, preview.Max, ImVec2(0.0f, 0.0f),
-                         ImVec2(1.0f, 1.0f), IM_COL32_WHITE);
-        }
-        if (press.clicked) {
-            preset.type = i;
-        }
-        y += pt(kRow + kRowGap);
-    }
     endPanel(f);
 }
 

@@ -34,7 +34,16 @@ uniform int uClipMode;         // 1: la capa se recorta con el alfa de uClip
 uniform int uClipStrokeMode;   // trazo sobre la base del recorte (mismos valores)
 uniform int uBlend;            // BlendMode
 uniform int uUseBackdrop;      // 1: se mezcla aquí con uBackdrop; 0: mezcla la GPU (modo Normal)
+uniform sampler2D uGrain;
+uniform float uGrainScale;     // uv del grano por píxel del lienzo
+uniform float uGrainDepth;
+uniform int uGrainOn;          // grano del trazo: 0 no hay, 1 sobre uStroke, 2 sobre uLayer
 out vec4 fragColor;
+
+// Las coordenadas del FBO son las del lienzo: el grano queda fijo al lienzo.
+float grain() {
+    return mix(1.0, texture(uGrain, gl_FragCoord.xy * uGrainScale).a, uGrainDepth);
+}
 
 vec4 withStroke(vec4 color, int mode) {
     if (mode == 0) {
@@ -45,6 +54,9 @@ vec4 withStroke(vec4 color, int mode) {
         return stroke;
     }
     stroke *= uStrokeOpacity;
+    if (uGrainOn == 1) {
+        stroke *= grain();
+    }
     if (mode == 1) {
         return stroke + color * (1.0 - stroke.a);
     }
@@ -158,7 +170,11 @@ vec3 blendColor(vec3 b, vec3 s) {
 }
 
 void main() {
-    vec4 src = withStroke(texture(uLayer, vUV), uStrokeMode) * uOpacity;
+    vec4 layer = texture(uLayer, vUV);
+    if (uGrainOn == 2) {
+        layer *= grain();
+    }
+    vec4 src = withStroke(layer, uStrokeMode) * uOpacity;
     if (uClipMode == 1) {
         src *= withStroke(texture(uClip, vUV), uClipStrokeMode).a;
     }
@@ -193,6 +209,8 @@ constexpr GLint kLayerUnit = 0;
 constexpr GLint kStrokeUnit = 1;
 constexpr GLint kBackdropUnit = 2;
 constexpr GLint kClipUnit = 3;
+constexpr GLint kGrainUnit = 4;
+constexpr GLint kUnitCount = 5;
 
 int strokeMode(const StrokePreview* stroke) {
     if (!stroke) {
@@ -241,6 +259,10 @@ bool Compositor::init(int width, int height) {
     m_uClipStrokeMode = glGetUniformLocation(id, "uClipStrokeMode");
     m_uBlend = glGetUniformLocation(id, "uBlend");
     m_uUseBackdrop = glGetUniformLocation(id, "uUseBackdrop");
+    m_uGrain = glGetUniformLocation(id, "uGrain");
+    m_uGrainScale = glGetUniformLocation(id, "uGrainScale");
+    m_uGrainDepth = glGetUniformLocation(id, "uGrainDepth");
+    m_uGrainOn = glGetUniformLocation(id, "uGrainOn");
     m_uColor = glGetUniformLocation(m_colorProgram.id(), "uColor");
 
     glUseProgram(id);
@@ -248,6 +270,7 @@ bool Compositor::init(int width, int height) {
     glUniform1i(m_uStroke, kStrokeUnit);
     glUniform1i(m_uBackdrop, kBackdropUnit);
     glUniform1i(m_uClip, kClipUnit);
+    glUniform1i(m_uGrain, kGrainUnit);
     glUseProgram(0);
 
     const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
@@ -307,13 +330,23 @@ void Compositor::drawPass(const Pass& pass) {
     // la del FBO de destino, aunque el shader no la lea: WebGL lo rechaza (bucle de
     // realimentación). La capa nunca es un destino, así que rellena las que sobran.
     const StrokePreview* stroke = pass.stroke ? pass.stroke : pass.clipStroke;
-    const GLuint textures[] = {
+    const StrokeGrain* grain = nullptr;
+    int grainOn = 0;
+    if (pass.layerGrain && pass.layerGrain->active()) {
+        grain = pass.layerGrain;
+        grainOn = 2;
+    } else if (stroke && stroke->grain.active()) {
+        grain = &stroke->grain;
+        grainOn = 1;
+    }
+    const GLuint textures[kUnitCount] = {
         pass.layer,
         stroke ? stroke->texture : pass.layer,
         pass.backdrop ? pass.backdrop : pass.layer,
         pass.clip ? pass.clip : pass.layer,
+        grain ? grain->texture : pass.layer,
     };
-    for (GLint unit = 0; unit < 4; ++unit) {
+    for (GLint unit = 0; unit < kUnitCount; ++unit) {
         glActiveTexture(static_cast<GLenum>(GL_TEXTURE0 + unit));
         glBindTexture(GL_TEXTURE_2D, textures[unit]);
     }
@@ -326,6 +359,9 @@ void Compositor::drawPass(const Pass& pass) {
     glUniform1i(m_uClipStrokeMode, pass.stroke ? 0 : strokeMode(pass.clipStroke));
     glUniform1i(m_uBlend, static_cast<int>(pass.blend));
     glUniform1i(m_uUseBackdrop, pass.backdrop ? 1 : 0);
+    glUniform1i(m_uGrainOn, grainOn);
+    glUniform1f(m_uGrainScale, grain ? grain->scale : 1.0f);
+    glUniform1f(m_uGrainDepth, grain ? grain->depth : 0.0f);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
@@ -341,7 +377,7 @@ void Compositor::finishPass() {
     glEnable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);
-    for (GLint unit = 3; unit >= 0; --unit) {
+    for (GLint unit = kUnitCount - 1; unit >= 0; --unit) {
         glActiveTexture(static_cast<GLenum>(GL_TEXTURE0 + unit));
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -405,7 +441,8 @@ void Compositor::compose(const LayerStack& layers, const IRect& rect, const Stro
     finishPass();
 }
 
-void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect) {
+void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect,
+                      const StrokeGrain* grain) {
     const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
     if (area.empty() || !m_program) {
         return;
@@ -431,6 +468,7 @@ void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, 
     Pass pass;
     pass.layer = source;
     pass.opacity = opacity;
+    pass.layerGrain = grain;
     drawPass(pass);
     finishPass();
 }

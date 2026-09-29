@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 // Imágenes pequeñas de la interfaz que se dibujan con la GPU: la miniatura de cada capa
 // y el trazo de muestra de cada pincel. Se rehacen solo cuando cambian.
@@ -22,9 +23,14 @@ public:
     // Olvida las miniaturas de las capas que ya no están en la pila.
     void pruneThumbnails(const LayerStack& layers);
 
-    // Trazo de muestra del pincel `type`: blanco con alfa (sin premultiplicar), para
-    // teñirlo en ImGui.
-    GLuint brushPreview(int type, int width, int height);
+    // Trazo de muestra de `params` (una "S" con la presión subiendo y bajando): blanco con
+    // alfa (sin premultiplicar), para teñirlo en ImGui. `slot` identifica la muestra (un
+    // pincel de la lista, la del panel de ajustes): se rehace solo si cambian los ajustes
+    // o el tamaño.
+    GLuint brushPreview(int slot, const BrushParams& params, int width, int height);
+    // Punta y grano para las fichas del panel de ajustes (blancas con la forma en el alfa).
+    GLuint tipTexture(BrushTip tip) { return m_brushReady ? m_brush.tipTexture(tip) : 0; }
+    GLuint grainTexture(BrushGrain grain) { return m_brushReady ? m_brush.grainTexture(grain) : 0; }
 
 private:
     struct Thumbnail {
@@ -33,7 +39,7 @@ private:
     };
     struct Stroke {
         gfx::RenderTarget target;
-        bool ready = false;
+        BrushParams params;
     };
 
     gfx::Program m_program;
@@ -48,5 +54,7 @@ private:
     std::unordered_map<uint32_t, Thumbnail> m_thumbnails;   // por id de capa
     Brush m_brush;
     bool m_brushReady = false;
-    Stroke m_strokes[BrushSettings::kTypeCount];
+    StrokePath m_path;
+    std::vector<Dab> m_dabs;
+    std::unordered_map<int, Stroke> m_strokes;   // por `slot`
 };

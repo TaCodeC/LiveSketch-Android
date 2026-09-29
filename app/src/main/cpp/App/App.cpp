@@ -329,6 +329,7 @@ SDL_AppResult App::event(const SDL_Event& event) {
 void App::onWillEnterBackground() {
     m_foreground = false;
     endGestures();
+    m_ui.saveNow();
     // NDI sigue reenviando el último frame desde su hilo, que no usa GL.
     m_ndi.dropInFlight();
     if (m_canvas.ready()) {
@@ -503,6 +504,8 @@ SDL_AppResult App::iterate() {
     ImGui_ImplSDL3_NewFrame();
     const UiStatus status = uiStatus();
     m_view.setPixelsPerPoint(status.pointScale * status.pixelsPerUnit);
+    // La estabilización del trazo se mide en la pantalla: píxeles del lienzo por punto.
+    m_canvas.setViewScale(status.pointScale * status.pixelsPerUnit / std::max(m_camera.zoom(), 1e-4f));
     m_ui.beginFrame(status);
     ImGui::NewFrame();
     m_backdropTexture = m_backdrop.texture();

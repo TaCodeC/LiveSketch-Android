@@ -40,6 +40,15 @@ struct ScrollState {
     double lastMove = 0.0;
 };
 std::unordered_map<ImGuiID, ScrollState> g_scrolls;
+// Un control (un deslizador dentro de una lista) se quedó con el arrastre en curso.
+bool g_dragClaimed = false;
+// Deslizadores de ajustes que se están arrastrando: valor y x del dedo al empezar.
+struct SliderDrag {
+    bool active = false;
+    float startValue = 0.0f;
+    float startX = 0.0f;
+};
+std::unordered_map<ImGuiID, SliderDrag> g_sliderDrags;
 struct ScrollFrame {
     ImGuiID id;
     ImRect view;
@@ -832,6 +841,79 @@ bool barSlider(const char* strId, const ImRect& rect, float* value, const char* 
     return changed;
 }
 
+bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* text, const char* value, bool enabled,
+                 bool* active) {
+    const ImGuiID id = ImGui::GetID(strId);
+    ImGui::ItemAdd(rect, id, nullptr, enabled ? ImGuiItemFlags_None : ImGuiItemFlags_Disabled);
+    bool hovered = false;
+    bool held = false;
+    const bool released = ImGui::ButtonBehavior(rect, id, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
+    const ImGuiIO& io = ImGui::GetIO();
+    SliderDrag& drag = g_sliderDrags[id];
+    bool changed = false;
+    bool wasDragging = drag.active;
+    if (enabled && held && rect.GetWidth() > 0.0f) {
+        if (!drag.active && !scrollDragging()) {
+            const float dx = std::fabs(io.MousePos.x - io.MouseClickedPos[0].x);
+            const float dy = std::fabs(io.MousePos.y - io.MouseClickedPos[0].y);
+            if (dx > pt(kTapSlop) && dx > dy) {
+                drag.active = true;
+                drag.startValue = *t;
+                drag.startX = io.MousePos.x;
+                claimDrag();
+            }
+        }
+        if (drag.active) {
+            const float v = std::clamp(drag.startValue + (io.MousePos.x - drag.startX) / rect.GetWidth(), 0.0f, 1.0f);
+            changed = v != *t;
+            *t = v;
+        }
+    } else {
+        drag.active = false;
+    }
+    // Un toque sin arrastrar (ni desplazar la lista) pone el valor en ese punto.
+    const float slop = pt(kTapSlop);
+    if (enabled && released && !wasDragging && io.MouseDragMaxDistanceSqr[0] <= slop * slop && rect.GetWidth() > 0.0f) {
+        const float v = std::clamp((io.MousePos.x - rect.Min.x) / rect.GetWidth(), 0.0f, 1.0f);
+        changed = v != *t;
+        *t = v;
+    }
+    if (active) {
+        *active = drag.active;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float radius = pt(theme::kControlRadius);
+    const float alpha = enabled ? 1.0f : 0.4f;
+    const float focus = anim::follow(id, drag.active ? 1.0f : (held ? 0.5f : 0.0f), 20.0f);
+    dl->AddRectFilled(rect.Min, rect.Max, withAlpha(mix(theme::kControl, IM_COL32(255, 255, 255, 28), focus), alpha),
+                      radius);
+    const float shown = anim::follow(id + 1u, std::clamp(*t, 0.0f, 1.0f), drag.active ? 60.0f : 24.0f, 0.0005f);
+    const float cut = rect.Min.x + rect.GetWidth() * shown;
+    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
+    dl->AddRectFilled(rect.Min, rect.Max, withAlpha(IM_COL32(255, 255, 255, 225), alpha), radius);
+    dl->PopClipRect();
+    insideBorder(dl, rect, radius, withAlpha(theme::kControlBorder, alpha), pt(1.0f));
+
+    // Textos oscuros sobre el relleno y claros fuera de él.
+    const float cy = rect.GetCenter().y;
+    const float pad = pt(12.0f);
+    const float valueWidth = measure(Weight::SemiBold, theme::kFootnote, value).x;
+    auto texts = [&](ImU32 color) {
+        label(dl, Weight::Regular, theme::kFootnote, ImVec2(rect.Min.x + pad, cy), Align::Left, withAlpha(color, alpha),
+              text, std::max(pt(20.0f), rect.GetWidth() - pad * 3.0f - valueWidth));
+        label(dl, Weight::SemiBold, theme::kFootnote, ImVec2(rect.Max.x - pad, cy), Align::Right,
+              withAlpha(color, alpha), value);
+    };
+    dl->PushClipRect(ImVec2(cut, rect.Min.y), rect.Max, true);
+    texts(theme::kLabel);
+    dl->PopClipRect();
+    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
+    texts(IM_COL32(28, 28, 30, 255));
+    dl->PopClipRect();
+    return changed;
+}
+
 bool fillSlider(const char* strId, const ImRect& rect, float* t, bool* active) {
     const ImGuiID id = ImGui::GetID(strId);
     ImGui::ItemAdd(rect, id);
@@ -908,10 +990,15 @@ float beginScroll(const char* strId, const ImRect& view, float contentHeight) {
         s.dragging = false;
         s.velocity = 0.0f;
     }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        g_dragClaimed = false;
+    }
     if (s.tracking) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            if (!s.dragging && maxOffset > 0.0f &&
-                std::fabs(io.MousePos.y - io.MouseClickedPos[0].y) > pt(kTapSlop)) {
+            // Solo un arrastre más vertical que horizontal: el otro es de los deslizadores.
+            const float dx = std::fabs(io.MousePos.x - io.MouseClickedPos[0].x);
+            const float dy = std::fabs(io.MousePos.y - io.MouseClickedPos[0].y);
+            if (!s.dragging && !g_dragClaimed && maxOffset > 0.0f && dy > pt(kTapSlop) && dy >= dx) {
                 s.dragging = true;
             }
             if (s.dragging && io.MouseDelta.y != 0.0f) {
@@ -974,6 +1061,16 @@ void endScroll() {
     ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x - pt(3.0f), y), ImVec2(x, y + barHeight),
                                               withAlpha(IM_COL32(255, 255, 255, 110), visible), pt(1.5f));
 }
+
+bool scrollDragging() {
+    if (g_scrollStack.empty()) {
+        return false;
+    }
+    const auto it = g_scrolls.find(g_scrollStack.back().id);
+    return it != g_scrolls.end() && it->second.dragging;
+}
+
+void claimDrag() { g_dragClaimed = true; }
 
 void scrollIntoView(const char* strId, float top, float bottom, float viewHeight) {
     ScrollState& s = g_scrolls[ImGui::GetID(strId)];

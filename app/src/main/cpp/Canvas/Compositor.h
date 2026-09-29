@@ -4,6 +4,15 @@
 #include "Canvas/Rect.h"
 #include "Gfx/GLObjects.h"
 
+// Grano del papel de un trazo: multiplica su alfa, fijo al lienzo (se ve igual en todos
+// los trazos que pasan por el mismo sitio).
+struct StrokeGrain {
+    GLuint texture = 0;    // blanca con el relieve en el alfa, que se repite; 0: sin grano
+    float scale = 1.0f;    // uv del grano por píxel del lienzo
+    float depth = 0.0f;    // 0: no se nota; 1: donde el relieve es 0 no llega pintura
+    bool active() const { return texture != 0 && depth > 0.0f; }
+};
+
 // Trazo en curso que se muestra sobre la capa activa antes de fundirse con ella.
 struct StrokePreview {
     enum class Mode {
@@ -15,6 +24,7 @@ struct StrokePreview {
     GLuint texture = 0;     // buffer de trazo (RGBA premultiplicado, tamaño del lienzo)
     float opacity = 1.0f;
     Mode mode = Mode::Paint;
+    StrokeGrain grain;
 };
 
 // Composición de capas en el espacio del lienzo (sin zoom ni pan). El resultado es lo
@@ -40,8 +50,9 @@ public:
         Mask,    // multiplica el destino por el alfa de la fuente por `opacity`
     };
     // Dibuja la textura `source` (del tamaño del lienzo) sobre el FBO `target` dentro de
-    // `rect`.
-    void draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect);
+    // `rect`, con el grano `grain` si lo hay (un trazo que se funde con su capa).
+    void draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect,
+              const StrokeGrain* grain = nullptr);
     // Multiplica el contenido del FBO `target` por `factor` dentro de `rect` (hornea la
     // opacidad de una capa en sus píxeles).
     void scale(GLuint target, float factor, const IRect& rect);
@@ -73,6 +84,7 @@ private:
         GLuint clip = 0;                              // base del recorte (0: sin recorte)
         const StrokePreview* clipStroke = nullptr;   // trazo sobre la base
         GLuint backdrop = 0;                          // lo de debajo; 0: mezcla la GPU
+        const StrokeGrain* layerGrain = nullptr;      // grano sobre la propia capa (un trazo)
     };
 
     void bindCanvasPass(GLuint target, const IRect& rect);
@@ -93,6 +105,10 @@ private:
     GLint m_uClipStrokeMode = -1;
     GLint m_uBlend = -1;
     GLint m_uUseBackdrop = -1;
+    GLint m_uGrain = -1;
+    GLint m_uGrainScale = -1;
+    GLint m_uGrainDepth = -1;
+    GLint m_uGrainOn = -1;
     gfx::Program m_colorProgram;
     GLint m_uColor = -1;
     gfx::VertexArray m_vao;

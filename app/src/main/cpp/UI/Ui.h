@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Canvas/BrushLibrary.h"
 #include "UI/Kit.h"
 #include "UI/Previews.h"
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class Canvas;
 
@@ -49,13 +51,16 @@ enum class Tool { Brush, Eraser };
 //
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
-// (paneles) y UiDialogs.cpp (alertas y lienzo nuevo).
+// (paneles), UiBrushes.cpp (pinceles) y UiDialogs.cpp (alertas y lienzo nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
     // vuelve a llamar.
     bool init();
     void destroy();
+    // Guarda ya lo que estaba pendiente de guardar (la app pasa a segundo plano y el
+    // sistema puede cerrarla sin avisar).
+    void saveNow() { saveBrushesIfDue(true); }
 
     // Escala y reloj de las animaciones. Después del NewFrame de los backends y antes de
     // ImGui::NewFrame().
@@ -134,9 +139,15 @@ private:
 
     // Ajustes de cada herramienta: el pincel y el borrador guardan los suyos.
     struct ToolPreset {
-        int type = 0;
-        float size = 0.2f;      // posición del deslizador (0..1); radio = 1 + 199·size²
+        int brush = 0;          // en brushes::library()
+        float size = 0.3f;      // posición del deslizador (0..1): el radio depende del pincel
         float opacity = 1.0f;
+    };
+    // Tamaño y opacidad que tenía cada pincel en cada herramienta.
+    struct BrushMemory {
+        float size = 0.0f;
+        float opacity = 1.0f;
+        bool set = false;
     };
 
     struct Toast {
@@ -201,13 +212,27 @@ private:
     void drawPanels(Canvas& canvas, UiRequests& requests);
     void actionsPanel(Canvas& canvas, UiRequests& requests);
     void ndiPanel(Canvas& canvas, UiRequests& requests);
-    void brushesPanel();
     void layersPanel(Canvas& canvas);
     void blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view);
     void layerMenu(Canvas& canvas);
     void colorPanel(Canvas& canvas);
     void syncHsv(const float rgb[3]);
     void applyHsv(Canvas& canvas);
+
+    // --- UiBrushes.cpp ---
+    void initBrushes();
+    void loadBrushes();
+    void saveBrushes();
+    void scheduleBrushSave();
+    void saveBrushesIfDue(bool force);
+    // Elige el pincel `index` de la biblioteca para `tool`: recupera el tamaño y la
+    // opacidad que tenía (o los suyos por defecto).
+    void selectBrush(Tool tool, int index);
+    const BrushParams& toolBrush(Tool tool) const;
+    float toolRadius(Tool tool) const;
+    void brushesPanel();
+    void brushList(ImDrawList* dl, const ImRect& view);
+    void brushSettings(ImDrawList* dl, const ImRect& view);
 
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
@@ -225,6 +250,15 @@ private:
 
     Tool m_tool = Tool::Brush;
     ToolPreset m_presets[2];
+
+    // Pinceles: la biblioteca con los cambios del usuario, lo que recuerda cada uno y el
+    // guardado (se escribe un momento después del último cambio).
+    std::vector<BrushParams> m_brushParams;
+    std::vector<BrushMemory> m_brushMemory[2];
+    uint64_t m_brushSaveAt = 0;     // SDL_GetTicks; 0: nada pendiente
+    int m_brushCategory = 0;        // la que muestra la lista
+    bool m_brushPage = false;       // el panel muestra los ajustes del pincel elegido
+    bool m_brushScroll = false;     // al abrir la lista, mostrar el pincel elegido
     Panel m_panel = Panel::None;
     int m_actionsTab = 0;           // Acciones: 0 lienzo, 1 compartir, 2 preferencias, 3 ayuda
     bool m_layerMenu = false;

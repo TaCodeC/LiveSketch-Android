@@ -34,13 +34,6 @@ constexpr float kNarrowWidth = 600.0f;
 constexpr double kRepeatDelay = 0.45;
 constexpr double kRepeatInterval = 0.09;
 
-float radiusFromSize(float t) { return Brush::kMinRadius + (Brush::kMaxRadius - Brush::kMinRadius) * t * t; }
-
-float sizeFromRadius(float radius) {
-    return std::sqrt(
-        std::clamp((radius - Brush::kMinRadius) / (Brush::kMaxRadius - Brush::kMinRadius), 0.0f, 1.0f));
-}
-
 std::string prefsPath() {
     char* folder = SDL_GetPrefPath("TaCodec", "LiveSketch");
     if (!folder) {
@@ -70,13 +63,15 @@ bool Ui::init() {
     if (!m_prefsLoaded) {
         m_prefsLoaded = true;
         loadPrefs();
-        m_presets[static_cast<int>(Tool::Brush)] = {0, sizeFromRadius(10.0f), 1.0f};
-        m_presets[static_cast<int>(Tool::Eraser)] = {0, sizeFromRadius(24.0f), 1.0f};
+        initBrushes();
     }
     return m_previews.init();
 }
 
-void Ui::destroy() { m_previews.destroy(); }
+void Ui::destroy() {
+    saveBrushesIfDue(true);
+    m_previews.destroy();
+}
 
 void Ui::loadPrefs() {
     const std::string path = prefsPath();
@@ -116,6 +111,7 @@ void Ui::beginFrame(const UiStatus& status) {
 
 void Ui::build(Canvas* canvas, UiRequests& requests) {
     computeLayout();
+    saveBrushesIfDue(false);
     if (!canvas) {
         m_panel = Panel::None;
         m_layerMenu = false;
@@ -250,12 +246,9 @@ float Ui::ndiCapsuleWidth() const {
 
 void Ui::applyPreset(Canvas& canvas, Tool tool) {
     BrushSettings& settings = canvas.brushSettings();
-    ToolPreset& preset = m_presets[static_cast<int>(tool)];
-    if (settings.type != preset.type && !canvas.setBrushType(preset.type)) {
-        notify("No se pudo cargar el pincel", Notice::Error);
-        preset.type = settings.type;
-    }
-    settings.radius = radiusFromSize(preset.size);
+    const ToolPreset& preset = m_presets[static_cast<int>(tool)];
+    settings.brush = toolBrush(tool);
+    settings.radius = toolRadius(tool);
     settings.opacity = std::clamp(preset.opacity, 0.01f, 1.0f);
     settings.eraser = tool == Tool::Eraser;
 }
@@ -346,6 +339,10 @@ bool Ui::closeTopmost() {
         m_blendPage = false;   // vuelve a la lista de capas
         return true;
     }
+    if (m_brushPage && m_panel == Panel::Brushes) {
+        m_brushPage = false;   // vuelve a la lista de pinceles
+        return true;
+    }
     if (m_panel != Panel::None) {
         closePanels();
         return true;
@@ -371,7 +368,13 @@ void Ui::showUndo(bool redo, bool done) {
     }
 }
 
-uint64_t Ui::wakeDeadline() const { return m_toast.text.empty() ? 0 : m_toast.until; }
+uint64_t Ui::wakeDeadline() const {
+    const uint64_t toast = m_toast.text.empty() ? 0 : m_toast.until;
+    if (m_brushSaveAt == 0 || (toast != 0 && toast < m_brushSaveAt)) {
+        return toast;
+    }
+    return m_brushSaveAt;
+}
 
 void Ui::undo(Canvas& canvas, bool redo) { showUndo(redo, redo ? canvas.redo() : canvas.undo()); }
 
@@ -408,6 +411,7 @@ void Ui::handleKeys(Canvas& canvas) {
         ToolPreset& preset = m_presets[static_cast<int>(m_tool)];
         const float step = ImGui::IsKeyDown(ImGuiKey_RightBracket) ? 0.02f : -0.02f;
         preset.size = std::clamp(preset.size + step, 0.0f, 1.0f);
+        scheduleBrushSave();
     }
 }
 
@@ -625,7 +629,9 @@ void Ui::drawSidebar(Canvas& canvas) {
 
     // Tamaño.
     bool sizeActive = false;
-    ui::fillSlider("##size", L.sizeSlider, &preset.size, &sizeActive);
+    if (ui::fillSlider("##size", L.sizeSlider, &preset.size, &sizeActive)) {
+        scheduleBrushSave();
+    }
     {
         const ImRect& r = L.sizeSlider;
         const float dot = pt(2.0f) + pt(3.5f) * preset.size;
@@ -657,6 +663,7 @@ void Ui::drawSidebar(Canvas& canvas) {
     float opacity = preset.opacity;
     if (ui::fillSlider("##opacity", L.opacitySlider, &opacity, &opacityActive)) {
         preset.opacity = std::max(opacity, 0.01f);
+        scheduleBrushSave();
     }
     {
         const ImRect& r = L.opacitySlider;
@@ -733,7 +740,7 @@ void Ui::drawHud(Canvas& canvas) {
     char text[32];
     if (m_hudKind == 0) {
         // El círculo tiene el tamaño que tendrá el trazo en la pantalla (con el zoom).
-        const float brushRadius = radiusFromSize(preset.size);
+        const float brushRadius = toolRadius(m_tool);
         const float onScreen = brushRadius * m_status.canvasZoom / std::max(m_status.pixelsPerUnit, 0.01f);
         const float r = std::clamp(onScreen, pt(1.5f), side * 0.27f);
         if (eraser) {

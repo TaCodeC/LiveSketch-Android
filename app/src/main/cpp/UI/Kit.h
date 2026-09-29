@@ -172,6 +172,13 @@ bool barSlider(const char* id, const ImRect& rect, float* value, const char* tex
 // se mueve con el arrastre, sin saltar al punto que se toca.
 bool fillSlider(const char* id, const ImRect& rect, float* t, bool* active = nullptr);
 
+// Barra de relleno para ajustes dentro de una lista que se desplaza: el arrastre en
+// horizontal mueve el valor (sin saltar al dedo) y en vertical desplaza la lista. Un toque
+// sin arrastrar pone el valor donde se toca. `t` va de 0 a 1; `text` va a la izquierda y
+// `value` a la derecha. `active`: se está arrastrando.
+bool paramSlider(const char* id, const ImRect& rect, float* t, const char* text, const char* value,
+                 bool enabled = true, bool* active = nullptr);
+
 // Campo de texto. `focus`: poner el teclado en él en este frame. Devuelve true con Intro.
 bool textField(const char* id, const ImRect& rect, char* buffer, size_t size, bool focus, const char* placeholder);
 
@@ -181,6 +188,10 @@ float beginScroll(const char* id, const ImRect& view, float contentHeight);
 void endScroll();
 // Mueve la lista para que se vea el tramo [top, bottom] del contenido.
 void scrollIntoView(const char* id, float top, float bottom, float viewHeight);
+// La lista más interior (entre beginScroll y endScroll) se está arrastrando.
+bool scrollDragging();
+// Un control se queda con el arrastre en curso: las listas no se desplazan con él.
+void claimDrag();
 
 // Muestra de color cuadrada con anillo de selección.
 bool swatch(const char* id, const ImRect& rect, ImU32 color, bool selected);

@@ -94,10 +94,7 @@ bool Previews::init() {
 
 void Previews::destroy() {
     m_thumbnails.clear();
-    for (Stroke& stroke : m_strokes) {
-        stroke.target.destroy();
-        stroke.ready = false;
-    }
+    m_strokes.clear();
     m_brush.destroy();
     m_brushReady = false;
     m_vbo.reset();
@@ -152,21 +149,22 @@ void Previews::pruneThumbnails(const LayerStack& layers) {
     }
 }
 
-GLuint Previews::brushPreview(int type, int width, int height) {
-    if (type < 0 || type >= BrushSettings::kTypeCount || width <= 0 || height <= 0 || !m_brushReady) {
+GLuint Previews::brushPreview(int slot, const BrushParams& params, int width, int height) {
+    if (width <= 0 || height <= 0 || !m_brushReady) {
         return 0;
     }
-    Stroke& stroke = m_strokes[type];
-    if (stroke.ready && stroke.target.width == width && stroke.target.height == height) {
+    Stroke& stroke = m_strokes[slot];
+    if (stroke.target && stroke.target.width == width && stroke.target.height == height && stroke.params == params) {
         return stroke.target.texture.id();
     }
-    if (!stroke.target.create(width, height) || !m_brush.setType(type)) {
-        stroke.target.destroy();
-        stroke.ready = false;
+    const bool sized = stroke.target && stroke.target.width == width && stroke.target.height == height;
+    if (!sized && !stroke.target.create(width, height)) {
+        m_strokes.erase(slot);
         return 0;
     }
+    stroke.params = params;
 
-    // Blanco con alfa 0 y solo se acumula el alfa: queda blanco sin premultiplicar.
+    // Blanco con alfa 0 y solo se escribe el alfa: queda blanco sin premultiplicar.
     glBindFramebuffer(GL_FRAMEBUFFER, stroke.target.fbo.id());
     glViewport(0, 0, width, height);
     glDisable(GL_SCISSOR_TEST);
@@ -174,11 +172,11 @@ GLuint Previews::brushPreview(int type, int width, int height) {
     glClear(GL_COLOR_BUFFER_BIT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    // La "S" de la maqueta, en una caja de 176×44 escalada a la muestra.
     const float sx = static_cast<float>(width) / 176.0f;
     const float sy = static_cast<float>(height) / 44.0f;
     const Point a0{8, 30}, a1{40, 6}, a2{70, 6}, a3{92, 22};
-    const Point b1{114, 38}, b2{144, 40}, b3{168, 14};   // "S": b1 refleja a2 respecto de a3
-    const float radius = std::max(1.5f, static_cast<float>(height) * 0.12f);
+    const Point b1{114, 38}, b2{144, 40}, b3{168, 14};   // b1 refleja a2 respecto de a3
     constexpr int kSamples = 96;
     std::vector<Point> path;
     for (int i = 0; i <= kSamples; ++i) {
@@ -187,25 +185,36 @@ GLuint Previews::brushPreview(int type, int width, int height) {
     for (int i = 1; i <= kSamples; ++i) {
         path.push_back(cubic(a3, b1, b2, b3, static_cast<float>(i) / kSamples));
     }
+
+    // El pincel a una escala que quepa en la muestra; la estabilización no hace falta.
+    BrushParams sample = params;
+    sample.streamline = 0.0f;
+    StrokePath::Settings settings;
+    settings.radius = std::max(0.75f, static_cast<float>(height) * params.previewSize);
+    settings.flow = params.flow;
+    settings.seed = 12345;
     const float count = static_cast<float>(path.size() - 1);
     for (size_t i = 0; i < path.size(); ++i) {
         const float t = static_cast<float>(i) / count;
-        // Presión que sube y baja: el trazo se afina en los extremos.
-        const float pressure = 0.2f + 0.8f * std::pow(std::sin(t * 3.14159265f), 0.7f);
+        // Presión que sube y baja, como un trazo a mano.
+        const float pressure = 0.25f + 0.75f * std::pow(std::sin(t * 3.14159265f), 0.6f);
         const float x = path[i].x * sx;
         const float y = path[i].y * sy;
         if (i == 0) {
-            m_brush.beginStroke(x, y, pressure, radius, 0.5f);
+            m_path.begin(sample, settings, x, y, pressure);
         } else {
-            m_brush.strokeTo(x, y, pressure);
+            m_path.moveTo(x, y, pressure);
         }
     }
+    m_path.finish();
+    m_dabs.clear();
+    m_path.takeFinal(m_dabs);
+
     const float white[3] = {1.0f, 1.0f, 1.0f};
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-    m_brush.flush(stroke.target.fbo.id(), width, height, white);
+    const IRect touched = m_brush.draw(stroke.target.fbo.id(), width, height, m_dabs, sample, white);
+    m_brush.applyGrain(stroke.target.fbo.id(), width, height, sample, touched);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
-
-    stroke.ready = true;
     return stroke.target.texture.id();
 }

@@ -1,5 +1,7 @@
 #include "Canvas/Canvas.h"
 
+#include "Canvas/BrushTips.h"
+
 #include <SDL3/SDL_log.h>
 
 #include <algorithm>
@@ -23,10 +25,6 @@ constexpr size_t kMaxUndoBytes = size_t{192} * 1024 * 1024;
 constexpr size_t kUndoLayers = 6;
 // Lo que se cuenta por un paso sin píxeles.
 constexpr size_t kSmallStepBytes = 256;
-
-// Alfa de cada dab con presión 1 (los valores de la versión anterior).
-constexpr float kPaintFlow = 0.5f;
-constexpr float kEraseFlow = 1.0f;
 
 size_t bytesOf(int width, int height) {
     return static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
@@ -89,12 +87,11 @@ bool Canvas::createGpuObjects() {
         destroyGpuObjects();
         return false;
     }
-    // Sin la textura del pincel no se puede pintar, pero el resto de la app funciona.
-    m_brush.setType(m_settings.type);
     return true;
 }
 
 void Canvas::destroyGpuObjects() {
+    m_strokeBase.destroy();
     m_strokeTarget.destroy();
     m_brush.destroy();
     m_compositor.destroy();
@@ -112,13 +109,10 @@ void Canvas::fill(Layer& layer, float r, float g, float b, float a) {
     ++layer.revision;
 }
 
-bool Canvas::setBrushType(int type) {
-    endStroke();
-    if (!m_brush.setType(type)) {
-        return false;
+void Canvas::setViewScale(float canvasPixelsPerPoint) {
+    if (std::isfinite(canvasPixelsPerPoint) && canvasPixelsPerPoint > 0.0f) {
+        m_pixelsPerPoint = canvasPixelsPerPoint;
     }
-    m_settings.type = type;
-    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -161,13 +155,37 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     }
     m_strokeOpacity = std::clamp(m_settings.opacity, 0.0f, 1.0f);
     std::copy(m_settings.color, m_settings.color + 3, m_strokeColor);
-    m_brush.beginStroke(x, y, pressure, m_settings.radius, erase ? kEraseFlow : kPaintFlow);
+    m_strokeParams = m_settings.brush;
+    brushes::sanitize(m_strokeParams);
+    // Sin la textura de la punta no se pinta nada, pero el resto de la app funciona.
+    m_brush.prepare(m_strokeParams);
+
+    m_strokeGrain = {};
+    if (m_strokeParams.grain != BrushGrain::None && m_strokeParams.grainDepth > 0.0f) {
+        m_strokeGrain.texture = m_brush.grainTexture(m_strokeParams.grain);
+        m_strokeGrain.scale = 1.0f / (static_cast<float>(brushtips::kGrainSize) * m_strokeParams.grainScale);
+        m_strokeGrain.depth = m_strokeParams.grainDepth;
+    }
+
+    StrokePath::Settings path;
+    path.radius = m_settings.radius;
+    path.flow = m_strokeParams.flow;
+    if (erase && m_strokeParams.eraseFlow > 0.0f) {
+        path.flow = m_strokeParams.eraseFlow;
+    }
+    path.pixelsPerPoint = m_pixelsPerPoint;
+    path.seed = ++m_strokeCount * 0x9E3779B9U;
+    m_path.begin(m_strokeParams, path, x, y, pressure);
+    // Sin memoria para el segundo buffer, el final afinado se ve al levantar el lápiz.
+    m_useBase = m_path.tapered() && ensureStrokeBase();
+    m_provisionalBounds = {};
+    m_drawnRevision = m_path.revision() - 1;
     return true;
 }
 
 void Canvas::strokeTo(float x, float y, float pressure) {
     if (m_stroking) {
-        m_brush.strokeTo(x, y, pressure);
+        m_path.moveTo(x, y, pressure);
     }
 }
 
@@ -175,6 +193,7 @@ void Canvas::endStroke() {
     if (!m_stroking) {
         return;
     }
+    m_path.finish();
     flushDabs();
     commitStroke();
 }
@@ -183,20 +202,65 @@ void Canvas::cancelStroke() {
     if (!m_stroking) {
         return;
     }
-    m_brush.discardPending();
+    m_path = {};
     clearStrokeBuffer(m_strokeBounds);
     m_layers.markDirty(m_strokeBounds);
     m_strokeBounds = {};
+    m_provisionalBounds = {};
     m_stroking = false;
 }
 
+bool Canvas::ensureStrokeBase() {
+    if (m_strokeBase) {
+        return true;
+    }
+    if (!m_strokeBase.create(width(), height())) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Sin memoria para ver el afinado mientras se pinta");
+        return false;
+    }
+    return true;
+}
+
 void Canvas::flushDabs() {
-    if (!m_brush.hasPendingDabs()) {
+    if (!m_stroking) {
         return;
     }
-    const IRect touched = m_brush.flush(m_strokeTarget.fbo.id(), width(), height(), m_strokeColor);
-    m_strokeBounds.unite(touched);
-    m_layers.markDirty(touched);
+    m_dabs.clear();
+    m_path.takeFinal(m_dabs);
+    if (!m_useBase) {
+        if (m_dabs.empty()) {
+            return;
+        }
+        const IRect touched = m_brush.draw(m_strokeTarget.fbo.id(), width(), height(), m_dabs, m_strokeParams,
+                                           m_strokeColor);
+        m_strokeBounds.unite(touched);
+        m_layers.markDirty(touched);
+        return;
+    }
+    if (m_dabs.empty() && m_path.revision() == m_drawnRevision) {
+        return;
+    }
+
+    // Los definitivos van a la base. Lo que se ve es la base más los provisionales: se
+    // copia la base sobre los provisionales de antes y lo nuevo, y encima van los de ahora.
+    const IRect canvas = IRect::ofSize(width(), height());
+    const IRect finals = m_brush.draw(m_strokeBase.fbo.id(), width(), height(), m_dabs, m_strokeParams,
+                                      m_strokeColor);
+    const std::vector<Dab>& provisional = m_path.provisional();
+    const IRect provisionalBounds = Brush::bounds(provisional).intersected(canvas);
+    IRect restore = m_provisionalBounds;
+    restore.unite(finals);
+    restore.unite(provisionalBounds);
+    if (!restore.empty()) {
+        glDisable(GL_SCISSOR_TEST);
+        copyRect(m_strokeBase.fbo.id(), restore, m_strokeTarget.fbo.id(), restore.x0, restore.y0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    m_brush.draw(m_strokeTarget.fbo.id(), width(), height(), provisional, m_strokeParams, m_strokeColor);
+    m_provisionalBounds = provisionalBounds;
+    m_drawnRevision = m_path.revision();
+    m_strokeBounds.unite(restore);
+    m_layers.markDirty(restore);
 }
 
 void Canvas::commitStroke() {
@@ -215,7 +279,8 @@ void Canvas::commitStroke() {
         } else if (m_strokeMode == StrokePreview::Mode::PaintAtop) {
             blend = Compositor::Blend::Atop;
         }
-        m_compositor.draw(layer.target.fbo.id(), m_strokeTarget.texture.id(), m_strokeOpacity, blend, bounds);
+        m_compositor.draw(layer.target.fbo.id(), m_strokeTarget.texture.id(), m_strokeOpacity, blend, bounds,
+                          &m_strokeGrain);
         clearStrokeBuffer(bounds);
         ++layer.revision;
         m_layers.markDirty(bounds);
@@ -228,6 +293,7 @@ void Canvas::commitStroke() {
         }
     }
     m_strokeBounds = {};
+    m_provisionalBounds = {};
     m_stroking = false;
 }
 
@@ -236,12 +302,16 @@ void Canvas::clearStrokeBuffer(const IRect& rect) {
     if (area.empty()) {
         return;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, m_strokeTarget.fbo.id());
     glViewport(0, 0, width(), height());
     glEnable(GL_SCISSOR_TEST);
     glScissor(area.x0, area.y0, area.width(), area.height());
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    for (const gfx::RenderTarget* target : {&m_strokeTarget, &m_strokeBase}) {
+        if (*target) {
+            glBindFramebuffer(GL_FRAMEBUFFER, target->fbo.id());
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+    }
     glDisable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -758,6 +828,7 @@ bool Canvas::update() {
     preview.texture = m_strokeTarget.texture.id();
     preview.opacity = m_strokeOpacity;
     preview.mode = m_strokeMode;
+    preview.grain = m_strokeGrain;
     m_compositor.compose(m_layers, dirty, m_stroking ? &preview : nullptr);
 
     m_layers.clearDirty();

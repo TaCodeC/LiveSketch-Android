@@ -4,6 +4,7 @@
 #include "Canvas/Compositor.h"
 #include "Canvas/History.h"
 #include "Canvas/LayerStack.h"
+#include "Canvas/StrokePath.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,9 +14,10 @@
 // El lienzo: capas, pincel, trazo en curso y compuesto. Todo en el hilo del contexto GL.
 //
 // El trazo en curso se pinta en un buffer aparte (tamaño del lienzo) y se ve encima de
-// la capa activa. Al terminar se funde con la capa aplicando la opacidad del pincel (si
-// la capa tiene el alfa bloqueado, solo donde ya hay pintura), o se usa para borrar si
-// el borrador está activo.
+// la capa activa. Al terminar se funde con la capa aplicando la opacidad del pincel y el
+// grano del papel (si la capa tiene el alfa bloqueado, solo donde ya hay pintura), o se
+// usa para borrar si el borrador está activo. Si el pincel afina el final, los sellos
+// definitivos se guardan en un segundo buffer y el primero es ese más los provisionales.
 //
 // Los trazos y las operaciones de capas se pueden deshacer: antes de cambiar píxeles se
 // copia la zona afectada a una textura (en la GPU, sin pasar por la RAM).
@@ -33,9 +35,12 @@ public:
     LayerStack& layers() { return m_layers; }
     const LayerStack& layers() const { return m_layers; }
 
+    // El pincel se lee al empezar cada trazo.
     BrushSettings& brushSettings() { return m_settings; }
     const BrushSettings& brushSettings() const { return m_settings; }
-    bool setBrushType(int type);
+    // Píxeles del lienzo por punto de pantalla con el zoom actual: la estabilización se
+    // mide en la pantalla.
+    void setViewScale(float canvasPixelsPerPoint);
 
     // Por qué no se puede pintar en la capa activa.
     enum class StrokeBlock {
@@ -124,7 +129,9 @@ private:
     void fill(Layer& layer, float r, float g, float b, float a);
     void flushDabs();
     void commitStroke();
+    // Deja transparentes los buffers de trazo en `rect`.
     void clearStrokeBuffer(const IRect& rect);
+    bool ensureStrokeBase();
     // Cambia los píxeles de toda la capa con `change` y guarda el paso de deshacer.
     template <typename Change>
     void changePixels(int index, Change change);
@@ -147,13 +154,23 @@ private:
     Compositor m_compositor;
     Brush m_brush;
     BrushSettings m_settings;
+    float m_pixelsPerPoint = 1.0f;
 
-    gfx::RenderTarget m_strokeTarget;
+    gfx::RenderTarget m_strokeTarget;   // lo que se ve del trazo
+    gfx::RenderTarget m_strokeBase;     // sellos definitivos (con afinado); se crea al usarlo
     bool m_stroking = false;
     IRect m_strokeBounds;
     float m_strokeOpacity = 1.0f;
     StrokePreview::Mode m_strokeMode = StrokePreview::Mode::Paint;
     float m_strokeColor[3] = {0.0f, 0.0f, 0.0f};
+    BrushParams m_strokeParams;
+    StrokeGrain m_strokeGrain;
+    StrokePath m_path;
+    std::vector<Dab> m_dabs;            // tanda de sellos que se va a pintar
+    bool m_useBase = false;
+    IRect m_provisionalBounds;          // provisionales pintados en m_strokeTarget
+    uint32_t m_drawnRevision = 0;
+    uint32_t m_strokeCount = 0;         // semilla del azar de cada trazo
 
     uint64_t m_version = 0;
     std::vector<std::vector<uint8_t>> m_snapshot; // una entrada por capa, de abajo arriba
