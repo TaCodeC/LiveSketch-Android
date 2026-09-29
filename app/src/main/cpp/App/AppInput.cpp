@@ -9,6 +9,9 @@
 //   central mueve, rueda zoom.
 // - Con el cuentagotas de la barra lateral armado, la siguiente pulsación en el lienzo
 //   elige un color en vez de dibujar.
+// - Con la herramienta Selección o Transformar, el lápiz, un dedo (dibuje o no con el
+//   dedo) y el botón izquierdo del ratón la manejan en vez de pintar. Con el ratón,
+//   Mayús suma a la selección y Alt resta.
 //
 // Cada pulsación se decide una vez, en el punto donde empieza: si cae sobre la interfaz
 // (una barra, un panel o, con un panel abierto, cualquier sitio: el toque lo cierra) es
@@ -87,7 +90,51 @@ bool App::penBlocksFingers() const {
 
 bool App::canvasInteractionActive() const {
     return m_pen.drawing || !m_fingers.empty() || m_mouseDrawing || m_mousePanning ||
-           m_pick.source != PickSource::None;
+           m_pick.source != PickSource::None || m_toolGesture.pointer != ToolPointer::None;
+}
+
+// -----------------------------------------------------------------------------
+// Selección y Transformar
+// -----------------------------------------------------------------------------
+
+ToolView App::toolView() const {
+    const float density = std::max(SDL_GetWindowPixelDensity(m_window), 0.01f);
+    ToolView view;
+    view.offset = m_camera.offset() / density;
+    view.zoom = m_camera.zoom() / density;
+    return view;
+}
+
+void App::beginToolGesture(ToolPointer pointer, SDL_FingerID finger, float x, float y) {
+    endToolGesture(true);
+    const SDL_Keymod mods = SDL_GetModState();
+    SelectOp modifier = SelectOp::Replace;
+    if (mods & SDL_KMOD_SHIFT) {
+        modifier = SelectOp::Add;
+    } else if (mods & SDL_KMOD_ALT) {
+        modifier = SelectOp::Subtract;
+    }
+    m_toolGesture = {pointer, finger, SDL_GetTicks(), x, y};
+    m_ui.toolPress(m_canvas, toolView(), ImVec2(x, y), modifier);
+}
+
+void App::moveToolGesture(float x, float y) {
+    m_toolGesture.x = x;
+    m_toolGesture.y = y;
+    const bool constrain = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    m_ui.toolDrag(m_canvas, toolView(), ImVec2(x, y), constrain);
+}
+
+void App::endToolGesture(bool cancel) {
+    if (m_toolGesture.pointer == ToolPointer::None) {
+        return;
+    }
+    if (cancel) {
+        m_ui.toolCancel(m_canvas);
+    } else {
+        m_ui.toolRelease(m_canvas, toolView(), ImVec2(m_toolGesture.x, m_toolGesture.y));
+    }
+    m_toolGesture = {};
 }
 
 void App::notifyStrokeBlocked(bool eraserTip) {
@@ -233,7 +280,7 @@ void App::endPick(bool apply) {
 }
 
 void App::checkLongPress() {
-    if (!m_ui.drawWithFinger() || m_pick.source != PickSource::None || m_fingers.size() != 1 ||
+    if (!m_ui.drawWithFinger() || toolActive() || m_pick.source != PickSource::None || m_fingers.size() != 1 ||
         m_tap.fingers.size() != 1 || m_tap.moved || SDL_GetTicks() - m_tap.startMs < kLongPressMs) {
         return;
     }
@@ -276,6 +323,9 @@ void App::onPenEvent(const SDL_Event& event) {
         if (m_pick.source == PickSource::Pen) {
             movePick(m_pen.x, m_pen.y);
         }
+        if (m_toolGesture.pointer == ToolPointer::Pen) {
+            moveToolGesture(m_pen.x, m_pen.y);
+        }
         break;
 
     case SDL_EVENT_PEN_AXIS:
@@ -298,6 +348,10 @@ void App::onPenEvent(const SDL_Event& event) {
             beginPick(PickSource::Pen, 0, m_pen.x, m_pen.y);
             break;
         }
+        if (toolActive()) {
+            beginToolGesture(ToolPointer::Pen, 0, m_pen.x, m_pen.y);
+            break;
+        }
         m_pen.drawing = true;
         m_pen.strokePending = true;
         m_pen.eraser = event.ptouch.eraser;
@@ -309,6 +363,9 @@ void App::onPenEvent(const SDL_Event& event) {
         m_pen.lastActiveMs = now;
         if (m_pick.source == PickSource::Pen) {
             endPick(true);
+        }
+        if (m_toolGesture.pointer == ToolPointer::Pen) {
+            endToolGesture(false);
         }
         endPenStroke();
         break;
@@ -369,8 +426,7 @@ void App::finishTapGesture(bool canceled) {
     if (tap && m_canvas.ready()) {
         // Los dedos movieron la vista un poco (pellizco): vuelve a como estaba.
         m_camera.restoreView(m_tap.view);
-        const bool redo = m_tap.maxFingers == 3;
-        m_ui.showUndo(redo, redo ? m_canvas.redo() : m_canvas.undo());
+        m_ui.undoGesture(m_canvas, m_tap.maxFingers == 3);
     }
     m_tap = {};
 }
@@ -419,10 +475,21 @@ void App::onFingerEvent(const SDL_Event& event) {
 
         m_fingers.push_back({touch.fingerID, position});
         if (m_fingers.size() == 1) {
-            if (m_ui.drawWithFinger()) {
+            if (toolActive()) {
+                beginToolGesture(ToolPointer::Finger, touch.fingerID, position.x / density, position.y / density);
+            } else if (m_ui.drawWithFinger()) {
                 // La presión de un dedo no es fiable: se dibuja como con presión 1.
                 m_fingerDrawing = beginCanvasStroke(position, 1.0f, false);
                 m_fingerStrokeStartMs = now;
+            }
+        } else if (m_toolGesture.pointer == ToolPointer::Finger) {
+            // Segundo dedo: como al dibujar, pronto es un pellizco (o deshacer) y lo que
+            // hizo el primero no cuenta; si no, se termina.
+            if (now - m_toolGesture.startMs < kPinchCancelMs) {
+                endToolGesture(true);
+            } else {
+                endToolGesture(false);
+                m_tap.candidate = false;
             }
         } else if (m_fingerDrawing) {
             // Segundo dedo: empieza un pellizco o un toque con dos dedos.
@@ -452,6 +519,10 @@ void App::onFingerEvent(const SDL_Event& event) {
             return;
         }
         finger->position = position;
+        if (m_toolGesture.pointer == ToolPointer::Finger && m_toolGesture.finger == touch.fingerID) {
+            moveToolGesture(position.x / density, position.y / density);
+            return;
+        }
         if (m_fingerDrawing) {
             const glm::vec2 point = toCanvas(position);
             m_canvas.strokeTo(point.x, point.y, 1.0f);
@@ -473,6 +544,9 @@ void App::onFingerEvent(const SDL_Event& event) {
         const bool canceled = event.type == SDL_EVENT_FINGER_CANCELED;
         if (picking) {
             endPick(!canceled);
+        }
+        if (m_toolGesture.pointer == ToolPointer::Finger && m_toolGesture.finger == touch.fingerID) {
+            endToolGesture(canceled);
         }
         if (finger != m_fingers.end()) {
             if (m_fingerDrawing) {
@@ -516,9 +590,12 @@ void App::onMouseEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         const glm::vec2 position = windowToPixels(event.button.x, event.button.y);
         if (event.button.button == SDL_BUTTON_LEFT) {
+            // Con Selección, Alt resta en vez de abrir el cuentagotas.
             const bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
-            if (alt || m_ui.eyedropperArmed()) {
+            if (m_ui.eyedropperArmed() || (alt && !toolActive())) {
                 beginPick(PickSource::Mouse, 0, event.button.x, event.button.y);
+            } else if (toolActive()) {
+                beginToolGesture(ToolPointer::Mouse, 0, event.button.x, event.button.y);
             } else {
                 m_mouseDrawing = beginCanvasStroke(position, 1.0f, false);
             }
@@ -537,6 +614,9 @@ void App::onMouseEvent(const SDL_Event& event) {
             const glm::vec2 point = toCanvas(position);
             m_canvas.strokeTo(point.x, point.y, 1.0f);
         }
+        if (m_toolGesture.pointer == ToolPointer::Mouse) {
+            moveToolGesture(event.motion.x, event.motion.y);
+        }
         if (m_mousePanning) {
             m_camera.pan(position - m_mouseLast);
         }
@@ -547,6 +627,8 @@ void App::onMouseEvent(const SDL_Event& event) {
         if (event.button.button == SDL_BUTTON_LEFT) {
             if (m_pick.source == PickSource::Mouse) {
                 endPick(true);
+            } else if (m_toolGesture.pointer == ToolPointer::Mouse) {
+                endToolGesture(false);
             } else if (m_mouseDrawing) {
                 m_canvas.endStroke();
                 m_mouseDrawing = false;
@@ -571,6 +653,7 @@ void App::onMouseEvent(const SDL_Event& event) {
 void App::endGestures() {
     endPenStroke();
     endPick(false);
+    endToolGesture(true);
     if (m_fingerDrawing) {
         m_canvas.endStroke();
         m_fingerDrawing = false;

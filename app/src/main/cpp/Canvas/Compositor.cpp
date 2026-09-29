@@ -38,6 +38,8 @@ uniform sampler2D uGrain;
 uniform float uGrainScale;     // uv del grano por píxel del lienzo
 uniform float uGrainDepth;
 uniform int uGrainOn;          // grano del trazo: 0 no hay, 1 sobre uStroke, 2 sobre uLayer
+uniform sampler2D uSelection;
+uniform int uSelectionOn;      // la máscara de la selección multiplica: 1 el trazo, 2 la capa
 out vec4 fragColor;
 
 // Las coordenadas del FBO son las del lienzo: el grano queda fijo al lienzo.
@@ -56,6 +58,9 @@ vec4 withStroke(vec4 color, int mode) {
     stroke *= uStrokeOpacity;
     if (uGrainOn == 1) {
         stroke *= grain();
+    }
+    if (uSelectionOn == 1) {
+        stroke *= texture(uSelection, vUV).r;
     }
     if (mode == 1) {
         return stroke + color * (1.0 - stroke.a);
@@ -174,6 +179,9 @@ void main() {
     if (uGrainOn == 2) {
         layer *= grain();
     }
+    if (uSelectionOn == 2) {
+        layer *= texture(uSelection, vUV).r;
+    }
     vec4 src = withStroke(layer, uStrokeMode) * uOpacity;
     if (uClipMode == 1) {
         src *= withStroke(texture(uClip, vUV), uClipStrokeMode).a;
@@ -195,12 +203,42 @@ void main() {
 }
 )";
 
-// Color liso (rellenar, invertir, escalar).
+// Color liso (rellenar, vaciar, invertir, escalar).
 constexpr const char* kColorFragment = R"(
 uniform vec4 uColor;
 out vec4 fragColor;
 void main() {
     fragColor = uColor;
+}
+)";
+
+// Color liso multiplicado por la máscara de la selección. El destino es del tamaño del
+// lienzo: su píxel es el de la máscara.
+constexpr const char* kMaskedColorFragment = R"(
+uniform vec4 uColor;
+uniform sampler2D uMask;
+out vec4 fragColor;
+void main() {
+    fragColor = uColor * texelFetch(uMask, ivec2(gl_FragCoord.xy), 0).r;
+}
+)";
+
+// Filtros de una capa, mezclados con el original según la máscara de la selección.
+constexpr const char* kFilterFragment = R"(
+in vec2 vUV;
+uniform sampler2D uSource;
+uniform sampler2D uMask;
+uniform int uMaskOn;
+uniform int uFilter;       // 0: invertir
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(uSource, vUV);
+    vec4 f = c;
+    if (uFilter == 0) {
+        f = vec4(c.a - c.rgb, c.a);   // premultiplicado: 1 − color pasa a alfa − color
+    }
+    float m = uMaskOn == 1 ? texture(uMask, vUV).r : 1.0;
+    fragColor = mix(c, f, m);
 }
 )";
 
@@ -210,7 +248,8 @@ constexpr GLint kStrokeUnit = 1;
 constexpr GLint kBackdropUnit = 2;
 constexpr GLint kClipUnit = 3;
 constexpr GLint kGrainUnit = 4;
-constexpr GLint kUnitCount = 5;
+constexpr GLint kSelectionUnit = 5;
+constexpr GLint kUnitCount = 6;
 
 int strokeMode(const StrokePreview* stroke) {
     if (!stroke) {
@@ -243,7 +282,9 @@ bool Compositor::init(int width, int height) {
 
     m_program = gfx::makeProgram("compositor", kVertex, kFragment);
     m_colorProgram = gfx::makeProgram("compositor-color", kVertex, kColorFragment);
-    if (!m_program || !m_colorProgram) {
+    m_maskedColorProgram = gfx::makeProgram("compositor-masked-color", kVertex, kMaskedColorFragment);
+    m_filterProgram = gfx::makeProgram("compositor-filter", kVertex, kFilterFragment);
+    if (!m_program || !m_colorProgram || !m_maskedColorProgram || !m_filterProgram) {
         destroy();
         return false;
     }
@@ -263,7 +304,13 @@ bool Compositor::init(int width, int height) {
     m_uGrainScale = glGetUniformLocation(id, "uGrainScale");
     m_uGrainDepth = glGetUniformLocation(id, "uGrainDepth");
     m_uGrainOn = glGetUniformLocation(id, "uGrainOn");
+    m_uSelectionOn = glGetUniformLocation(id, "uSelectionOn");
     m_uColor = glGetUniformLocation(m_colorProgram.id(), "uColor");
+    m_uMaskedColor = glGetUniformLocation(m_maskedColorProgram.id(), "uColor");
+    m_uFilterSource = glGetUniformLocation(m_filterProgram.id(), "uSource");
+    m_uFilterMask = glGetUniformLocation(m_filterProgram.id(), "uMask");
+    m_uFilterMaskOn = glGetUniformLocation(m_filterProgram.id(), "uMaskOn");
+    m_uFilterKind = glGetUniformLocation(m_filterProgram.id(), "uFilter");
 
     glUseProgram(id);
     glUniform1i(m_uLayer, kLayerUnit);
@@ -271,6 +318,12 @@ bool Compositor::init(int width, int height) {
     glUniform1i(m_uBackdrop, kBackdropUnit);
     glUniform1i(m_uClip, kClipUnit);
     glUniform1i(m_uGrain, kGrainUnit);
+    glUniform1i(glGetUniformLocation(id, "uSelection"), kSelectionUnit);
+    glUseProgram(m_maskedColorProgram.id());
+    glUniform1i(glGetUniformLocation(m_maskedColorProgram.id(), "uMask"), 0);
+    glUseProgram(m_filterProgram.id());
+    glUniform1i(m_uFilterSource, 0);
+    glUniform1i(m_uFilterMask, 1);
     glUseProgram(0);
 
     const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
@@ -293,6 +346,8 @@ void Compositor::destroy() {
     m_composite.destroy();
     m_vbo.reset();
     m_vao.reset();
+    m_filterProgram.reset();
+    m_maskedColorProgram.reset();
     m_colorProgram.reset();
     m_program.reset();
 }
@@ -345,6 +400,7 @@ void Compositor::drawPass(const Pass& pass) {
         pass.backdrop ? pass.backdrop : pass.layer,
         pass.clip ? pass.clip : pass.layer,
         grain ? grain->texture : pass.layer,
+        pass.selection ? pass.selection : pass.layer,
     };
     for (GLint unit = 0; unit < kUnitCount; ++unit) {
         glActiveTexture(static_cast<GLenum>(GL_TEXTURE0 + unit));
@@ -362,12 +418,20 @@ void Compositor::drawPass(const Pass& pass) {
     glUniform1i(m_uGrainOn, grainOn);
     glUniform1f(m_uGrainScale, grain ? grain->scale : 1.0f);
     glUniform1f(m_uGrainDepth, grain ? grain->depth : 0.0f);
+    glUniform1i(m_uSelectionOn, pass.selection ? pass.selectionOn : 0);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
-void Compositor::drawColor(const float rgba[4]) {
-    glUseProgram(m_colorProgram.id());
-    glUniform4fv(m_uColor, 1, rgba);
+void Compositor::drawColor(const float rgba[4], GLuint mask) {
+    if (mask) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mask);
+        glUseProgram(m_maskedColorProgram.id());
+        glUniform4fv(m_uMaskedColor, 1, rgba);
+    } else {
+        glUseProgram(m_colorProgram.id());
+        glUniform4fv(m_uColor, 1, rgba);
+    }
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
@@ -420,6 +484,11 @@ void Compositor::compose(const LayerStack& layers, const IRect& rect, const Stro
             pass.clip = clipLayer.target.texture.id();
             pass.clipStroke = stroke && base == active ? stroke : nullptr;
         }
+        // El trazo solo llega a lo seleccionado (la copia de trabajo ya lo tiene en cuenta).
+        if ((pass.stroke || pass.clipStroke) && stroke->selection && stroke->mode != StrokePreview::Mode::Replace) {
+            pass.selection = stroke->selection;
+            pass.selectionOn = 1;
+        }
 
         if (layer.blend != BlendMode::Normal && ensureScratch()) {
             const gfx::RenderTarget* next = current == &m_composite ? &m_scratch : &m_composite;
@@ -442,7 +511,7 @@ void Compositor::compose(const LayerStack& layers, const IRect& rect, const Stro
 }
 
 void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect,
-                      const StrokeGrain* grain) {
+                      const StrokeGrain* grain, GLuint mask) {
     const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
     if (area.empty() || !m_program) {
         return;
@@ -469,6 +538,8 @@ void Compositor::draw(GLuint target, GLuint source, float opacity, Blend blend, 
     pass.layer = source;
     pass.opacity = opacity;
     pass.layerGrain = grain;
+    pass.selection = mask;
+    pass.selectionOn = 2;
     drawPass(pass);
     finishPass();
 }
@@ -512,21 +583,46 @@ void Compositor::merge(const gfx::RenderTarget& lower, const Layer& upper, GLuin
     finishPass();
 }
 
-void Compositor::fill(GLuint target, const float rgb[3], Fill mode, const IRect& rect) {
+void Compositor::fill(GLuint target, const float rgb[3], Fill mode, const IRect& rect, GLuint mask) {
     const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
     if (area.empty() || !m_program) {
         return;
     }
 
     bindCanvasPass(target, area);
+    // Con máscara, el color va encima según ella (m): destino·(1 − m) + color·m.
     if (mode == Fill::Replace) {
-        glBlendFunc(GL_ONE, GL_ZERO);
+        if (!mask) {
+            glBlendFunc(GL_ONE, GL_ZERO);
+        }
+    } else if (mask) {
+        // color·m·alfa del destino + destino·(1 − m); el alfa no cambia
+        glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
     } else {
         // color · alfa del destino; el alfa no cambia
         glBlendFuncSeparate(GL_DST_ALPHA, GL_ZERO, GL_ZERO, GL_ONE);
     }
     const float color[4] = {rgb[0], rgb[1], rgb[2], 1.0f};
-    drawColor(color);
+    drawColor(color, mask);
+    finishPass();
+}
+
+void Compositor::clear(GLuint target, const IRect& rect, GLuint mask) {
+    const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
+    if (area.empty() || !m_program) {
+        return;
+    }
+
+    bindCanvasPass(target, area);
+    if (!mask) {
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    } else {
+        // destino *= 1 − m
+        glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+        const float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        drawColor(color, mask);
+    }
     finishPass();
 }
 
@@ -543,5 +639,31 @@ void Compositor::invert(GLuint target, const IRect& rect) {
     glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE, GL_ZERO, GL_ONE);
     const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     drawColor(white);
+    finishPass();
+}
+
+void Compositor::filter(const gfx::RenderTarget& target, Filter filter, GLuint mask, const gfx::RenderTarget& scratch,
+                        const IRect& rect) {
+    const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
+    if (area.empty() || !m_filterProgram) {
+        return;
+    }
+
+    // El filtro lee la capa, así que se escribe en `scratch` y se copia.
+    bindCanvasPass(scratch.fbo.id(), area);
+    glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, target.texture.id());
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, mask ? mask : target.texture.id());
+    glUseProgram(m_filterProgram.id());
+    glUniform1i(m_uFilterMaskOn, mask ? 1 : 0);
+    glUniform1i(m_uFilterKind, static_cast<int>(filter));
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    blit(scratch.fbo.id(), target.fbo.id(), area);
+    glBindFramebuffer(GL_FRAMEBUFFER, scratch.fbo.id());
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
     finishPass();
 }

@@ -2,6 +2,7 @@
 
 #include "Gfx/GL.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 
@@ -85,19 +86,28 @@ using Buffer = Object<BufferTraits>;
 using VertexArray = Object<VertexArrayTraits>;
 using Program = Object<ProgramTraits>;
 
-// Textura RGBA8 con premultiplicado de alfa + FBO que la usa como color.
+// Textura RGBA8 con premultiplicado de alfa + FBO que la usa como color. Las máscaras
+// (la selección) son de un solo canal, R8.
 // Convención de todo el lienzo: la fila 0 de la textura es la parte de ARRIBA de la
 // imagen, así que las lecturas con glReadPixels ya salen de arriba abajo (PNG, NDI).
 struct RenderTarget {
+    enum class Format { Rgba8, R8 };
+
     Texture texture;
     Framebuffer fbo;
     int width = 0;
     int height = 0;
+    Format format = Format::Rgba8;
 
-    // `pixels` (opcional): RGBA8 premultiplicado, filas de arriba abajo, sin relleno.
-    bool create(int w, int h, const void* pixels = nullptr);
+    // `pixels` (opcional): RGBA8 premultiplicado (o un byte por píxel con R8), filas de
+    // arriba abajo, sin relleno.
+    bool create(int w, int h, const void* pixels = nullptr, Format fmt = Format::Rgba8);
     void destroy();
     explicit operator bool() const { return static_cast<bool>(fbo); }
+    // Bytes que ocupa en la GPU.
+    size_t bytes() const {
+        return static_cast<size_t>(width) * static_cast<size_t>(height) * (format == Format::R8 ? 1u : 4u);
+    }
 };
 
 // Descarta los errores GL pendientes.

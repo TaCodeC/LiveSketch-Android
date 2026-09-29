@@ -31,6 +31,11 @@ constexpr int kFramesAfterInput = 4;
 // "Centrar lienzo": duración de la animación.
 constexpr uint64_t kFitDurationMs = 320;
 
+// Borde de la selección: avanza un paso cada tanto (no hace falta dibujar a 60 fps), y
+// con la herramienta Selección oscurece un poco lo que no está seleccionado.
+constexpr uint64_t kAntsStepMs = 120;
+constexpr float kSelectionVeil = 0.22f;
+
 // Fondo desenfocado del cristal: radio del desenfoque (pt) y, mientras se dibuja, cada
 // cuánto se rehace como mucho.
 constexpr float kBackdropBlurPoints = 22.0f;
@@ -396,6 +401,7 @@ void App::createCanvas(int width, int height) {
                     Notice::Error, 5000);
         return;
     }
+    m_ui.canvasCreated();
     m_camera.setCanvasSize({static_cast<float>(width), static_cast<float>(height)});
     SDL_Log("Lienzo de %dx%d (hasta %d capas)", width, height, m_canvas.maxLayers());
     if (ndi) {
@@ -559,6 +565,7 @@ UiStatus App::uiStatus() const {
     status.screenHeight = m_pixelHeight;
     status.maxCanvasSize = m_maxCanvasSize;
     status.canvasZoom = m_camera.zoom();
+    status.canvasView = toolView();
     status.ndiAvailable = m_ndiAvailable;
     status.ndiRunning = m_ndi.running();
     status.ndiConnections = m_ndi.connections();
@@ -647,6 +654,11 @@ void App::updateBackdrop() {
 void App::renderFrame() {
     const GLuint composite = m_canvas.ready() ? m_canvas.composite().texture.id() : 0;
     m_view.draw(m_camera, composite, 0, m_pixelWidth, m_pixelHeight);
+    if (m_canvas.ready() && m_ui.selectionAnimating(m_canvas)) {
+        const int phase = static_cast<int>(SDL_GetTicks() / kAntsStepMs);
+        const float veil = m_ui.canvasTool() == CanvasTool::Select ? kSelectionVeil : 0.0f;
+        m_view.drawSelection(m_camera, m_canvas.selectionMask(), phase, veil, 0, m_pixelWidth, m_pixelHeight);
+    }
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(m_window);
 }
@@ -671,6 +683,11 @@ void App::schedulePacing() {
     }
     if (!busy) {
         uint64_t deadline = m_ui.wakeDeadline();
+        if (m_canvas.ready() && m_ui.selectionAnimating(m_canvas)) {
+            // El siguiente paso del borde de la selección.
+            const uint64_t step = (SDL_GetTicks() / kAntsStepMs + 1) * kAntsStepMs;
+            deadline = deadline == 0 ? step : std::min(deadline, step);
+        }
         if (m_ndi.running()) {
             // Refresca cada segundo el número de receptores que muestra el menú.
             const uint64_t refresh = SDL_GetTicks() + 1000;

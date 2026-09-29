@@ -41,7 +41,10 @@ void copyRect(GLuint source, const IRect& from, GLuint target, int toX, int toY)
 } // namespace
 
 bool Canvas::init(int width, int height) {
+    // El portapapeles pasa al lienzo nuevo.
+    Clipboard clipboard = std::move(m_clipboard);
     destroy();
+    m_clipboard = std::move(clipboard);
     if (width <= 0 || height <= 0) {
         return false;
     }
@@ -77,13 +80,15 @@ void Canvas::destroy() {
     m_history.clear();
     m_layers.clearAll();
     destroyGpuObjects();
+    m_clipboard = {};
     m_snapshot.clear();
 }
 
 bool Canvas::createGpuObjects() {
     const int w = m_layers.width();
     const int h = m_layers.height();
-    if (!m_compositor.init(w, h) || !m_brush.init() || !m_strokeTarget.create(w, h)) {
+    if (!m_compositor.init(w, h) || !m_brush.init() || !m_strokeTarget.create(w, h) || !m_selection.init(w, h) ||
+        !m_bounds.init() || !m_warp.init()) {
         destroyGpuObjects();
         return false;
     }
@@ -91,10 +96,29 @@ bool Canvas::createGpuObjects() {
 }
 
 void Canvas::destroyGpuObjects() {
+    m_auto = {};
+    m_feather = {};
+    m_transform = {};
+    m_warp.destroy();
+    m_bounds.destroy();
+    m_selection.destroy();
+    ++m_selectionVersion;
     m_strokeBase.destroy();
     m_strokeTarget.destroy();
     m_brush.destroy();
     m_compositor.destroy();
+}
+
+IRect Canvas::operationRect() const {
+    return m_selection.active() ? m_selection.bounds() : IRect::ofSize(width(), height());
+}
+
+void Canvas::settle() {
+    endStroke();
+    finishLayerEdit();
+    endAutoSelect(true);
+    endFeather(true);
+    applyTransform();
 }
 
 size_t Canvas::layerBytes() const { return bytesOf(width(), height()); }
@@ -140,8 +164,7 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     if (!m_ready) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     if (strokeBlock(eraserTip) != StrokeBlock::None) {
         return false;
     }
@@ -264,7 +287,8 @@ void Canvas::flushDabs() {
 }
 
 void Canvas::commitStroke() {
-    const IRect bounds = m_strokeBounds.intersected(IRect::ofSize(width(), height()));
+    // Con selección, la capa solo cambia en lo seleccionado.
+    const IRect bounds = m_strokeBounds.intersected(operationRect());
     if (!bounds.empty()) {
         Layer& layer = m_layers.active();
         HistoryStep step;
@@ -280,8 +304,7 @@ void Canvas::commitStroke() {
             blend = Compositor::Blend::Atop;
         }
         m_compositor.draw(layer.target.fbo.id(), m_strokeTarget.texture.id(), m_strokeOpacity, blend, bounds,
-                          &m_strokeGrain);
-        clearStrokeBuffer(bounds);
+                          &m_strokeGrain, operationMask());
         ++layer.revision;
         m_layers.markDirty(bounds);
 
@@ -292,6 +315,9 @@ void Canvas::commitStroke() {
             m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
         }
     }
+    // Lo que se pintó fuera de la selección tampoco se queda en el buffer.
+    clearStrokeBuffer(m_strokeBounds);
+    m_layers.markDirty(m_strokeBounds.intersected(IRect::ofSize(width(), height())));
     m_strokeBounds = {};
     m_provisionalBounds = {};
     m_stroking = false;
@@ -331,7 +357,7 @@ void Canvas::selectLayer(int index) {
     if (!m_layers.validIndex(index) || index == m_layers.activeIndex()) {
         return;
     }
-    endStroke();
+    settle();
     m_layers.setActive(index);
 }
 
@@ -339,8 +365,7 @@ bool Canvas::addLayer() {
     if (!m_ready || m_layers.count() >= maxLayers()) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const int position = m_layers.activeIndex() + 1;
     Layer* layer = m_layers.insert(position, "");
     if (!layer) {
@@ -359,8 +384,7 @@ bool Canvas::duplicateLayer(int index) {
     if (!m_ready || !m_layers.validIndex(index) || m_layers.count() >= maxLayers()) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
 
     const Layer& source = m_layers.at(index);
     const GLuint sourceFbo = source.target.fbo.id();
@@ -396,8 +420,7 @@ bool Canvas::removeLayer(int index) {
     if (!m_ready || !m_layers.validIndex(index)) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const uint32_t id = m_layers.at(index).id;
     std::unique_ptr<Layer> removed = m_layers.take(index);
     if (!removed) {
@@ -417,8 +440,7 @@ bool Canvas::moveLayer(int from, int to) {
     if (!m_ready || !m_layers.validIndex(from)) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const uint32_t id = m_layers.at(from).id;
     if (!m_layers.move(from, to)) {
         return false;
@@ -450,8 +472,7 @@ bool Canvas::mergeDown(int index) {
     if (!m_ready || !canMergeDown(index)) {
         return false;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
 
     const Layer& upper = m_layers.at(index);
     Layer& lower = m_layers.at(index - 1);
@@ -512,21 +533,25 @@ void Canvas::changePixels(int index, Change change) {
     if (!m_ready || !m_layers.validIndex(index)) {
         return;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     Layer& layer = m_layers.at(index);
+    // Con selección, solo cambia lo seleccionado.
+    const IRect rect = operationRect();
+    if (rect.empty()) {
+        return;
+    }
     HistoryStep step;
     step.kind = HistoryStep::Kind::Pixels;
     step.layerId = layer.id;
-    step.rect = IRect::ofSize(width(), height());
+    step.rect = rect;
     const bool saved = saveRegion(layer, step.rect, step.pixels);
 
-    change(layer, step.rect);
+    change(layer, step.rect, operationMask());
     ++layer.revision;
-    m_layers.markAllDirty();
+    m_layers.markDirty(rect);
 
     if (saved) {
-        step.bytes = layerBytes();
+        step.bytes = bytesOf(rect.width(), rect.height());
         record(std::move(step));
     } else {
         m_history.clear();
@@ -534,7 +559,13 @@ void Canvas::changePixels(int index, Change change) {
 }
 
 void Canvas::clearLayer(int index) {
-    changePixels(index, [this](Layer& layer, const IRect&) { fill(layer, 0.0f, 0.0f, 0.0f, 0.0f); });
+    changePixels(index, [this](Layer& layer, const IRect& rect, GLuint mask) {
+        if (mask) {
+            m_compositor.clear(layer.target.fbo.id(), rect, mask);
+        } else {
+            fill(layer, 0.0f, 0.0f, 0.0f, 0.0f);
+        }
+    });
 }
 
 void Canvas::fillLayer(int index, const float rgb[3]) {
@@ -542,14 +573,20 @@ void Canvas::fillLayer(int index, const float rgb[3]) {
     for (int i = 0; i < 3; ++i) {
         color[i] = std::clamp(rgb[i], 0.0f, 1.0f);
     }
-    changePixels(index, [&](Layer& layer, const IRect& all) {
+    changePixels(index, [&](Layer& layer, const IRect& rect, GLuint mask) {
         m_compositor.fill(layer.target.fbo.id(), color,
-                          layer.alphaLock ? Compositor::Fill::Atop : Compositor::Fill::Replace, all);
+                          layer.alphaLock ? Compositor::Fill::Atop : Compositor::Fill::Replace, rect, mask);
     });
 }
 
 void Canvas::invertLayer(int index) {
-    changePixels(index, [this](Layer& layer, const IRect& all) { m_compositor.invert(layer.target.fbo.id(), all); });
+    changePixels(index, [this](Layer& layer, const IRect& rect, GLuint mask) {
+        if (mask) {
+            m_compositor.filter(layer.target, Compositor::Filter::Invert, mask, m_strokeTarget, rect);
+        } else {
+            m_compositor.invert(layer.target.fbo.id(), rect);
+        }
+    });
 }
 
 LayerProperties Canvas::properties(int index) const {
@@ -584,8 +621,7 @@ void Canvas::setLayerVisible(int index, bool visible) {
     if (!m_ready || !m_layers.validIndex(index) || m_layers.at(index).visible == visible) {
         return;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const LayerProperties before = properties(index);
     m_layers.setVisible(index, visible);
     recordProperties(index, before);
@@ -645,8 +681,7 @@ void Canvas::setLayerAlphaLock(int index, bool locked) {
     if (!m_ready || !m_layers.validIndex(index) || m_layers.at(index).alphaLock == locked) {
         return;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const LayerProperties before = properties(index);
     m_layers.setAlphaLock(index, locked);
     recordProperties(index, before);
@@ -657,8 +692,7 @@ void Canvas::setLayerClipping(int index, bool clipping) {
         (clipping && !canClip(index))) {
         return;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     const LayerProperties before = properties(index);
     m_layers.setClipping(index, clipping);
     recordProperties(index, before);
@@ -672,8 +706,7 @@ void Canvas::setReferenceLayer(int index) {
     if (previous == index) {
         return;
     }
-    endStroke();
-    finishLayerEdit();
+    settle();
     HistoryStep step;
     step.kind = HistoryStep::Kind::Reference;
     step.layerId = index >= 0 ? m_layers.at(index).id : 0;
@@ -779,6 +812,25 @@ void Canvas::applyStep(HistoryStep& step, bool undo) {
     case Kind::Reference:
         m_layers.setReference(m_layers.indexOf(undo ? step.otherId : step.layerId));
         break;
+
+    case Kind::Selection:
+        if (!step.rect.empty() && step.pixels) {
+            swapSelection(step.rect, step.pixels);
+        }
+        setSelectionState(undo ? step.selectionBefore : step.selectionAfter);
+        break;
+
+    case Kind::Group:
+        if (undo) {
+            for (auto it = step.children.rbegin(); it != step.children.rend(); ++it) {
+                applyStep(*it, true);
+            }
+        } else {
+            for (HistoryStep& child : step.children) {
+                applyStep(child, false);
+            }
+        }
+        break;
     }
 }
 
@@ -788,6 +840,13 @@ bool Canvas::undo() {
     }
     endStroke();
     finishLayerEdit();
+    endAutoSelect(true);
+    endFeather(true);
+    // Una transformación a medias no está en el historial: deshacer la cancela.
+    if (m_transform.active) {
+        cancelTransform();
+        return true;
+    }
     HistoryStep* step = m_history.stepToUndo();
     if (!step) {
         return false;
@@ -797,11 +856,13 @@ bool Canvas::undo() {
 }
 
 bool Canvas::redo() {
-    if (!m_ready) {
+    if (!m_ready || m_transform.active) {
         return false;
     }
     endStroke();
     finishLayerEdit();
+    endAutoSelect(true);
+    endFeather(true);
     HistoryStep* step = m_history.stepToRedo();
     if (!step) {
         return false;
@@ -829,7 +890,16 @@ bool Canvas::update() {
     preview.opacity = m_strokeOpacity;
     preview.mode = m_strokeMode;
     preview.grain = m_strokeGrain;
-    m_compositor.compose(m_layers, dirty, m_stroking ? &preview : nullptr);
+    preview.selection = operationMask();
+    const StrokePreview* shown = m_stroking ? &preview : nullptr;
+    // Transformando, la capa se ve con la copia de trabajo (lo que quedaría al aplicar).
+    StrokePreview working;
+    if (m_transform.active && m_layers.indexOf(m_transform.layerId) == m_layers.activeIndex()) {
+        working.texture = m_strokeTarget.texture.id();
+        working.mode = StrokePreview::Mode::Replace;
+        shown = &working;
+    }
+    m_compositor.compose(m_layers, dirty, shown);
 
     m_layers.clearDirty();
     ++m_version;
@@ -890,7 +960,7 @@ bool Canvas::takeSnapshot(size_t maxBytes) {
     if (!m_ready) {
         return false;
     }
-    endStroke();
+    settle();
 
     const size_t bytes = layerBytes();
     const size_t total = bytes * static_cast<size_t>(m_layers.count());
@@ -946,6 +1016,7 @@ bool Canvas::recreateGpu(bool* restored) {
     m_strokeBounds = {};
     m_layerEdit = {};
     m_history.clear();
+    m_clipboard = {};   // la selección también se pierde: vive en la GPU
     destroyGpuObjects();
     if (!createGpuObjects()) {
         return false;

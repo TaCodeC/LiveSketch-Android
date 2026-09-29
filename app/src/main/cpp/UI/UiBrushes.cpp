@@ -275,7 +275,7 @@ void Ui::brushesPanel() {
     const float target = m_brushPage ? std::max(listContent, kSettingsHeight) : listContent;
     const float content = ui::anim::follow(ImHashStr("##brushes-height"), target, 20.0f, 0.2f);
     const float width = pt(L.compact ? 372.0f : 400.0f);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * (0.5f + toolIndex));
+    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * (0.5f + toolIndex);
     PanelFrame f;
     if (!beginPanel(f, Panel::Brushes, "##panel-brushes", L.rightBar.Max.x - width, width, pt(content), anchorX,
                     false)) {

@@ -1,13 +1,22 @@
 #pragma once
 
+#include "Canvas/Bounds.h"
 #include "Canvas/Brush.h"
 #include "Canvas/Compositor.h"
 #include "Canvas/History.h"
 #include "Canvas/LayerStack.h"
+#include "Canvas/Selection.h"
+#include "Canvas/SelectionShapes.h"
 #include "Canvas/StrokePath.h"
+#include "Canvas/Warp.h"
 
+#include <glm/mat3x3.hpp>
+#include <glm/vec2.hpp>
+
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -21,6 +30,9 @@
 //
 // Los trazos y las operaciones de capas se pueden deshacer: antes de cambiar píxeles se
 // copia la zona afectada a una textura (en la GPU, sin pasar por la RAM).
+//
+// Con una selección activa, pintar, borrar, rellenar, vaciar e invertir solo cambian lo
+// seleccionado, y copiar y transformar toman solo eso (ver CanvasSelection.cpp).
 class Canvas {
 public:
     // Crea el lienzo con una capa "Fondo" blanca y una "Capa 1" transparente encima.
@@ -60,7 +72,16 @@ public:
     void cancelStroke();
     bool stroking() const { return m_stroking; }
 
-    // Operaciones de capas. Todas cierran antes el trazo en curso.
+    // Resultado de las operaciones que pueden no llegar a hacerse.
+    enum class Edit {
+        Done,
+        Nothing,    // no había nada que hacer (nada seleccionado en la capa, portapapeles vacío...)
+        Hidden,     // la capa activa no se ve
+        Full,       // no caben más capas
+        NoMemory,
+    };
+
+    // Operaciones de capas. Todas cierran antes lo que esté a medias (ver settle()).
     int maxLayers() const;
     void selectLayer(int index);
     bool addLayer();                // encima de la activa
@@ -73,6 +94,7 @@ public:
     // Funde la capa con la de abajo tal como se ven (su modo de fusión y su recorte). La
     // capa resultante conserva las propiedades de la de abajo, con la opacidad horneada.
     bool mergeDown(int index);
+    // Con selección, las tres solo cambian lo seleccionado.
     void clearLayer(int index);     // la deja transparente
     // Rellena la capa con un color opaco; con el alfa bloqueado, solo donde hay pintura.
     void fillLayer(int index, const float rgb[3]);
@@ -94,12 +116,77 @@ public:
     void setReferenceLayer(int index);
     void renameLayer(int index, std::string name);
 
-    // Deshacer y rehacer. Terminan antes el trazo en curso y el cambio de propiedades.
-    bool canUndo() const { return m_history.canUndo() || editPending(); }
-    bool canRedo() const { return m_history.canRedo() && !editPending(); }
+    // Deshacer y rehacer. Terminan antes el trazo en curso, el cambio de propiedades, la
+    // selección automática y el difuminado (así deshacer los quita). Con una
+    // transformación a medias, deshacer la cancela (y no toca el historial).
+    bool canUndo() const { return m_history.canUndo() || editPending() || livePending(); }
+    bool canRedo() const { return m_history.canRedo() && !editPending() && !livePending(); }
     bool undo();
     bool redo();
     const History& history() const { return m_history; }
+
+    // Cierra lo que esté a medias antes de otra operación: el trazo, el cambio de
+    // propiedades, la selección automática y el difuminado (se guardan) y la
+    // transformación (se aplica).
+    void settle();
+
+    // --- Selección (CanvasSelection.cpp) ---
+    bool hasSelection() const { return m_selection.active(); }
+    const SelectionState& selectionState() const { return m_selection.state(); }
+    // Caja de lo seleccionado (vacía sin selección).
+    IRect selectionBounds() const { return m_selection.bounds(); }
+    // Máscara (R8 del tamaño del lienzo) para dibujar el borde; 0 sin selección.
+    GLuint selectionMask() const { return m_selection.activeMask(); }
+    // Sube cada vez que cambia la selección.
+    uint64_t selectionVersion() const { return m_selectionVersion; }
+
+    // Forma cerrada (lazo, rectángulo o elipse) en píxeles del lienzo. Devuelve false si
+    // no cambia nada (la forma no cubre ningún píxel, o resta sin haber selección).
+    bool selectPolygon(std::span<const glm::vec2> polygon, SelectOp op);
+    // Selección automática: lo parecido al color del punto (x, y) y unido a él, en lo que
+    // se ve (o en la capa de referencia, si la hay). `threshold` (0..1) se puede cambiar
+    // en vivo; endAutoSelect la guarda o la deshace.
+    bool beginAutoSelect(float x, float y, SelectOp op, float threshold);
+    void setAutoThreshold(float threshold);
+    void endAutoSelect(bool apply);
+    bool autoSelecting() const { return m_auto.active; }
+    // Lo que tiene pintado la capa (con su alfa).
+    Edit selectLayerContent(int index);
+    void selectAll();
+    // Sin selección, selecciona todo.
+    void invertSelection();
+    // Difuminar el borde en vivo: `radius` en píxeles del lienzo, de 0 a maxFeather().
+    bool beginFeather();
+    void setFeather(float radius);
+    void endFeather(bool apply);
+    bool feathering() const { return m_feather.active; }
+    float featherRadius() const { return m_feather.radius; }
+    float maxFeather() const;
+    void deselect();
+
+    // --- Portapapeles (CanvasSelection.cpp) ---
+    // Copian lo seleccionado de la capa activa (sin selección, la capa entera). Cortar lo
+    // borra además de la capa.
+    Edit copySelection();
+    Edit cutSelection();
+    bool canPaste() const { return static_cast<bool>(m_clipboard.pixels); }
+    // En una capa nueva sobre la activa, en el sitio de donde se copió.
+    Edit paste();
+    // Lo seleccionado de la capa activa a una capa nueva (sin selección, duplica la capa).
+    Edit duplicateSelection();
+
+    // --- Transformar (CanvasSelection.cpp) ---
+    // Toma lo seleccionado de la capa activa (sin selección, toda la capa). Mientras dura,
+    // la capa se ve con el resultado; setTransform lleva las esquinas de
+    // transformSource() (arriba izquierda, arriba derecha, abajo derecha, abajo
+    // izquierda) a `corners`. Aplicar lo funde en la capa (y mueve la selección igual);
+    // cancelar lo deja como estaba.
+    Edit beginTransform();
+    bool transforming() const { return m_transform.active; }
+    IRect transformSource() const { return m_transform.source; }
+    bool setTransform(const glm::vec2 corners[4], bool nearest);
+    void applyTransform();
+    void cancelTransform();
 
     // Color del compuesto en un punto del lienzo, sin premultiplicar. Devuelve false si
     // el punto cae fuera del lienzo o es transparente.
@@ -126,6 +213,10 @@ public:
 private:
     bool createGpuObjects();
     void destroyGpuObjects();
+    // Máscara para las operaciones de píxeles: la de la selección o 0.
+    GLuint operationMask() const { return m_selection.activeMask(); }
+    // Zona que cambia una operación de píxeles: lo seleccionado o todo el lienzo.
+    IRect operationRect() const;
     void fill(Layer& layer, float r, float g, float b, float a);
     void flushDabs();
     void commitStroke();
@@ -143,11 +234,32 @@ private:
     void recordProperties(int index, const LayerProperties& before);
     void beginLayerEdit(int index);
     bool editPending() const;
+    // Selección automática, difuminado o transformación a medias.
+    bool livePending() const { return m_auto.active || m_feather.active || m_transform.active; }
     bool saveRegion(const Layer& layer, const IRect& rect, gfx::RenderTarget& out);
     void swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stored);
     void record(HistoryStep step);
     void applyStep(HistoryStep& step, bool undo);
     size_t layerBytes() const;
+
+    // Selección (CanvasSelection.cpp).
+    // Paso de deshacer con la máscara de `rect` tal como está ahora (antes de cambiarla).
+    bool saveSelection(const IRect& rect, HistoryStep& step);
+    // Igual, con la máscara de antes guardada en la copia de trabajo (cambios en vivo).
+    bool saveSelectionFromScratch(const IRect& rect, HistoryStep& step);
+    void recordSelection(HistoryStep step, bool saved, const SelectionState& after);
+    void swapSelection(const IRect& rect, gfx::RenderTarget& stored);
+    void setSelectionState(const SelectionState& state);
+    // Caja exacta de la máscara dentro de `within` (vacía si no queda nada).
+    IRect maskBounds(const IRect& within);
+    void drawAutoLevels();
+    // Lo seleccionado de `layer` (o todo) en el buffer de trazo, en `rect`. Quien lo usa
+    // lo deja transparente después.
+    void stageSelection(const Layer& layer, const IRect& rect, bool masked);
+    // Caja de lo que hay que copiar o transformar de `layer`.
+    IRect selectedContent(const Layer& layer, bool masked);
+    void updateTransformPreview();
+    void endTransform();
 
     bool m_ready = false;
     LayerStack m_layers;
@@ -181,4 +293,42 @@ private:
         uint32_t layerId = 0;
         LayerProperties before;
     } m_layerEdit;
+
+    // Selección.
+    Selection m_selection;
+    BoundsFinder m_bounds;
+    Warp m_warp;
+    uint64_t m_selectionVersion = 0;
+    struct AutoSelect {
+        bool active = false;
+        SelectOp op = SelectOp::Replace;
+        SelectionState before;
+        std::array<IRect, 256> levelBounds;   // caja de lo que entra con cada nivel
+        int cutoff = -1;
+        IRect drawn;                          // zona de la máscara cambiada en vivo
+    } m_auto;
+    struct Feather {
+        bool active = false;
+        SelectionState before;
+        float radius = 0.0f;
+        IRect drawn;
+    } m_feather;
+
+    // Portapapeles: se conserva al crear otro lienzo.
+    struct Clipboard {
+        gfx::RenderTarget pixels;   // premultiplicado, del tamaño de `rect`
+        IRect rect;                 // de dónde salió, en el lienzo
+    } m_clipboard;
+
+    // Transformar.
+    struct Transform {
+        bool active = false;
+        uint32_t layerId = 0;
+        IRect source;                  // caja de lo que se transforma
+        gfx::RenderTarget content;     // eso, con 1 px transparente alrededor (con mipmaps)
+        bool masked = false;           // había selección: el resto de la capa se queda
+        glm::mat3 homography{1.0f};    // fuente → destino, en píxeles del lienzo
+        bool nearest = false;
+        IRect drawn;                   // caja de lo dibujado en la vista previa
+    } m_transform;
 };

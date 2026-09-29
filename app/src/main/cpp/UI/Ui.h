@@ -1,6 +1,10 @@
 #pragma once
 
 #include "Canvas/BrushLibrary.h"
+#include "Canvas/Selection.h"
+#include "Tools/SelectTool.h"
+#include "Tools/ToolView.h"
+#include "Tools/TransformTool.h"
 #include "UI/Kit.h"
 #include "UI/Previews.h"
 
@@ -22,6 +26,7 @@ struct UiStatus {
     int screenHeight = 0;
     int maxCanvasSize = 0;        // lado máximo de textura que admite la GPU
     float canvasZoom = 1.0f;      // píxeles de la pantalla por píxel del lienzo
+    ToolView canvasView;          // dónde se ve el lienzo (unidades)
 
     bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
     bool ndiRunning = false;
@@ -45,13 +50,18 @@ enum class Notice { Info, Success, Warning, Error, Progress, Undo, Redo };
 
 enum class Tool { Brush, Eraser };
 
+// Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar
+// o transformar.
+enum class CanvasTool { Paint, Select, Transform };
+
 // Interfaz al estilo de Procreate: barras flotantes de cristal arriba, barra lateral con
 // tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se abren desde las
 // barras (hojas desde abajo en un teléfono en vertical).
 //
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
-// (paneles), UiBrushes.cpp (pinceles) y UiDialogs.cpp (alertas y lienzo nuevo).
+// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar) y
+// UiDialogs.cpp (alertas y lienzo nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -94,6 +104,24 @@ public:
     // Diálogo de salir (botón atrás de Android con todo cerrado).
     void askExit();
 
+    // --- Selección y Transformar (UiTools.cpp) ---
+    CanvasTool canvasTool() const { return m_canvasTool; }
+    // Un puntero sobre el lienzo con la herramienta Selección o Transformar (unidades).
+    // `modifier`: Add o Subtract si los pide el teclado (Mayús o Alt); `constrain`: Mayús
+    // mientras se arrastra (cuadrado o círculo).
+    void toolPress(Canvas& canvas, const ToolView& view, ImVec2 position, SelectOp modifier);
+    void toolDrag(Canvas& canvas, const ToolView& view, ImVec2 position, bool constrain);
+    void toolRelease(Canvas& canvas, const ToolView& view, ImVec2 position);
+    // Otro dedo o el sistema cancelan el gesto.
+    void toolCancel(Canvas& canvas);
+    // Deshacer o rehacer desde un gesto: primero lo que la herramienta tenga a medias
+    // (el lazo por puntos, los pasos de la transformación).
+    void undoGesture(Canvas& canvas, bool redo);
+    // Hay que dibujar el siguiente frame (el borde de la selección se mueve).
+    bool selectionAnimating(const Canvas& canvas) const;
+    // Se creó otro lienzo: las herramientas vuelven a empezar.
+    void canvasCreated();
+
     // Bordes de la ventana que tapa la interfaz (unidades): el ajuste del lienzo los evita.
     float insetTop() const { return m_insets[0]; }
     float insetRight() const { return m_insets[1]; }
@@ -104,7 +132,7 @@ public:
     uint64_t wakeDeadline() const;
 
 private:
-    enum class Panel { None, Actions, Ndi, Brushes, Layers, Color };
+    enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify };
     enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas };
 
     struct Layout {
@@ -129,6 +157,7 @@ private:
         ImRect redo;
         float popoverTop = 0.0f;
         float toastTop = 0.0f;
+        float barButton = 0.0f;         // ancho de los botones de las barras de arriba
     };
 
     struct Prefs {
@@ -187,9 +216,12 @@ private:
     void selectTool(Tool tool);
     void togglePanel(Panel panel);
     void closePanels();
-    bool closeTopmost();
+    // Cierra lo último que se abrió (el botón atrás o Escape). Con `canvas`, también sale
+    // de la herramienta Selección o Transformar.
+    bool closeTopmost(Canvas* canvas);
     void handleKeys(Canvas& canvas);
     void undo(Canvas& canvas, bool redo);
+    bool canUndo(const Canvas& canvas) const;
     void setColor(Canvas& canvas, const float rgb[3]);
     void pushRecent(const float rgb[3]);
     float ndiCapsuleWidth() const;
@@ -233,6 +265,35 @@ private:
     void brushesPanel();
     void brushList(ImDrawList* dl, const ImRect& view);
     void brushSettings(ImDrawList* dl, const ImRect& view);
+
+    // --- UiTools.cpp ---
+    // Cambia de herramienta del lienzo: al salir de Transformar se aplica y al entrar se
+    // empieza (si hay algo que transformar).
+    void setCanvasTool(Canvas& canvas, CanvasTool tool);
+    // Vuelve a pintar con el pincel o el borrador.
+    void paintWith(Canvas& canvas, Tool tool);
+    // Cada frame: lo que cambió fuera de la herramienta (otra operación aplicó la
+    // transformación, deshacer quitó el difuminado...).
+    void toolFrame(Canvas& canvas);
+    // Deshace o rehace un paso (con lo de la herramienta primero). Devuelve si hizo algo.
+    bool undoStep(Canvas& canvas, bool redo);
+    bool toolKeys(Canvas& canvas);
+    void selectionNotice(SelectTool::Result result);
+    // Empieza a transformar. `quiet`: sin avisar si no hay nada que transformar.
+    bool enterTransform(Canvas& canvas, bool quiet);
+    void copySelection(Canvas& canvas, bool cut);
+    void pasteClipboard(Canvas& canvas);
+    void duplicateSelection(Canvas& canvas);
+    void clearSelected(Canvas& canvas);
+    void fillSelected(Canvas& canvas);
+    void drawToolOverlay();
+    void drawDock(Canvas& canvas);
+    void selectDock(Canvas& canvas);
+    void transformDock(Canvas& canvas);
+    void drawPolygonBar(Canvas& canvas);
+    void drawThreshold();
+    void featherPanel(Canvas& canvas);
+    void modifyPanel(Canvas& canvas);
 
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
@@ -283,6 +344,17 @@ private:
     bool m_eyedropperArmed = false;
     Picker m_picker;
     Toast m_toast;
+
+    // Selección y Transformar.
+    CanvasTool m_canvasTool = CanvasTool::Paint;
+    CanvasTool m_toolBeforeTransform = CanvasTool::Paint;   // adónde vuelve al aplicar
+    SelectTool m_select;
+    TransformTool m_transform;
+    ImRect m_dock;                  // barra de opciones de la herramienta, en pantalla
+    ImRect m_featherButton;         // botón de difuminar (para situar su panel)
+    ImRect m_modifyButton;          // "Modificar" en un teléfono
+    float m_featherValue = 0.0f;    // posición del deslizador de difuminar (0..1)
+    bool m_autoHint = false;        // ya se explicó la selección automática
 
     // Deshacer mantenido pulsado: se repite.
     ImGuiID m_repeatId = 0;

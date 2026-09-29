@@ -3,6 +3,7 @@
 #include "Gfx/Shader.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -88,6 +89,48 @@ void main() {
 }
 )";
 
+// Borde de la selección: los píxeles de dentro (la máscara, con filtro bilineal, vale 0,5
+// o más) que tienen fuera algún vecino a hasta uWidth píxeles de la pantalla en horizontal
+// o en vertical. Así la línea no se corta con ningún zoom (con una derivada se perdía
+// cuando el borde caía entre dos bloques de 2 × 2 píxeles), y fuera del lienzo cuenta
+// como no seleccionado: con todo seleccionado, la línea bordea el lienzo. El discontinuo
+// es un damero en la pantalla (con las filas desplazadas medio trazo), así corta la línea
+// vaya en la dirección que vaya.
+constexpr const char* kSelectionFragment = R"(
+in vec2 vUV;
+uniform sampler2D uMask;
+uniform vec2 uStep;     // un píxel de la pantalla en coordenadas de la máscara
+uniform float uPhase;   // desplazamiento del discontinuo (px)
+uniform float uDash;    // largo de cada trazo (px)
+uniform float uWidth;   // grosor de la línea (px, de 1 a 3)
+uniform float uVeil;
+out vec4 fragColor;
+bool outside(vec2 uv) {
+    return any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || textureLod(uMask, uv, 0.0).r < 0.5;
+}
+void main() {
+    float m = textureLod(uMask, vUV, 0.0).r;
+    float line = 0.0;
+    if (m >= 0.5) {
+        for (int k = 1; k <= 3; ++k) {
+            if (float(k) > uWidth) {
+                break;
+            }
+            vec2 o = uStep * float(k);
+            if (outside(vUV + vec2(o.x, 0.0)) || outside(vUV - vec2(o.x, 0.0)) ||
+                outside(vUV + vec2(0.0, o.y)) || outside(vUV - vec2(0.0, o.y))) {
+                line = 1.0;
+                break;
+            }
+        }
+    }
+    vec2 p = gl_FragCoord.xy + vec2(uPhase);
+    float white = mod(floor(p.x / uDash) + floor((p.y + uDash * 0.5) / uDash), 2.0);
+    float veil = uVeil * (1.0 - m) * (1.0 - line);
+    fragColor = vec4(vec3(white * line), line + veil);
+}
+)";
+
 } // namespace
 
 bool CanvasView::init() {
@@ -95,7 +138,8 @@ bool CanvasView::init() {
 
     m_shadowProgram = gfx::makeProgram("canvas shadow", kShadowVertex, kShadowFragment);
     m_canvasProgram = gfx::makeProgram("canvas view", kCanvasVertex, kCanvasFragment);
-    if (!m_shadowProgram || !m_canvasProgram) {
+    m_selectionProgram = gfx::makeProgram("canvas selection", kCanvasVertex, kSelectionFragment);
+    if (!m_shadowProgram || !m_canvasProgram || !m_selectionProgram) {
         destroy();
         return false;
     }
@@ -108,6 +152,15 @@ bool CanvasView::init() {
     m_uViewport = glGetUniformLocation(m_canvasProgram.id(), "uViewport");
     m_uCanvas = glGetUniformLocation(m_canvasProgram.id(), "uCanvas");
     m_uCell = glGetUniformLocation(m_canvasProgram.id(), "uCell");
+    const GLuint selection = m_selectionProgram.id();
+    m_uSelectionRect = glGetUniformLocation(selection, "uRect");
+    m_uSelectionViewport = glGetUniformLocation(selection, "uViewport");
+    m_uSelectionMask = glGetUniformLocation(selection, "uMask");
+    m_uSelectionStep = glGetUniformLocation(selection, "uStep");
+    m_uSelectionPhase = glGetUniformLocation(selection, "uPhase");
+    m_uSelectionDash = glGetUniformLocation(selection, "uDash");
+    m_uSelectionWidth = glGetUniformLocation(selection, "uWidth");
+    m_uSelectionVeil = glGetUniformLocation(selection, "uVeil");
 
     const float corners[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     m_vao = gfx::VertexArray::create();
@@ -125,6 +178,7 @@ bool CanvasView::init() {
 void CanvasView::destroy() {
     m_vbo.reset();
     m_vao.reset();
+    m_selectionProgram.reset();
     m_canvasProgram.reset();
     m_shadowProgram.reset();
 }
@@ -170,4 +224,40 @@ void CanvasView::draw(const Camera& camera, GLuint compositeTexture, GLuint fbo,
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindVertexArray(0);
+}
+
+void CanvasView::drawSelection(const Camera& camera, GLuint mask, int phase, float veil, GLuint fbo, int width,
+                               int height) {
+    if (mask == 0 || !m_selectionProgram) {
+        return;
+    }
+    const glm::vec2 origin = camera.offset();
+    const glm::vec2 size = camera.canvasSize() * camera.zoom();
+    const glm::vec2 viewport = camera.viewport();
+    const float ppp = std::max(m_pixelsPerPoint, 1.0f);
+    const float dash = std::round(4.0f * ppp);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, width, height);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(m_vao.id());
+    glUseProgram(m_selectionProgram.id());
+    glUniform4f(m_uSelectionRect, origin.x, origin.y, size.x, size.y);
+    glUniform2f(m_uSelectionViewport, viewport.x, viewport.y);
+    glUniform1i(m_uSelectionMask, 0);
+    glUniform2f(m_uSelectionStep, 1.0f / std::max(size.x, 1.0f), 1.0f / std::max(size.y, 1.0f));
+    // Cada paso avanza un cuarto de trazo; a las dos vueltas de damero se repite.
+    glUniform1f(m_uSelectionPhase, static_cast<float>(phase % 8) * dash * 0.25f);
+    glUniform1f(m_uSelectionDash, dash);
+    glUniform1f(m_uSelectionWidth, std::min(std::round(ppp), 3.0f));
+    glUniform1f(m_uSelectionVeil, veil);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, mask);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
 }

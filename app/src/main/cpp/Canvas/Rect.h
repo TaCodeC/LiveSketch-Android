@@ -14,6 +14,8 @@ struct IRect {
     int width() const { return x1 - x0; }
     int height() const { return y1 - y0; }
 
+    bool operator==(const IRect&) const = default;
+
     static IRect ofSize(int width, int height) { return {0, 0, width, height}; }
 
     // Caja que cubre un círculo, con un píxel de margen por el filtrado lineal.

@@ -2,6 +2,7 @@
 
 #include "Canvas/Layer.h"
 #include "Canvas/Rect.h"
+#include "Canvas/Selection.h"
 #include "Gfx/GLObjects.h"
 
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Propiedades de una capa que se pueden deshacer (la referencia va aparte: es de la pila).
 struct LayerProperties {
@@ -34,18 +36,23 @@ struct HistoryStep {
         MergeDown,
         Properties,   // nombre, visibilidad, opacidad, fusión, bloqueo alfa o recorte
         Reference,    // cambia la capa de referencia
+        Selection,    // la selección: una zona de la máscara (puede no haber) y su estado
+        Group,        // varios pasos que se deshacen juntos (p. ej. transformar)
     };
 
     Kind kind = Kind::Pixels;
     uint32_t layerId = 0;          // capa afectada (MergeDown: la de abajo; Reference: la nueva o 0)
     uint32_t otherId = 0;          // MergeDown: la de arriba; Reference: la anterior o 0
-    IRect rect;                    // Pixels y MergeDown: zona guardada, en píxeles del lienzo
-    gfx::RenderTarget pixels;      // esos píxeles
+    IRect rect;                    // Pixels, MergeDown y Selection: zona guardada, en píxeles del lienzo
+    gfx::RenderTarget pixels;      // esos píxeles (Selection: de la máscara, R8)
     std::unique_ptr<Layer> layer;  // capa fuera de la pila
     int index = 0;                 // posición de la capa (Move: origen)
     int target = 0;                // Move: destino
     LayerProperties before;        // Properties y MergeDown (la capa de abajo)
     LayerProperties after;
+    SelectionState selectionBefore;   // Selection
+    SelectionState selectionAfter;
+    std::vector<HistoryStep> children;   // Group, en el orden en que se hicieron
     size_t bytes = 0;              // memoria de GPU que puede ocupar el paso
 };
 

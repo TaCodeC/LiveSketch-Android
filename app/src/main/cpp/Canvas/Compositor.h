@@ -25,6 +25,7 @@ struct StrokePreview {
     float opacity = 1.0f;
     Mode mode = Mode::Paint;
     StrokeGrain grain;
+    GLuint selection = 0;   // máscara de la selección (R8): el trazo solo llega a lo seleccionado
 };
 
 // Composición de capas en el espacio del lienzo (sin zoom ni pan). El resultado es lo
@@ -50,9 +51,10 @@ public:
         Mask,    // multiplica el destino por el alfa de la fuente por `opacity`
     };
     // Dibuja la textura `source` (del tamaño del lienzo) sobre el FBO `target` dentro de
-    // `rect`, con el grano `grain` si lo hay (un trazo que se funde con su capa).
+    // `rect`, con el grano `grain` si lo hay (un trazo que se funde con su capa). Con
+    // `mask` (R8, del tamaño del lienzo), la fuente se multiplica por ella.
     void draw(GLuint target, GLuint source, float opacity, Blend blend, const IRect& rect,
-              const StrokeGrain* grain = nullptr);
+              const StrokeGrain* grain = nullptr, GLuint mask = 0);
     // Multiplica el contenido del FBO `target` por `factor` dentro de `rect` (hornea la
     // opacidad de una capa en sus píxeles).
     void scale(GLuint target, float factor, const IRect& rect);
@@ -67,10 +69,22 @@ public:
         Replace,   // el color sustituye lo que hubiera
         Atop,      // solo donde ya hay pintura, conservando su alfa
     };
-    // Rellena `rect` de `target` con un color RGB opaco.
-    void fill(GLuint target, const float rgb[3], Fill mode, const IRect& rect);
+    // Rellena `rect` de `target` con un color RGB opaco. Con `mask` (R8, del tamaño del
+    // lienzo), solo en lo seleccionado y con sus bordes suaves.
+    void fill(GLuint target, const float rgb[3], Fill mode, const IRect& rect, GLuint mask = 0);
+    // Deja transparente `rect` de `target`; con `mask`, solo lo seleccionado.
+    void clear(GLuint target, const IRect& rect, GLuint mask = 0);
     // Invierte el color de `target` en `rect` sin tocar su alfa.
     void invert(GLuint target, const IRect& rect);
+
+    enum class Filter {
+        Invert,   // colores invertidos (el alfa no cambia)
+    };
+    // Aplica un filtro a `target` en `rect`, solo donde `mask` (R8; 0: en todo) y mezclado
+    // según ella. `scratch` (del tamaño del lienzo) sirve de intermedio y queda
+    // transparente en `rect`.
+    void filter(const gfx::RenderTarget& target, Filter filter, GLuint mask, const gfx::RenderTarget& scratch,
+                const IRect& rect);
 
     const gfx::RenderTarget& composite() const { return m_composite; }
 
@@ -85,11 +99,14 @@ private:
         const StrokePreview* clipStroke = nullptr;   // trazo sobre la base
         GLuint backdrop = 0;                          // lo de debajo; 0: mezcla la GPU
         const StrokeGrain* layerGrain = nullptr;      // grano sobre la propia capa (un trazo)
+        GLuint selection = 0;                         // máscara de la selección
+        int selectionOn = 0;                          // 1: sobre el trazo; 2: sobre la capa
     };
 
     void bindCanvasPass(GLuint target, const IRect& rect);
     void drawPass(const Pass& pass);
-    void drawColor(const float rgba[4]);
+    // Color liso; con `mask`, multiplicado por ella.
+    void drawColor(const float rgba[4], GLuint mask = 0);
     void finishPass();
     bool ensureScratch();
 
@@ -109,8 +126,16 @@ private:
     GLint m_uGrainScale = -1;
     GLint m_uGrainDepth = -1;
     GLint m_uGrainOn = -1;
+    GLint m_uSelectionOn = -1;
     gfx::Program m_colorProgram;
     GLint m_uColor = -1;
+    gfx::Program m_maskedColorProgram;
+    GLint m_uMaskedColor = -1;
+    gfx::Program m_filterProgram;
+    GLint m_uFilterSource = -1;
+    GLint m_uFilterMask = -1;
+    GLint m_uFilterMaskOn = -1;
+    GLint m_uFilterKind = -1;
     gfx::VertexArray m_vao;
     gfx::Buffer m_vbo;
     gfx::RenderTarget m_composite;

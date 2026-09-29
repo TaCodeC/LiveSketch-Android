@@ -96,16 +96,21 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3 ${GLES_LIBRARY})
 add_library(livesketch_core STATIC
         ${SRC_DIR}/App/App.cpp
         ${SRC_DIR}/App/AppInput.cpp
+        ${SRC_DIR}/Canvas/Bounds.cpp
         ${SRC_DIR}/Canvas/Brush.cpp
         ${SRC_DIR}/Canvas/BrushLibrary.cpp
         ${SRC_DIR}/Canvas/BrushTips.cpp
         ${SRC_DIR}/Canvas/Camera.cpp
         ${SRC_DIR}/Canvas/Canvas.cpp
+        ${SRC_DIR}/Canvas/CanvasSelection.cpp
         ${SRC_DIR}/Canvas/CanvasView.cpp
         ${SRC_DIR}/Canvas/Compositor.cpp
         ${SRC_DIR}/Canvas/History.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
+        ${SRC_DIR}/Canvas/Selection.cpp
+        ${SRC_DIR}/Canvas/SelectionShapes.cpp
         ${SRC_DIR}/Canvas/StrokePath.cpp
+        ${SRC_DIR}/Canvas/Warp.cpp
         ${SRC_DIR}/Gfx/GLObjects.cpp
         ${SRC_DIR}/Gfx/Pixels.cpp
         ${SRC_DIR}/Gfx/Shader.cpp
@@ -113,6 +118,8 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/IO/ImageExport.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
         ${SRC_DIR}/ThirdParty/stb_impl.cpp
+        ${SRC_DIR}/Tools/SelectTool.cpp
+        ${SRC_DIR}/Tools/TransformTool.cpp
         ${SRC_DIR}/UI/Anim.cpp
         ${SRC_DIR}/UI/Backdrop.cpp
         ${SRC_DIR}/UI/Kit.cpp
@@ -122,6 +129,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/UiBrushes.cpp
         ${SRC_DIR}/UI/UiDialogs.cpp
         ${SRC_DIR}/UI/UiPanels.cpp
+        ${SRC_DIR}/UI/UiTools.cpp
 )
 target_include_directories(livesketch_core PUBLIC ${SRC_DIR} ${EXTERNALS_DIR}/glm)
 target_compile_options(livesketch_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
@@ -198,6 +206,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/HistoryTests.cpp
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
+            ${TESTS_DIR}/SelectionTests.cpp
     )
     target_compile_options(livesketch_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
     target_link_libraries(livesketch_tests PRIVATE livesketch_core)

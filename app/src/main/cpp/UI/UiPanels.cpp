@@ -114,9 +114,16 @@ constexpr HelpItem kGestures[] = {
 constexpr HelpItem kShortcuts[] = {
     {"B", "Pincel", nullptr},
     {"E", "Borrador", nullptr},
+    {"S", "Selección", nullptr},
+    {"V", "Transformar", nullptr},
     {"[  ]", "Tamaño del pincel", nullptr},
     {"CTRL Z", "Deshacer", nullptr},
     {"CTRL Y", "Rehacer", nullptr},
+    {"CTRL C / X", "Copiar o cortar", nullptr},
+    {"CTRL V", "Pegar en una capa nueva", nullptr},
+    {"CTRL J", "Duplicar lo seleccionado", nullptr},
+    {"CTRL D", "Quitar la selección", nullptr},
+    {"INTRO", "Cerrar el lazo o aplicar", nullptr},
     {"ALT+CLIC", "Cuentagotas", nullptr},
 };
 constexpr int kGestureCount = static_cast<int>(sizeof(kGestures) / sizeof(kGestures[0]));
@@ -293,6 +300,8 @@ void Ui::drawPanels(Canvas& canvas, UiRequests& requests) {
     layersPanel(canvas);
     layerMenu(canvas);
     colorPanel(canvas);
+    featherPanel(canvas);
+    modifyPanel(canvas);
 }
 
 // -----------------------------------------------------------------------------
@@ -337,7 +346,7 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         break;
     }
     const float content = ui::anim::follow(ImHashStr("##actions-height"), pt(kStrip) + body, 22.0f, 0.5f);
-    const float anchorX = L.leftBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * 0.5f);
+    const float anchorX = L.leftBar.Min.x + pt(th::kBarPadding) + L.barButton * 0.5f;
     PanelFrame f;
     if (!beginPanel(f, Panel::Actions, "##panel-actions", L.leftBar.Min.x, width, content, anchorX, false)) {
         return;
@@ -650,7 +659,7 @@ void Ui::layersPanel(Canvas& canvas) {
     const float target = m_blendPage ? std::max(listContent, th::kHeaderHeight + 400.0f + kFooter) : listContent;
     const float content = ui::anim::follow(ImHashStr("##layers-height"), target, 20.0f, 0.2f);
     const float width = pt(340.0f);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * 2.5f);
+    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * 2.5f;
     PanelFrame f;
     if (!beginPanel(f, Panel::Layers, "##panel-layers", L.rightBar.Max.x - width, width, pt(content), anchorX,
                     false)) {
@@ -983,7 +992,7 @@ void Ui::layerMenu(Canvas& canvas) {
     LayerStack& layers = canvas.layers();
     const int index = layers.activeIndex();
     const Layer& layer = layers.at(index);
-    constexpr int kRows = 5;
+    constexpr int kRows = 6;
     const float width = pt(296.0f);
     const float pad = pt(8.0f);
     const float gap = pt(6.0f);
@@ -1029,7 +1038,7 @@ void Ui::layerMenu(Canvas& canvas) {
     ui::popUnclipped(dl);
     ui::glass(dl, rect, radius, IM_COL32(24, 24, 28, 224));
 
-    enum Action { Rename, Duplicate, Up, Down, AlphaLock, Clip, Reference, Fill, Invert, Merge, Clear, Delete };
+    enum Action { Rename, Duplicate, Up, Down, AlphaLock, Clip, Reference, Select, Fill, Invert, Merge, Clear, Delete };
     struct Item {
         Action action;
         const char* label;
@@ -1048,11 +1057,14 @@ void Ui::layerMenu(Canvas& canvas) {
         {Clip, "Recorte", icon::kClip, canvas.canClip(index) || layer.clipping, layer.clipping},
         {Reference, "Referencia", icon::kBookmark, true, layer.reference},
     };
+    // Con selección, rellenar, invertir y limpiar cambian solo lo seleccionado.
+    const bool selected = canvas.hasSelection();
     const Item rows[kRows] = {
-        {Fill, "Rellenar con el color", icon::kPaintBucket, true, false},
-        {Invert, "Invertir colores", icon::kContrast, true, false},
+        {Select, "Seleccionar el contenido", icon::kSelection, true, false},
+        {Fill, selected ? "Rellenar lo seleccionado" : "Rellenar con el color", icon::kPaintBucket, true, false},
+        {Invert, selected ? "Invertir lo seleccionado" : "Invertir colores", icon::kContrast, true, false},
         {Merge, "Combinar con la de abajo", icon::kMerge, canvas.canMergeDown(index), false},
-        {Clear, "Limpiar capa", icon::kBrushCleaning, true, false},
+        {Clear, selected ? "Borrar lo seleccionado" : "Limpiar capa", icon::kBrushCleaning, true, false},
         {Delete, "Eliminar capa", icon::kTrash, layers.count() > 1, false},
     };
     int chosen = -1;
@@ -1147,6 +1159,21 @@ void Ui::layerMenu(Canvas& canvas) {
     case Reference:
         canvas.setReferenceLayer(layer.reference ? -1 : index);
         break;
+    case Select:
+        switch (canvas.selectLayerContent(index)) {
+        case Canvas::Edit::Done:
+            // Como en Procreate: se pasa a la herramienta Selección para verla y usarla.
+            closePanels();
+            setCanvasTool(canvas, CanvasTool::Select);
+            break;
+        case Canvas::Edit::NoMemory:
+            notify("No hay memoria suficiente", Notice::Error);
+            break;
+        default:
+            notify("La capa está vacía", Notice::Info);
+            break;
+        }
+        break;
     case Fill:
         canvas.fillLayer(index, canvas.brushSettings().color);
         break;
@@ -1228,7 +1255,7 @@ void Ui::colorPanel(Canvas& canvas) {
         wide ? std::clamp(available - th::kHeaderHeight - kPadTop - kPadBottom, 180.0f, kWheel) : kWheel;
     const float content = wide ? th::kHeaderHeight + kPadTop + std::max(wheel, kSwatches) + kPadBottom : tall;
     const float width = pt(wide ? kPadX * 2.0f + wheel + kColumnGap + kSwatchColumn : 300.0f);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding + th::kBarButtonWidth * 3.5f);
+    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * 3.5f;
     PanelFrame f;
     if (!beginPanel(f, Panel::Color, "##panel-color", L.rightBar.Max.x - width, width, pt(content), anchorX, true)) {
         return;

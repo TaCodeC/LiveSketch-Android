@@ -73,6 +73,16 @@ private:
     // Terminó un gesto de dedos: si fue un toque con dos (deshacer) o tres (rehacer).
     void finishTapGesture(bool canceled);
 
+    // Herramientas Selección y Transformar: las maneja un puntero a la vez (el lápiz, un
+    // dedo o el ratón). Posiciones en coordenadas de ventana.
+    enum class ToolPointer { None, Pen, Finger, Mouse };
+    bool toolActive() const { return m_ui.canvasTool() != CanvasTool::Paint; }
+    ToolView toolView() const;
+    void beginToolGesture(ToolPointer pointer, SDL_FingerID finger, float x, float y);
+    void moveToolGesture(float x, float y);
+    // `cancel`: otro dedo o el sistema lo interrumpen y no se hace nada.
+    void endToolGesture(bool cancel);
+
     void onPenEvent(const SDL_Event& event);
     void flushPenSample();
     void endPenStroke();
@@ -173,6 +183,14 @@ private:
         float rgb[3] = {0.0f, 0.0f, 0.0f};
         bool dirty = false;          // se movió: hay que volver a leer el color
     } m_pick;
+
+    struct ToolGesture {
+        ToolPointer pointer = ToolPointer::None;
+        SDL_FingerID finger = 0;
+        uint64_t startMs = 0;
+        float x = 0.0f;              // última posición (coordenadas de ventana)
+        float y = 0.0f;
+    } m_toolGesture;
 
     // Ratón de verdad (no el emulado desde el lápiz o los dedos).
     bool m_mouseDrawing = false;

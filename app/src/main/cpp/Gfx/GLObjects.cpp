@@ -26,7 +26,7 @@ void VertexArrayTraits::destroy(GLuint id) { glDeleteVertexArrays(1, &id); }
 GLuint ProgramTraits::create() { return glCreateProgram(); }
 void ProgramTraits::destroy(GLuint id) { glDeleteProgram(id); }
 
-bool RenderTarget::create(int w, int h, const void* pixels) {
+bool RenderTarget::create(int w, int h, const void* pixels, Format fmt) {
     destroy();
     if (w <= 0 || h <= 0) {
         return false;
@@ -34,8 +34,14 @@ bool RenderTarget::create(int w, int h, const void* pixels) {
 
     texture = Texture::create();
     glBindTexture(GL_TEXTURE_2D, texture.id());
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    if (fmt == Format::R8) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, pixels);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    } else {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -61,6 +67,7 @@ bool RenderTarget::create(int w, int h, const void* pixels) {
 
     width = w;
     height = h;
+    format = fmt;
     return true;
 }
 
@@ -69,6 +76,7 @@ void RenderTarget::destroy() {
     texture.reset();
     width = 0;
     height = 0;
+    format = Format::Rgba8;
 }
 
 void clearErrors() {

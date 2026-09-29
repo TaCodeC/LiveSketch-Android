@@ -125,13 +125,17 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     }
     syncBrush(*canvas);
     handleKeys(*canvas);
+    toolFrame(*canvas);
     if (m_panel != Panel::None) {
         drawScrim();
     }
+    drawToolOverlay();
     drawTopBars(*canvas, requests);
     drawSidebar(*canvas);
+    drawDock(*canvas);
     drawPanels(*canvas, requests);
     drawHud(*canvas);
+    drawThreshold();
     drawPicker(*canvas);
     drawDialogs(canvas, requests);
     drawToast();
@@ -159,13 +163,19 @@ void Ui::computeLayout() {
     L.right = L.display.x - L.safe[1] - L.margin;
     L.bottom = L.display.y - L.safe[2] - L.margin;
 
-    // Barras de arriba.
+    // Barras de arriba. A la izquierda, en una tableta: acciones, guardar y centrar, y
+    // Selección y Transformar; en un teléfono: acciones, NDI y Modificar. Si no caben con
+    // las de la derecha (un teléfono estrecho), los botones se estrechan un poco.
     const float barHeight = pt(th::kBarHeight);
-    const float button = pt(th::kBarButtonWidth);
     const float pad = pt(th::kBarPadding);
-    const float leftWidth = pad * 2.0f + button * (L.narrow ? 2.0f : 3.0f);
+    const float leftButtons = L.narrow ? 3.0f : 5.0f;
+    const float rightButtons = 4.0f;
+    const float room = (L.right - L.left) - pt(8.0f) - pad * 4.0f;
+    const float button = std::max(pt(36.0f), std::min(pt(th::kBarButtonWidth), room / (leftButtons + rightButtons)));
+    L.barButton = button;
+    const float leftWidth = pad * 2.0f + button * leftButtons;
     L.leftBar = ImRect(L.left, L.top, L.left + leftWidth, L.top + barHeight);
-    L.rightBar = ImRect(L.right - (pad * 2.0f + button * 4.0f), L.top, L.right, L.top + barHeight);
+    L.rightBar = ImRect(L.right - (pad * 2.0f + button * rightButtons), L.top, L.right, L.top + barHeight);
     if (L.narrow) {
         L.ndiBar = ImRect();
     } else {
@@ -326,7 +336,7 @@ void Ui::closePanels() {
     m_hexEditing = false;
 }
 
-bool Ui::closeTopmost() {
+bool Ui::closeTopmost(Canvas* canvas) {
     if (m_dialog != Dialog::None) {
         m_dialog = Dialog::None;
         return true;
@@ -349,6 +359,23 @@ bool Ui::closeTopmost() {
     }
     if (m_eyedropperArmed) {
         m_eyedropperArmed = false;
+        return true;
+    }
+    // Después, la herramienta: el lazo a medias se descarta, la transformación se
+    // cancela y la selección vuelve a pintar (la selección se queda).
+    if (canvas && m_canvasTool == CanvasTool::Select) {
+        if (m_select.pendingPolygon()) {
+            m_select.dropPolygon();
+        } else {
+            setCanvasTool(*canvas, CanvasTool::Paint);
+        }
+        return true;
+    }
+    if (canvas && m_canvasTool == CanvasTool::Transform) {
+        m_transform.cancel(*canvas);
+        canvas->cancelTransform();
+        m_transform.stop();
+        m_canvasTool = m_toolBeforeTransform;
         return true;
     }
     return false;
@@ -376,14 +403,14 @@ uint64_t Ui::wakeDeadline() const {
     return m_brushSaveAt;
 }
 
-void Ui::undo(Canvas& canvas, bool redo) { showUndo(redo, redo ? canvas.redo() : canvas.undo()); }
+void Ui::undo(Canvas& canvas, bool redo) { showUndo(redo, undoStep(canvas, redo)); }
 
 void Ui::handleKeys(Canvas& canvas) {
     const ImGuiIO& io = ImGui::GetIO();
     const bool back = ImGui::IsKeyPressed(ImGuiKey_AppBack, false);
     if (back || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         // El botón atrás cierra lo último que se abrió; con todo cerrado, pregunta si salir.
-        if (!closeTopmost() && back) {
+        if (!closeTopmost(&canvas) && back) {
             askExit();
         }
         return;
@@ -397,16 +424,21 @@ void Ui::handleKeys(Canvas& canvas) {
             undo(canvas, io.KeyShift);
         } else if (ImGui::IsKeyPressed(ImGuiKey_Y, true)) {
             undo(canvas, true);
+        } else {
+            toolKeys(canvas);
         }
         return;
     }
     if (io.KeyAlt) {
         return;
     }
+    if (toolKeys(canvas)) {
+        return;
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_B, false)) {
-        selectTool(Tool::Brush);
+        paintWith(canvas, Tool::Brush);
     } else if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
-        selectTool(Tool::Eraser);
+        paintWith(canvas, Tool::Eraser);
     } else if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true)) {
         ToolPreset& preset = m_presets[static_cast<int>(m_tool)];
         const float step = ImGui::IsKeyDown(ImGuiKey_RightBracket) ? 0.02f : -0.02f;
@@ -458,7 +490,7 @@ bool Ui::barButton(const char* id, const ImRect& rect, const char* glyph, bool o
 void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
     const Layout& L = m_layout;
     const float pad = pt(th::kBarPadding);
-    const float width = pt(th::kBarButtonWidth);
+    const float width = L.barButton;
     const float height = pt(th::kBarButtonHeight);
     auto slot = [&](const ImRect& bar, int index) {
         const float x = bar.Min.x + pad + width * static_cast<float>(index);
@@ -466,7 +498,8 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         return ImRect(x, y, x + width, y + height);
     };
 
-    // Izquierda: acciones, guardar y centrar (en un teléfono, acciones y NDI).
+    // Izquierda: acciones, guardar, centrar, selección y transformar (en un teléfono,
+    // acciones, NDI y Modificar, que abre las dos últimas).
     beginBar("##bar-left", L.leftBar, L.leftBar.GetHeight() * 0.5f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (barButton("##actions", slot(L.leftBar, 0), icon::kWrench, m_panel == Panel::Actions, false)) {
@@ -487,6 +520,11 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         if (press.clicked) {
             togglePanel(Panel::Ndi);
         }
+        m_modifyButton = slot(L.leftBar, 2);
+        if (barButton("##modify", m_modifyButton, icon::kModify, m_panel == Panel::Modify,
+                      m_canvasTool != CanvasTool::Paint)) {
+            togglePanel(Panel::Modify);
+        }
     } else {
         const ImRect save = slot(L.leftBar, 1);
         if (m_status.exporting) {
@@ -499,6 +537,21 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         if (barButton("##fit", slot(L.leftBar, 2), icon::kScan, false, false)) {
             requests.fitView = true;
             closePanels();
+        }
+        // Las herramientas que cambian lo que ya está dibujado, separadas por una línea.
+        const float divider = std::round(slot(L.leftBar, 3).Min.x);
+        dl->AddLine(ImVec2(divider, L.leftBar.Min.y + pt(14.0f)), ImVec2(divider, L.leftBar.Max.y - pt(14.0f)),
+                    IM_COL32(255, 255, 255, 36), ui::hairline());
+        const bool selecting = m_canvasTool == CanvasTool::Select;
+        const bool transforming = m_canvasTool == CanvasTool::Transform;
+        if (barButton("##select", slot(L.leftBar, 3), icon::kSelection, false, selecting)) {
+            closePanels();
+            setCanvasTool(canvas, selecting ? CanvasTool::Paint : CanvasTool::Select);
+        }
+        if (barButton("##transform", slot(L.leftBar, 4), icon::kTransform, false, transforming)) {
+            closePanels();
+            // Tocarla otra vez aplica la transformación y vuelve a lo de antes.
+            setCanvasTool(canvas, transforming ? m_toolBeforeTransform : CanvasTool::Transform);
         }
     }
     ui::endSurface();
@@ -514,13 +567,13 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
     const char* ids[2] = {"##brush", "##eraser"};
     const char* glyphs[2] = {icon::kBrush, icon::kEraser};
     for (int i = 0; i < 2; ++i) {
-        const bool current = m_tool == tools[i];
+        const bool current = m_canvasTool == CanvasTool::Paint && m_tool == tools[i];
         if (barButton(ids[i], slot(L.rightBar, i), glyphs[i], current && m_panel == Panel::Brushes, current)) {
             // Tocar la herramienta que ya está elegida abre su biblioteca de pinceles.
             if (current) {
                 togglePanel(Panel::Brushes);
             } else {
-                selectTool(tools[i]);
+                paintWith(canvas, tools[i]);
                 if (m_panel == Panel::Brushes) {
                     closePanels();
                 }
@@ -681,7 +734,7 @@ void Ui::drawSidebar(Canvas& canvas) {
         ui::highlight(dl, gid, r, r.GetHeight() / 2.8f, false, press);
         ui::icon(dl, glyph, r.GetCenter(), 20.0f, enabled ? th::kLabel : th::kDisabledLabel);
         if (press.clicked && !(m_repeatId == gid && m_repeated)) {
-            redo ? canvas.redo() : canvas.undo();
+            undoStep(canvas, redo);
         }
         if (press.held) {
             const double now = ImGui::GetTime();
@@ -691,7 +744,7 @@ void Ui::drawSidebar(Canvas& canvas) {
                 m_repeatLast = now;
                 m_repeated = false;
             } else if (now - m_repeatStart > kRepeatDelay && now - m_repeatLast > kRepeatInterval) {
-                redo ? canvas.redo() : canvas.undo();
+                undoStep(canvas, redo);
                 m_repeatLast = now;
                 m_repeated = true;
             }
@@ -701,7 +754,7 @@ void Ui::drawSidebar(Canvas& canvas) {
             m_repeated = false;
         }
     };
-    historyButton("##undo", L.undo, icon::kUndo, canvas.canUndo(), false);
+    historyButton("##undo", L.undo, icon::kUndo, canUndo(canvas), false);
     historyButton("##redo", L.redo, icon::kRedo, canvas.canRedo(), true);
 
     if (sizeActive || opacityActive) {
