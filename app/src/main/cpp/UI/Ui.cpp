@@ -169,7 +169,7 @@ void Ui::computeLayout() {
     const float barHeight = pt(th::kBarHeight);
     const float pad = pt(th::kBarPadding);
     const float leftButtons = L.narrow ? 3.0f : 5.0f;
-    const float rightButtons = 4.0f;
+    const float rightButtons = 5.0f;
     const float room = (L.right - L.left) - pt(8.0f) - pad * 4.0f;
     const float button = std::max(pt(36.0f), std::min(pt(th::kBarButtonWidth), room / (leftButtons + rightButtons)));
     L.barButton = button;
@@ -261,6 +261,7 @@ void Ui::applyPreset(Canvas& canvas, Tool tool) {
     settings.radius = toolRadius(tool);
     settings.opacity = std::clamp(preset.opacity, 0.01f, 1.0f);
     settings.eraser = tool == Tool::Eraser;
+    settings.smudge = tool == Tool::Smudge;
 }
 
 void Ui::syncBrush(Canvas& canvas) {
@@ -273,12 +274,25 @@ void Ui::syncBrush(Canvas& canvas) {
 void Ui::prepareStroke(Canvas& canvas, bool eraserTip) { applyPreset(canvas, eraserTip ? Tool::Eraser : m_tool); }
 
 void Ui::strokeStarted(const Canvas& canvas, bool erasing) {
-    if (!erasing) {
+    // Difuminar no pone color: no cuenta como usado.
+    if (!erasing && !canvas.brushSettings().smudge) {
         pushRecent(canvas.brushSettings().color);
     }
 }
 
 void Ui::selectTool(Tool tool) { m_tool = tool; }
+
+int Ui::toolSlot(Tool tool) {
+    switch (tool) {
+    case Tool::Brush:
+        return 0;
+    case Tool::Smudge:
+        return 1;
+    case Tool::Eraser:
+        return 2;
+    }
+    return 0;
+}
 
 void Ui::setColor(Canvas& canvas, const float rgb[3]) {
     float* color = canvas.brushSettings().color;
@@ -437,6 +451,8 @@ void Ui::handleKeys(Canvas& canvas) {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_B, false)) {
         paintWith(canvas, Tool::Brush);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_D, false)) {
+        paintWith(canvas, Tool::Smudge);
     } else if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
         paintWith(canvas, Tool::Eraser);
     } else if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true)) {
@@ -560,15 +576,16 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         drawNdiCapsule();
     }
 
-    // Derecha: pincel, borrador, capas y color.
+    // Derecha: pincel, difuminar, borrador, capas y color.
     beginBar("##bar-right", L.rightBar, L.rightBar.GetHeight() * 0.5f);
     dl = ImGui::GetWindowDrawList();
-    const Tool tools[2] = {Tool::Brush, Tool::Eraser};
-    const char* ids[2] = {"##brush", "##eraser"};
-    const char* glyphs[2] = {icon::kBrush, icon::kEraser};
-    for (int i = 0; i < 2; ++i) {
+    const Tool tools[3] = {Tool::Brush, Tool::Smudge, Tool::Eraser};
+    const char* ids[3] = {"##brush", "##smudge", "##eraser"};
+    const char* glyphs[3] = {icon::kBrush, icon::kSmudge, icon::kEraser};
+    for (int i = 0; i < 3; ++i) {
         const bool current = m_canvasTool == CanvasTool::Paint && m_tool == tools[i];
-        if (barButton(ids[i], slot(L.rightBar, i), glyphs[i], current && m_panel == Panel::Brushes, current)) {
+        if (barButton(ids[i], slot(L.rightBar, toolSlot(tools[i])), glyphs[i], current && m_panel == Panel::Brushes,
+                      current)) {
             // Tocar la herramienta que ya está elegida abre su biblioteca de pinceles.
             if (current) {
                 togglePanel(Panel::Brushes);
@@ -580,11 +597,11 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
             }
         }
     }
-    if (barButton("##layers", slot(L.rightBar, 2), icon::kLayers, m_panel == Panel::Layers, false)) {
+    if (barButton("##layers", slot(L.rightBar, 3), icon::kLayers, m_panel == Panel::Layers, false)) {
         togglePanel(Panel::Layers);
     }
     {
-        const ImRect rect = slot(L.rightBar, 3);
+        const ImRect rect = slot(L.rightBar, 4);
         const ImGuiID id = ImGui::GetID("##color");
         const Press press = ui::pressable(id, rect);
         ui::highlight(dl, id, rect, rect.GetHeight() * 0.5f, m_panel == Panel::Color, press);
@@ -787,7 +804,8 @@ void Ui::drawHud(Canvas& canvas) {
     ui::glass(dl, rect, radius, IM_COL32(40, 40, 44, 184));
 
     const ToolPreset& preset = m_presets[static_cast<int>(m_tool)];
-    const bool eraser = m_tool == Tool::Eraser;
+    // El borrador y difuminar no pintan con el color: se ven en blanco.
+    const bool eraser = m_tool != Tool::Brush;
     const ImU32 color = eraser ? IM_COL32_WHITE : ui::fromFloat(canvas.brushSettings().color);
     const ImVec2 center(rect.GetCenter().x, rect.Min.y + side * 0.4f);
     char text[32];
@@ -815,7 +833,9 @@ void Ui::drawHud(Canvas& canvas) {
         }
         dl->AddCircleFilled(center, r, ui::withAlpha(color, preset.opacity), 0);
         dl->AddCircle(center, r, IM_COL32(255, 255, 255, 64), 0, ui::hairline());
-        std::snprintf(text, sizeof(text), "%d %%", static_cast<int>(std::lround(preset.opacity * 100.0f)));
+        // En difuminar, el deslizador de la opacidad es su fuerza.
+        std::snprintf(text, sizeof(text), m_tool == Tool::Smudge ? "Fuerza %d %%" : "%d %%",
+                      static_cast<int>(std::lround(preset.opacity * 100.0f)));
     }
     ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(rect.GetCenter().x, rect.Max.y - side * 0.17f),
               Align::Center, th::kLabel, text);

@@ -26,6 +26,7 @@ struct StrokePreview {
     Mode mode = Mode::Paint;
     StrokeGrain grain;
     GLuint selection = 0;   // máscara de la selección (R8): el trazo solo llega a lo seleccionado
+    IRect area;             // Replace: dónde tiene la textura la copia de trabajo (fuera, la capa)
 };
 
 // Composición de capas en el espacio del lienzo (sin zoom ni pan). El resultado es lo
@@ -127,6 +128,7 @@ private:
     GLint m_uGrainDepth = -1;
     GLint m_uGrainOn = -1;
     GLint m_uSelectionOn = -1;
+    GLint m_uReplaceArea = -1;
     gfx::Program m_colorProgram;
     GLint m_uColor = -1;
     gfx::Program m_maskedColorProgram;

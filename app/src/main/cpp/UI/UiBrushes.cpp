@@ -31,7 +31,25 @@ namespace {
 // El archivo se escribe un rato después del último cambio: arrastrar un deslizador no lo
 // reescribe a cada paso.
 constexpr uint64_t kSaveDelayMs = 1500;
-constexpr const char* kToolKeys[2] = {"pintar", "borrar"};
+// En el orden de Tool.
+constexpr const char* kToolKeys[kToolCount] = {"pintar", "borrar", "difuminar"};
+
+int toolFromKey(const std::string& key) {
+    for (int t = 0; t < kToolCount; ++t) {
+        if (key == kToolKeys[t]) {
+            return t;
+        }
+    }
+    return -1;
+}
+
+// La opacidad con la que empieza un pincel que la herramienta no ha usado. En Difuminar es
+// la fuerza, y con toda arrastra casi sin fin: empieza por debajo.
+constexpr float kSmudgeStrength = 0.8f;
+
+float startOpacity(int tool, const BrushParams& params) {
+    return tool == static_cast<int>(Tool::Smudge) ? std::min(params.opacity, kSmudgeStrength) : params.opacity;
+}
 
 // Medidas (pt).
 constexpr float kCategoryWidth = 136.0f;
@@ -112,11 +130,12 @@ void Ui::initBrushes() {
     for (auto& memory : m_brushMemory) {
         memory.assign(library.size(), BrushMemory{});
     }
-    const std::string_view defaults[2] = {brushes::kDefaultPaint, brushes::kDefaultErase};
-    for (int tool = 0; tool < 2; ++tool) {
+    const std::string_view defaults[kToolCount] = {brushes::kDefaultPaint, brushes::kDefaultErase,
+                                                   brushes::kDefaultSmudge};
+    for (int tool = 0; tool < kToolCount; ++tool) {
         const int index = std::max(brushes::indexOf(defaults[tool]), 0);
-        m_presets[tool] = {index, m_brushParams[static_cast<size_t>(index)].size,
-                           m_brushParams[static_cast<size_t>(index)].opacity};
+        const BrushParams& params = m_brushParams[static_cast<size_t>(index)];
+        m_presets[tool] = {index, params.size, startOpacity(tool, params)};
     }
     loadBrushes();
 }
@@ -132,7 +151,7 @@ void Ui::loadBrushes() {
     }
     // Líneas "clave ...". Lo que no se entiende se salta: el archivo puede venir de otra
     // versión con pinceles o ajustes que esta no tiene.
-    int selected[2] = {-1, -1};
+    int selected[kToolCount] = {-1, -1, -1};
     std::string line;
     while (std::getline(in, line)) {
         std::istringstream words(line);
@@ -142,7 +161,7 @@ void Ui::loadBrushes() {
         words >> kind;
         if (kind == "pincel" || kind == "recuerdo") {
             words >> tool >> id;
-            const int t = tool == kToolKeys[0] ? 0 : (tool == kToolKeys[1] ? 1 : -1);
+            const int t = toolFromKey(tool);
             const int index = brushes::indexOf(id);
             if (t < 0 || index < 0) {
                 continue;
@@ -174,7 +193,7 @@ void Ui::loadBrushes() {
     for (BrushParams& params : m_brushParams) {
         brushes::sanitize(params);
     }
-    for (int t = 0; t < 2; ++t) {
+    for (int t = 0; t < kToolCount; ++t) {
         ToolPreset& preset = m_presets[t];
         if (selected[t] >= 0) {
             preset.brush = selected[t];
@@ -182,7 +201,7 @@ void Ui::loadBrushes() {
         const BrushMemory& memory = m_brushMemory[t][static_cast<size_t>(preset.brush)];
         const BrushParams& params = m_brushParams[static_cast<size_t>(preset.brush)];
         preset.size = memory.set ? memory.size : params.size;
-        preset.opacity = memory.set ? memory.opacity : params.opacity;
+        preset.opacity = memory.set ? memory.opacity : startOpacity(t, params);
     }
 }
 
@@ -193,17 +212,17 @@ void Ui::saveBrushes() {
         return;
     }
     // Lo que tiene cada herramienta ahora también se recuerda.
-    for (int t = 0; t < 2; ++t) {
+    for (int t = 0; t < kToolCount; ++t) {
         const ToolPreset& preset = m_presets[t];
         m_brushMemory[t][static_cast<size_t>(preset.brush)] = {preset.size, preset.opacity, true};
     }
     std::ostringstream out;
     const auto library = brushes::library();
-    for (int t = 0; t < 2; ++t) {
+    for (int t = 0; t < kToolCount; ++t) {
         out << "pincel " << kToolKeys[t] << ' ' << library[static_cast<size_t>(m_presets[t].brush)].id << '\n';
     }
     char number[64];
-    for (int t = 0; t < 2; ++t) {
+    for (int t = 0; t < kToolCount; ++t) {
         for (size_t i = 0; i < library.size(); ++i) {
             const BrushMemory& memory = m_brushMemory[t][i];
             if (memory.set) {
@@ -243,7 +262,7 @@ void Ui::selectBrush(Tool tool, int index) {
     const BrushParams& params = m_brushParams[static_cast<size_t>(index)];
     preset.brush = index;
     preset.size = memory.set ? memory.size : params.size;
-    preset.opacity = memory.set ? memory.opacity : params.opacity;
+    preset.opacity = memory.set ? memory.opacity : startOpacity(t, params);
     scheduleBrushSave();
 }
 
@@ -269,13 +288,12 @@ void Ui::brushesPanel() {
         m_brushPage = false;
         m_brushScroll = true;
     }
-    const int toolIndex = static_cast<int>(m_tool);
     const float listContent = th::kHeaderHeight + kListPad * 2.0f + kCategoryRow * kBrushCategoryCount +
                               kRowGap * (kBrushCategoryCount - 1);
     const float target = m_brushPage ? std::max(listContent, kSettingsHeight) : listContent;
     const float content = ui::anim::follow(ImHashStr("##brushes-height"), target, 20.0f, 0.2f);
     const float width = pt(L.compact ? 372.0f : 400.0f);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * (0.5f + toolIndex);
+    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * (0.5f + toolSlot(m_tool));
     PanelFrame f;
     if (!beginPanel(f, Panel::Brushes, "##panel-brushes", L.rightBar.Max.x - width, width, pt(content), anchorX,
                     false)) {
@@ -288,8 +306,9 @@ void Ui::brushesPanel() {
         brushSettings(dl, f.content);
     } else {
         const float cy = ui::parts::panelHeader(dl, f.content, top, "Pinceles");
-        ui::parts::tag(dl, f.content.Max.x - pt(12.0f), cy, m_tool == Tool::Brush ? "PINCEL" : "BORRADOR",
-                       IM_COL32(255, 255, 255, 20), IM_COL32(235, 235, 245, 179));
+        const char* tool = m_tool == Tool::Brush ? "PINCEL" : (m_tool == Tool::Smudge ? "DIFUMINAR" : "BORRADOR");
+        ui::parts::tag(dl, f.content.Max.x - pt(12.0f), cy, tool, IM_COL32(255, 255, 255, 20),
+                       IM_COL32(235, 235, 245, 179));
         brushList(dl, body);
     }
     endPanel(f);
@@ -669,6 +688,13 @@ void Ui::brushSettings(ImDrawList* dl, const ImRect& content) {
         y += height + pt(kSliderGap + 4.0f);
     }
     slider("flujo");
+
+    // Difuminar y el borrador no usan la mezcla: arrastran o borran siempre igual.
+    section("MEZCLA HÚMEDA");
+    const bool wet = m_tool == Tool::Brush;
+    slider("arrastre", wet);
+    slider("carga", wet);
+    slider("dilucion", wet);
 
     section("TAMAÑO");
     // El mínimo no pasa del máximo: al mover uno, empuja al otro.

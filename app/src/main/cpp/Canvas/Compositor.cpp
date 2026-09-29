@@ -40,6 +40,7 @@ uniform float uGrainDepth;
 uniform int uGrainOn;          // grano del trazo: 0 no hay, 1 sobre uStroke, 2 sobre uLayer
 uniform sampler2D uSelection;
 uniform int uSelectionOn;      // la máscara de la selección multiplica: 1 el trazo, 2 la capa
+uniform vec4 uReplaceArea;     // sustituir: zona de la copia de trabajo (x0, y0, x1, y1)
 out vec4 fragColor;
 
 // Las coordenadas del FBO son las del lienzo: el grano queda fijo al lienzo.
@@ -53,7 +54,9 @@ vec4 withStroke(vec4 color, int mode) {
     }
     vec4 stroke = texture(uStroke, vUV);
     if (mode == 4) {
-        return stroke;
+        bool inside = all(greaterThanEqual(gl_FragCoord.xy, uReplaceArea.xy)) &&
+                      all(lessThan(gl_FragCoord.xy, uReplaceArea.zw));
+        return inside ? stroke : color;
     }
     stroke *= uStrokeOpacity;
     if (uGrainOn == 1) {
@@ -305,6 +308,7 @@ bool Compositor::init(int width, int height) {
     m_uGrainDepth = glGetUniformLocation(id, "uGrainDepth");
     m_uGrainOn = glGetUniformLocation(id, "uGrainOn");
     m_uSelectionOn = glGetUniformLocation(id, "uSelectionOn");
+    m_uReplaceArea = glGetUniformLocation(id, "uReplaceArea");
     m_uColor = glGetUniformLocation(m_colorProgram.id(), "uColor");
     m_uMaskedColor = glGetUniformLocation(m_maskedColorProgram.id(), "uColor");
     m_uFilterSource = glGetUniformLocation(m_filterProgram.id(), "uSource");
@@ -419,6 +423,9 @@ void Compositor::drawPass(const Pass& pass) {
     glUniform1f(m_uGrainScale, grain ? grain->scale : 1.0f);
     glUniform1f(m_uGrainDepth, grain ? grain->depth : 0.0f);
     glUniform1i(m_uSelectionOn, pass.selection ? pass.selectionOn : 0);
+    const IRect area = stroke ? stroke->area : IRect{};
+    glUniform4f(m_uReplaceArea, static_cast<float>(area.x0), static_cast<float>(area.y0), static_cast<float>(area.x1),
+                static_cast<float>(area.y1));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 

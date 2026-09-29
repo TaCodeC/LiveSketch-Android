@@ -100,6 +100,9 @@ void fillRect(const gfx::RenderTarget& target, const IRect& rect, float r, float
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // llvmpipe con hilos puede dejar este borrado pendiente y aplicarlo después de una copia
+    // que ya leyó el FBO (si antes se usa otro FBO): la prueba vería lo que había debajo.
+    glFinish();
 }
 
 int maxDifference(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {

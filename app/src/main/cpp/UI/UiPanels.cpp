@@ -113,6 +113,7 @@ constexpr HelpItem kGestures[] = {
 };
 constexpr HelpItem kShortcuts[] = {
     {"B", "Pincel", nullptr},
+    {"D", "Difuminar", nullptr},
     {"E", "Borrador", nullptr},
     {"S", "Selección", nullptr},
     {"V", "Transformar", nullptr},

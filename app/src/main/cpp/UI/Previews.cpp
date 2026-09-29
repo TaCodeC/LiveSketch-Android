@@ -1,5 +1,6 @@
 #include "UI/Previews.h"
 
+#include "Canvas/BrushTips.h"
 #include "Gfx/Shader.h"
 
 #include <algorithm>
@@ -95,6 +96,7 @@ bool Previews::init() {
 void Previews::destroy() {
     m_thumbnails.clear();
     m_strokes.clear();
+    m_wetCoverage.destroy();
     m_brush.destroy();
     m_brushReady = false;
     m_vbo.reset();
@@ -209,6 +211,45 @@ GLuint Previews::brushPreview(int slot, const BrushParams& params, int width, in
     m_path.finish();
     m_dabs.clear();
     m_path.takeFinal(m_dabs);
+
+    if (brushes::isWet(sample)) {
+        // Pincel húmedo: con su mezcla sobre transparente, así se ve cómo se acaba la carga
+        // y cómo arrastra su propia pintura. Después el color se deja en blanco.
+        glBindFramebuffer(GL_FRAMEBUFFER, stroke.target.fbo.id());
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        WetMix mix;
+        mix.color[0] = mix.color[1] = mix.color[2] = 1.0f;
+        mix.radius = settings.radius;
+        if (sample.grain != BrushGrain::None && sample.grainDepth > 0.0f) {
+            mix.grain = m_brush.grainTexture(sample.grain);
+            mix.grainScale = 1.0f / (static_cast<float>(brushtips::kGrainSize) * sample.grainScale);
+            mix.grainDepth = sample.grainDepth;
+        }
+        // La cobertura empieza a 0 (se crea transparente o se limpia).
+        const gfx::RenderTarget* coverage = nullptr;
+        if (m_wetCoverage.width >= width && m_wetCoverage.height >= height) {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_wetCoverage.fbo.id());
+            glClear(GL_COLOR_BUFFER_BIT);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            coverage = &m_wetCoverage;
+        } else if (m_wetCoverage.create(std::max(width, m_wetCoverage.width), std::max(height, m_wetCoverage.height))) {
+            coverage = &m_wetCoverage;
+        }
+        WetCursor cursor;
+        m_brush.drawWet(stroke.target, coverage, m_dabs, sample, mix, cursor);
+        glBindFramebuffer(GL_FRAMEBUFFER, stroke.target.fbo.id());
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        glClearColor(1.0f, 1.0f, 1.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDisable(GL_BLEND);
+        return stroke.target.texture.id();
+    }
 
     const float white[3] = {1.0f, 1.0f, 1.0f};
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);

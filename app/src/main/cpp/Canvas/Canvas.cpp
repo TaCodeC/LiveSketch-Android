@@ -75,6 +75,10 @@ bool Canvas::init(int width, int height) {
 void Canvas::destroy() {
     m_ready = false;
     m_stroking = false;
+    m_wet = false;
+    m_wetCoverage = false;
+    m_wetValid = {};
+    m_wetTail = {};
     m_strokeBounds = {};
     m_layerEdit = {};
     m_history.clear();
@@ -105,6 +109,8 @@ void Canvas::destroyGpuObjects() {
     m_bounds.destroy();
     m_selection.destroy();
     ++m_selectionVersion;
+    m_wetTailPixels.destroy();
+    m_wetTailCoverage.destroy();
     m_strokeBase.destroy();
     m_strokeTarget.destroy();
     m_brush.destroy();
@@ -184,6 +190,8 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     brushes::sanitize(m_strokeParams);
     // Sin la textura de la punta no se pinta nada, pero el resto de la app funciona.
     m_brush.prepare(m_strokeParams);
+    // Borrar no mezcla: un pincel húmedo borra como cualquier otro.
+    m_wet = !erase && (m_settings.smudge || brushes::isWet(m_strokeParams));
 
     m_strokeGrain = {};
     if (m_strokeParams.grain != BrushGrain::None && m_strokeParams.grainDepth > 0.0f) {
@@ -198,13 +206,40 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     if (erase && m_strokeParams.eraseFlow > 0.0f) {
         path.flow = m_strokeParams.eraseFlow;
     }
+    if (m_wet && m_settings.smudge) {
+        path.flow = 1.0f;   // la fuerza de Difuminar es la opacidad
+    }
     path.pixelsPerPoint = m_pixelsPerPoint;
     path.seed = ++m_strokeCount * 0x9E3779B9U;
     m_path.begin(m_strokeParams, path, x, y, pressure);
-    // Sin memoria para el segundo buffer, el final afinado se ve al levantar el lápiz.
-    m_useBase = m_path.tapered() && ensureStrokeBase();
     m_provisionalBounds = {};
     m_drawnRevision = m_path.revision() - 1;
+
+    if (!m_wet) {
+        // Sin memoria para el segundo buffer, el final afinado se ve al levantar el lápiz.
+        m_useBase = m_path.tapered() && ensureStrokeBase();
+    } else {
+        // Pinta sobre la copia de trabajo, que se ve en lugar de la capa. El segundo buffer
+        // lleva la cobertura del trazo (ver Brush::drawWet); sin memoria para él, cada
+        // sello pinta como el primero. Difuminar no pinta y no lo necesita.
+        m_useBase = false;
+        m_wetCoverage = !m_settings.smudge && ensureStrokeBase();
+        m_wetTail = {};
+        m_strokeMode = StrokePreview::Mode::Replace;
+        m_wetMix = {};
+        std::copy(m_strokeColor, m_strokeColor + 3, m_wetMix.color);
+        m_wetMix.smudge = m_settings.smudge;
+        m_wetMix.radius = m_settings.radius;
+        m_wetMix.strength = m_strokeOpacity;
+        m_wetMix.alphaLock = m_layers.active().alphaLock;
+        m_wetMix.selection = operationMask();
+        m_wetMix.grain = m_strokeGrain.texture;
+        m_wetMix.grainScale = m_strokeGrain.scale;
+        m_wetMix.grainDepth = m_strokeGrain.depth;
+        m_wetMix.original = m_layers.active().target.texture.id();   // no cambia hasta el final
+        m_wetCursor = {};
+        m_wetValid = {};
+    }
     return true;
 }
 
@@ -228,6 +263,10 @@ void Canvas::cancelStroke() {
         return;
     }
     m_path = {};
+    if (m_wet) {
+        endWet();   // la capa no ha cambiado
+        return;
+    }
     clearStrokeBuffer(m_strokeBounds);
     m_layers.markDirty(m_strokeBounds);
     m_strokeBounds = {};
@@ -248,6 +287,10 @@ bool Canvas::ensureStrokeBase() {
 
 void Canvas::flushDabs() {
     if (!m_stroking) {
+        return;
+    }
+    if (m_wet) {
+        flushWet();
         return;
     }
     m_dabs.clear();
@@ -289,6 +332,10 @@ void Canvas::flushDabs() {
 }
 
 void Canvas::commitStroke() {
+    if (m_wet) {
+        commitWet();
+        return;
+    }
     // Con selección, la capa solo cambia en lo seleccionado.
     const IRect bounds = m_strokeBounds.intersected(operationRect());
     if (!bounds.empty()) {
@@ -322,6 +369,152 @@ void Canvas::commitStroke() {
     m_layers.markDirty(m_strokeBounds.intersected(IRect::ofSize(width(), height())));
     m_strokeBounds = {};
     m_provisionalBounds = {};
+    m_stroking = false;
+}
+
+void Canvas::prepareWet(const IRect& needed) {
+    const IRect all = IRect::ofSize(width(), height());
+    IRect want = needed.intersected(all);
+    if (want.empty() || (!m_wetValid.empty() && want.intersected(m_wetValid) == want)) {
+        return;
+    }
+    // Con margen: el trazo sigue por ahí y así no se copia en cada tanda.
+    const int margin = std::max(64, static_cast<int>(std::ceil(m_wetMix.radius * 2.0f)));
+    want = IRect{want.x0 - margin, want.y0 - margin, want.x1 + margin, want.y1 + margin}.intersected(all);
+    IRect grown = m_wetValid;
+    grown.unite(want);
+    // Solo lo que falta: lo que ya estaba tiene el trazo. Alrededor de una caja dentro de
+    // otra quedan como mucho cuatro franjas.
+    std::array<IRect, 4> parts{};
+    if (m_wetValid.empty()) {
+        parts[0] = grown;
+    } else {
+        const IRect& v = m_wetValid;
+        parts[0] = {grown.x0, grown.y0, grown.x1, v.y0};
+        parts[1] = {grown.x0, v.y1, grown.x1, grown.y1};
+        parts[2] = {grown.x0, v.y0, v.x0, v.y1};
+        parts[3] = {v.x1, v.y0, grown.x1, v.y1};
+    }
+    const GLuint layer = m_layers.active().target.fbo.id();
+    glDisable(GL_SCISSOR_TEST);
+    for (const IRect& part : parts) {
+        if (!part.empty()) {
+            copyRect(layer, part, m_strokeTarget.fbo.id(), part.x0, part.y0);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_wetValid = grown;
+}
+
+const gfx::RenderTarget* Canvas::wetCoverage() const { return m_wetCoverage ? &m_strokeBase : nullptr; }
+
+void Canvas::flushWet() {
+    m_dabs.clear();
+    m_path.takeFinal(m_dabs);
+    const std::vector<Dab>& provisional = m_path.provisional();
+    if (m_dabs.empty() && (!m_path.tapered() || m_path.revision() == m_drawnRevision)) {
+        return;
+    }
+    // El final afinado que se pintó de prueba se quita antes de seguir: los sellos
+    // definitivos parten de lo que dejaron los anteriores.
+    IRect changed = restoreWetTail();
+    prepareWet(Brush::wetBounds(m_dabs, m_wetCursor));
+    changed.unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), m_dabs, m_strokeParams, m_wetMix, m_wetCursor));
+    if (!provisional.empty()) {
+        // Se guarda lo que van a pisar para quitarlos en la tanda siguiente.
+        prepareWet(Brush::wetBounds(provisional, m_wetCursor));
+        if (saveWetTail(Brush::bounds(provisional).intersected(IRect::ofSize(width(), height())))) {
+            WetCursor tail = m_wetCursor;
+            changed.unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), provisional, m_strokeParams, m_wetMix, tail));
+        }
+    }
+    m_drawnRevision = m_path.revision();
+    m_strokeBounds.unite(changed);
+    m_layers.markDirty(changed);
+}
+
+bool Canvas::saveWetTail(const IRect& rect) {
+    if (rect.empty()) {
+        return false;
+    }
+    const bool coverage = wetCoverage() != nullptr;
+    for (gfx::RenderTarget* copy : {&m_wetTailPixels, &m_wetTailCoverage}) {
+        if (copy == &m_wetTailCoverage && !coverage) {
+            continue;
+        }
+        if (*copy && copy->width >= rect.width() && copy->height >= rect.height()) {
+            continue;
+        }
+        // Con margen: el final crece y encoge con la presión.
+        const int w = std::max(rect.width() + rect.width() / 2, copy->width);
+        const int h = std::max(rect.height() + rect.height() / 2, copy->height);
+        if (!copy->create(std::min(w, width()), std::min(h, height()))) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Sin memoria para ver el afinado mientras se pinta");
+            return false;
+        }
+    }
+    glDisable(GL_SCISSOR_TEST);
+    copyRect(m_strokeTarget.fbo.id(), rect, m_wetTailPixels.fbo.id(), 0, 0);
+    if (coverage) {
+        copyRect(m_strokeBase.fbo.id(), rect, m_wetTailCoverage.fbo.id(), 0, 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_wetTail = rect;
+    return true;
+}
+
+IRect Canvas::restoreWetTail() {
+    const IRect rect = m_wetTail;
+    if (rect.empty()) {
+        return {};
+    }
+    const IRect stored = IRect::ofSize(rect.width(), rect.height());
+    glDisable(GL_SCISSOR_TEST);
+    copyRect(m_wetTailPixels.fbo.id(), stored, m_strokeTarget.fbo.id(), rect.x0, rect.y0);
+    if (wetCoverage()) {
+        copyRect(m_wetTailCoverage.fbo.id(), stored, m_strokeBase.fbo.id(), rect.x0, rect.y0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_wetTail = {};
+    return rect;
+}
+
+void Canvas::commitWet() {
+    // La copia de trabajo ya tiene el resultado (y solo cambió en lo seleccionado).
+    const IRect bounds = m_strokeBounds.intersected(operationRect());
+    if (!bounds.empty()) {
+        Layer& layer = m_layers.active();
+        HistoryStep step;
+        step.kind = HistoryStep::Kind::Pixels;
+        step.layerId = layer.id;
+        step.rect = bounds;
+        const bool saved = saveRegion(layer, bounds, step.pixels);
+        glDisable(GL_SCISSOR_TEST);
+        copyRect(m_strokeTarget.fbo.id(), bounds, layer.target.fbo.id(), bounds.x0, bounds.y0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ++layer.revision;
+        m_layers.markDirty(bounds);
+        if (saved) {
+            step.bytes = bytesOf(bounds.width(), bounds.height());
+            record(std::move(step));
+        } else {
+            m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
+        }
+    }
+    endWet();
+}
+
+void Canvas::endWet() {
+    // Los dos buffers vuelven a quedar transparentes (la cobertura va en el segundo).
+    clearStrokeBuffer(m_wetValid);
+    // Lo que se veía de la copia de trabajo vuelve a salir de la capa.
+    m_layers.markDirty(m_strokeBounds.intersected(IRect::ofSize(width(), height())));
+    m_strokeBounds = {};
+    m_provisionalBounds = {};
+    m_wetValid = {};
+    m_wetTail = {};
+    m_wetCoverage = false;
+    m_wet = false;
     m_stroking = false;
 }
 
@@ -895,12 +1088,15 @@ bool Canvas::update() {
     preview.mode = m_strokeMode;
     preview.grain = m_strokeGrain;
     preview.selection = operationMask();
+    // Un trazo húmedo se ve en lugar de la capa, donde ya está su copia de trabajo.
+    preview.area = m_wet ? m_wetValid : IRect::ofSize(width(), height());
     const StrokePreview* shown = m_stroking ? &preview : nullptr;
     // Transformando, la capa se ve con la copia de trabajo (lo que quedaría al aplicar).
     StrokePreview working;
     if (m_transform.active && m_layers.indexOf(m_transform.layerId) == m_layers.activeIndex()) {
         working.texture = m_strokeTarget.texture.id();
         working.mode = StrokePreview::Mode::Replace;
+        working.area = IRect::ofSize(width(), height());
         shown = &working;
     }
     m_compositor.compose(m_layers, dirty, shown);

@@ -48,7 +48,10 @@ struct UiRequests {
 // Tipo de aviso: decide el icono.
 enum class Notice { Info, Success, Warning, Error, Progress, Undo, Redo };
 
-enum class Tool { Brush, Eraser };
+// Herramientas de pintar, cada una con su pincel, su tamaño y su opacidad. En la barra van
+// en el orden de Procreate: pincel, difuminar y borrador.
+enum class Tool { Brush, Eraser, Smudge };
+inline constexpr int kToolCount = 3;
 
 // Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar
 // o transformar.
@@ -166,7 +169,7 @@ private:
         int size = 1;   // tamaño de la interfaz: 0 pequeña, 1 normal, 2 grande
     };
 
-    // Ajustes de cada herramienta: el pincel y el borrador guardan los suyos.
+    // Ajustes de cada herramienta: el pincel, difuminar y el borrador guardan los suyos.
     struct ToolPreset {
         int brush = 0;          // en brushes::library()
         float size = 0.3f;      // posición del deslizador (0..1): el radio depende del pincel
@@ -214,6 +217,8 @@ private:
     void syncBrush(Canvas& canvas);
     void applyPreset(Canvas& canvas, Tool tool);
     void selectTool(Tool tool);
+    // Posición del botón de la herramienta en la barra de la derecha.
+    static int toolSlot(Tool tool);
     void togglePanel(Panel panel);
     void closePanels();
     // Cierra lo último que se abrió (el botón atrás o Escape). Con `canvas`, también sale
@@ -311,12 +316,12 @@ private:
     float m_insets[4] = {0, 0, 0, 0};
 
     Tool m_tool = Tool::Brush;
-    ToolPreset m_presets[2];
+    ToolPreset m_presets[kToolCount];
 
     // Pinceles: la biblioteca con los cambios del usuario, lo que recuerda cada uno y el
     // guardado (se escribe un momento después del último cambio).
     std::vector<BrushParams> m_brushParams;
-    std::vector<BrushMemory> m_brushMemory[2];
+    std::vector<BrushMemory> m_brushMemory[kToolCount];
     uint64_t m_brushSaveAt = 0;     // SDL_GetTicks; 0: nada pendiente
     int m_brushCategory = 0;        // la que muestra la lista
     bool m_brushPage = false;       // el panel muestra los ajustes del pincel elegido

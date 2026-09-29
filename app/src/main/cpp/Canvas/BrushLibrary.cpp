@@ -96,6 +96,23 @@ std::vector<BrushPreset> makeLibrary() {
          .grainDepth = 0.45f, .flow = 0.12f, .buildUp = B::Glaze, .pressureSize = 0.3f, .pressureOpacity = 0.7f,
          .sizeJitter = 0.1f, .minRadius = 4.0f, .maxRadius = 120.0f, .size = 0.45f, .opacity = 0.85f,
          .previewSize = 0.24f});
+    // Húmedos: mezclan su color con lo que ya está pintado y lo arrastran.
+    add("oleo-humedo", "Óleo húmedo", C::Painting,
+        {.tip = T::Bristle, .angle = 90.0f, .followStroke = true, .spacing = 0.05f, .taperStart = 0.05f,
+         .taperEnd = 0.1f, .taperTip = 0.6f, .grain = G::Canvas, .grainScale = 1.3f, .grainDepth = 0.12f,
+         .flow = 0.55f, .buildUp = B::Glaze, .wetPull = 0.4f, .wetCharge = 0.7f, .pressureSize = 0.3f,
+         .pressureOpacity = 0.3f, .sizeJitter = 0.05f, .minRadius = 3.0f, .maxRadius = 100.0f, .size = 0.4f,
+         .previewSize = 0.22f});
+    add("acuarela-humeda", "Acuarela húmeda", C::Painting,
+        {.tip = T::Wash, .rotationJitter = 1.0f, .spacing = 0.06f, .grain = G::Watercolor, .grainScale = 1.5f,
+         .grainDepth = 0.4f, .flow = 0.3f, .buildUp = B::Glaze, .wetPull = 0.3f, .wetCharge = 0.55f,
+         .wetDilution = 0.35f, .pressureSize = 0.3f, .pressureOpacity = 0.6f, .sizeJitter = 0.1f,
+         .minRadius = 4.0f, .maxRadius = 120.0f, .size = 0.45f, .opacity = 0.9f, .previewSize = 0.24f});
+    add("gouache-humedo", "Gouache húmedo", C::Painting,
+        {.tip = T::Flat, .angle = 90.0f, .followStroke = true, .spacing = 0.05f, .taperStart = 0.05f,
+         .taperEnd = 0.12f, .taperTip = 0.6f, .grain = G::Paper, .grainScale = 1.5f, .grainDepth = 0.15f,
+         .flow = 1.0f, .buildUp = B::Glaze, .wetPull = 0.25f, .wetCharge = 0.8f, .pressureSize = 0.4f,
+         .pressureOpacity = 0.2f, .minRadius = 3.0f, .maxRadius = 80.0f, .size = 0.4f, .previewSize = 0.2f});
 
     // --- Aerógrafo ---
     add("aerografo-suave", "Aerógrafo suave", C::Airbrushing,
@@ -183,6 +200,12 @@ constexpr brushes::ParamInfo kParams[] = {
      brushes::ParamCurve::Linear},
     {"flujo", "Flujo", &BrushParams::flow, 0.01f, 1.0f, brushes::ParamFormat::Percent,
      brushes::ParamCurve::Square},
+    {"arrastre", "Arrastre", &BrushParams::wetPull, 0.0f, 1.0f, brushes::ParamFormat::Percent,
+     brushes::ParamCurve::Linear},
+    {"carga", "Carga", &BrushParams::wetCharge, 0.0f, 1.0f, brushes::ParamFormat::Percent,
+     brushes::ParamCurve::Linear},
+    {"dilucion", "Dilución", &BrushParams::wetDilution, 0.0f, 1.0f, brushes::ParamFormat::Percent,
+     brushes::ParamCurve::Linear},
     {"presion-tamano", "Tamaño con la presión", &BrushParams::pressureSize, 0.0f, 1.0f,
      brushes::ParamFormat::Percent, brushes::ParamCurve::Linear},
     {"presion-opacidad", "Opacidad con la presión", &BrushParams::pressureOpacity, 0.0f, 1.0f,
@@ -287,6 +310,23 @@ float sizeFor(const BrushParams& params, float radius) {
         return 0.0f;
     }
     return std::sqrt(std::clamp((radius - lo) / (hi - lo), 0.0f, 1.0f));
+}
+
+bool isWet(const BrushParams& params) {
+    return params.wetPull > 0.0f || params.wetCharge < 1.0f || params.wetDilution > 0.0f;
+}
+
+float wetPaint(const BrushParams& params, float radius, float distance) {
+    // La dilución deja siempre algo de pigmento: con toda el agua, un 5 %.
+    const float amount = 1.0f - 0.95f * std::clamp(params.wetDilution, 0.0f, 1.0f);
+    const float charge = std::clamp(params.wetCharge, 0.0f, 1.0f);
+    if (charge >= 1.0f) {
+        return amount;
+    }
+    // La pintura baja a un tercio en un diámetro con carga 0, en unos 13 con carga 0,5 y en
+    // más de 100 con 0,9.
+    const float length = 2.0f * std::max(radius, 0.5f) * (1.0f + 12.0f * charge / (1.0f - charge));
+    return amount * std::exp(-std::max(distance, 0.0f) / length);
 }
 
 std::span<const ParamInfo> params() { return kParams; }

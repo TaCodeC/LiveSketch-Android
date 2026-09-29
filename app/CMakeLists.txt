@@ -207,6 +207,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
             ${TESTS_DIR}/SelectionTests.cpp
+            ${TESTS_DIR}/WetMixTests.cpp
     )
     target_compile_options(livesketch_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
     target_link_libraries(livesketch_tests PRIVATE livesketch_core)

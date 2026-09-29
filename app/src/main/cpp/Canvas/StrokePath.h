@@ -5,13 +5,14 @@
 #include <cstdint>
 #include <vector>
 
-// Un sello listo para la GPU: cinco floats seguidos, que se suben tal cual.
+// Un sello listo para la GPU: seis floats seguidos, que se suben tal cual.
 struct Dab {
-    float x = 0.0f;        // centro, en píxeles del lienzo
+    float x = 0.0f;          // centro, en píxeles del lienzo
     float y = 0.0f;
-    float radius = 0.0f;   // píxeles
-    float alpha = 0.0f;    // 0..1
-    float angle = 0.0f;    // radianes (con la y hacia abajo, positivo gira a la derecha)
+    float radius = 0.0f;     // píxeles
+    float alpha = 0.0f;      // 0..1
+    float angle = 0.0f;      // radianes (con la y hacia abajo, positivo gira a la derecha)
+    float distance = 0.0f;   // recorrido desde el principio del trazo (la carga de la mezcla húmeda)
 };
 
 // Convierte las muestras del lápiz en sellos: estabilización, espaciado, presión, afinado

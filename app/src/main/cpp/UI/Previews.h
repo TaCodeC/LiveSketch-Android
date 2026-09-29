@@ -57,4 +57,5 @@ private:
     StrokePath m_path;
     std::vector<Dab> m_dabs;
     std::unordered_map<int, Stroke> m_strokes;   // por `slot`
+    gfx::RenderTarget m_wetCoverage;             // cobertura de la muestra de un pincel húmedo
 };

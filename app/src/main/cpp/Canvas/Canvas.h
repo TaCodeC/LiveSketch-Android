@@ -28,6 +28,10 @@
 // usa para borrar si el borrador está activo. Si el pincel afina el final, los sellos
 // definitivos se guardan en un segundo buffer y el primero es ese más los provisionales.
 //
+// Un pincel húmedo y Difuminar mezclan con lo que ya hay: el buffer es entonces una copia
+// de trabajo de la capa (se copia por zonas, según avanza el trazo), se pinta sobre ella
+// y se ve en lugar de la capa; al terminar, lo que cambió pasa a la capa.
+//
 // Los trazos y las operaciones de capas se pueden deshacer: antes de cambiar píxeles se
 // copia la zona afectada a una textura (en la GPU, sin pasar por la RAM).
 //
@@ -223,6 +227,19 @@ private:
     void fill(Layer& layer, float r, float g, float b, float a);
     void flushDabs();
     void commitStroke();
+    // Mezcla húmeda y Difuminar.
+    void flushWet();
+    void commitWet();
+    // Deja los buffers de trazo transparentes y termina el trazo húmedo.
+    void endWet();
+    // Copia la capa a la copia de trabajo en lo que falte de `needed`.
+    void prepareWet(const IRect& needed);
+    // La cobertura del trazo húmedo (el segundo buffer), o nullptr si no se lleva.
+    const gfx::RenderTarget* wetCoverage() const;
+    // El final afinado provisional se pinta encima de la copia de trabajo: antes se guarda
+    // lo que pisa (`rect`, con su cobertura) y en la tanda siguiente se devuelve.
+    bool saveWetTail(const IRect& rect);
+    IRect restoreWetTail();
     // Deja transparentes los buffers de trazo en `rect`.
     void clearStrokeBuffer(const IRect& rect);
     bool ensureStrokeBase();
@@ -287,6 +304,14 @@ private:
     IRect m_provisionalBounds;          // provisionales pintados en m_strokeTarget
     uint32_t m_drawnRevision = 0;
     uint32_t m_strokeCount = 0;         // semilla del azar de cada trazo
+    bool m_wet = false;                 // el trazo mezcla con la capa (húmedo o Difuminar)
+    bool m_wetCoverage = false;         // m_strokeBase lleva la cobertura del trazo húmedo
+    WetMix m_wetMix;
+    WetCursor m_wetCursor;              // tras el último sello definitivo
+    IRect m_wetValid;                   // zona de m_strokeTarget con la copia de la capa
+    IRect m_wetTail;                    // lo que pisa el final provisional (guardado abajo)
+    gfx::RenderTarget m_wetTailPixels;  // lo que había ahí, desde (0, 0)
+    gfx::RenderTarget m_wetTailCoverage;
 
     uint64_t m_version = 0;
     std::vector<std::vector<uint8_t>> m_snapshot; // una entrada por capa, de abajo arriba

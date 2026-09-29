@@ -69,6 +69,12 @@ struct BrushParams {
     float eraseFlow = 0.0f;        // al borrar (0: el mismo flujo)
     BrushBuildUp buildUp = BrushBuildUp::Glaze;
 
+    // Mezcla húmeda: con cualquiera de las tres, el pincel pinta directamente sobre la
+    // capa mezclando su color con lo que ya hay (ver Brush::drawWet).
+    float wetPull = 0.0f;          // arrastre: cuánto se lleva de lo que hay debajo
+    float wetCharge = 1.0f;        // carga: cuánta pintura lleva (1: no se acaba)
+    float wetDilution = 0.0f;      // dilución: agua en la pintura (más clara y más mezclada)
+
     // Dinámica.
     float pressureSize = 1.0f;     // cuánto adelgaza con poca presión (0..1)
     float pressureOpacity = 0.0f;  // cuánto se aclara con poca presión (0..1)
@@ -108,12 +114,20 @@ const char* categoryName(BrushCategory category);
 // Pinceles por defecto de cada herramienta.
 inline constexpr std::string_view kDefaultPaint = "pluma-estudio";
 inline constexpr std::string_view kDefaultErase = "aerografo-duro";
+inline constexpr std::string_view kDefaultSmudge = "aerografo-suave";
 // El "Básico" de siempre: con el que pinta el lienzo si nadie elige otro.
 const BrushParams& basic();
 
 // Radio (px del lienzo) de una posición del deslizador de tamaño, y al revés.
 float radiusFor(const BrushParams& params, float size);
 float sizeFor(const BrushParams& params, float radius);
+
+// El pincel mezcla con lo que hay en la capa (tiene arrastre, poca carga o dilución).
+bool isWet(const BrushParams& params);
+// Pintura (0..1) que deja un sello de un pincel húmedo a `distance` píxeles del principio
+// del trazo: la dilución la rebaja y, sin carga completa, se va acabando. `radius`: el
+// del pincel (uno más grande lleva más pintura).
+float wetPaint(const BrushParams& params, float radius, float distance);
 
 // Ajustes numéricos que se pueden cambiar en el panel del pincel.
 enum class ParamFormat { Percent, Degrees, Count, Scale, Diameter };

@@ -236,6 +236,7 @@ void StrokePath::stamp(Cursor& cursor, const Sample& sample, const Taper& taper,
         dab.radius = radius * (1.0f - p.sizeJitter * random(seed, index, 0));
         dab.alpha = m_settings.flow * alphaFactor * (1.0f - p.opacityJitter * random(seed, index, 1));
         dab.angle = angle + p.rotationJitter * kPi * (2.0f * random(seed, index, 2) - 1.0f);
+        dab.distance = cursor.s;
         if (p.scatter > 0.0f) {
             // Repartido por igual en un círculo de `scatter` diámetros de radio.
             const float distance = p.scatter * 2.0f * radius * std::sqrt(random(seed, index, 3));
