@@ -135,7 +135,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     drawDock(*canvas);
     drawPanels(*canvas, requests);
     drawHud(*canvas);
-    drawThreshold();
+    drawThreshold(*canvas);
     drawPicker(*canvas);
     drawDrop(*canvas);
     drawDialogs(canvas, requests);
@@ -165,11 +165,11 @@ void Ui::computeLayout() {
     L.bottom = L.display.y - L.safe[2] - L.margin;
 
     // Barras de arriba. A la izquierda, en una tableta: acciones, guardar y centrar, y
-    // Selección y Transformar; en un teléfono: acciones, NDI y Modificar. Si no caben con
-    // las de la derecha (un teléfono estrecho), los botones se estrechan un poco.
+    // Ajustes, Selección y Transformar; en un teléfono: acciones, NDI y Modificar. Si no
+    // caben con las de la derecha (un teléfono estrecho), los botones se estrechan un poco.
     const float barHeight = pt(th::kBarHeight);
     const float pad = pt(th::kBarPadding);
-    const float leftButtons = L.narrow ? 3.0f : 5.0f;
+    const float leftButtons = L.narrow ? 3.0f : 6.0f;
     const float rightButtons = 5.0f;
     const float room = (L.right - L.left) - pt(8.0f) - pad * 4.0f;
     const float button = std::max(pt(36.0f), std::min(pt(th::kBarButtonWidth), room / (leftButtons + rightButtons)));
@@ -376,8 +376,8 @@ bool Ui::closeTopmost(Canvas* canvas) {
         m_eyedropperArmed = false;
         return true;
     }
-    // Después, la herramienta: el lazo a medias se descarta, la transformación se
-    // cancela y la selección vuelve a pintar (la selección se queda).
+    // Después, la herramienta: el lazo a medias se descarta, la transformación y el ajuste
+    // de imagen se cancelan y la selección vuelve a pintar (la selección se queda).
     if (canvas && m_canvasTool == CanvasTool::Select) {
         if (m_select.pendingPolygon()) {
             m_select.dropPolygon();
@@ -391,6 +391,10 @@ bool Ui::closeTopmost(Canvas* canvas) {
         canvas->cancelTransform();
         m_transform.stop();
         m_canvasTool = m_toolBeforeTransform;
+        return true;
+    }
+    if (canvas && m_canvasTool == CanvasTool::Adjust) {
+        finishAdjust(*canvas, false);
         return true;
     }
     return false;
@@ -520,8 +524,8 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         return ImRect(x, y, x + width, y + height);
     };
 
-    // Izquierda: acciones, guardar, centrar, selección y transformar (en un teléfono,
-    // acciones, NDI y Modificar, que abre las dos últimas).
+    // Izquierda: acciones, guardar, centrar, ajustes, selección y transformar (en un
+    // teléfono, acciones, NDI y Modificar, que abre las tres últimas).
     beginBar("##bar-left", L.leftBar, L.leftBar.GetHeight() * 0.5f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (barButton("##actions", slot(L.leftBar, 0), icon::kWrench, m_panel == Panel::Actions, false)) {
@@ -564,13 +568,18 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         const float divider = std::round(slot(L.leftBar, 3).Min.x);
         dl->AddLine(ImVec2(divider, L.leftBar.Min.y + pt(14.0f)), ImVec2(divider, L.leftBar.Max.y - pt(14.0f)),
                     IM_COL32(255, 255, 255, 36), ui::hairline());
+        const bool adjusting = m_canvasTool == CanvasTool::Adjust;
         const bool selecting = m_canvasTool == CanvasTool::Select;
         const bool transforming = m_canvasTool == CanvasTool::Transform;
-        if (barButton("##select", slot(L.leftBar, 3), icon::kSelection, false, selecting)) {
+        m_adjustButton = slot(L.leftBar, 3);
+        if (barButton("##adjust", m_adjustButton, icon::kAdjust, m_panel == Panel::Adjust, adjusting)) {
+            togglePanel(Panel::Adjust);
+        }
+        if (barButton("##select", slot(L.leftBar, 4), icon::kSelection, false, selecting)) {
             closePanels();
             setCanvasTool(canvas, selecting ? CanvasTool::Paint : CanvasTool::Select);
         }
-        if (barButton("##transform", slot(L.leftBar, 4), icon::kTransform, false, transforming)) {
+        if (barButton("##transform", slot(L.leftBar, 5), icon::kTransform, false, transforming)) {
             closePanels();
             // Tocarla otra vez aplica la transformación y vuelve a lo de antes.
             setCanvasTool(canvas, transforming ? m_toolBeforeTransform : CanvasTool::Transform);

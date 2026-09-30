@@ -303,6 +303,7 @@ void Ui::drawPanels(Canvas& canvas, UiRequests& requests) {
     colorPanel(canvas);
     featherPanel(canvas);
     modifyPanel(canvas);
+    adjustPanel(canvas);
 }
 
 // -----------------------------------------------------------------------------

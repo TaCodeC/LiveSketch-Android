@@ -1,6 +1,7 @@
 // Herramientas Selección y Transformar: su entrada sobre el lienzo, deshacer, los atajos
 // de teclado, la barra de opciones de abajo, lo que dibujan encima del lienzo y sus
-// paneles (difuminar y, en un teléfono, Modificar, que las abre).
+// paneles (difuminar y, en un teléfono, Modificar, que las abre con los Ajustes). Lo propio
+// de los ajustes de imagen está en UiAdjust.cpp.
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
@@ -314,10 +315,21 @@ void Ui::setCanvasTool(Canvas& canvas, CanvasTool tool) {
         }
         m_transform.stop();
         break;
+    case CanvasTool::Adjust:
+        m_adjustDrag = {};
+        if (canvas.adjusting()) {
+            canvas.endAdjust(true);
+        }
+        break;
     case CanvasTool::Paint:
         break;
     }
-    m_canvasTool = tool == CanvasTool::Transform ? previous : tool;
+    // Un ajuste se empieza con startAdjust; al salir de él se vuelve a lo de antes.
+    const CanvasTool resting = previous == CanvasTool::Adjust ? m_toolBeforeAdjust : previous;
+    if (tool == CanvasTool::Adjust) {
+        tool = resting;
+    }
+    m_canvasTool = tool == CanvasTool::Transform ? resting : tool;
     m_eyedropperArmed = false;
     if (tool == CanvasTool::Transform) {
         enterTransform(canvas, false);
@@ -361,8 +373,9 @@ void Ui::canvasCreated() {
     m_drop = {};
     m_select.dropPolygon();
     m_transform.stop();
+    m_adjustDrag = {};
     m_canvasTool = CanvasTool::Paint;
-    if (m_panel == Panel::Feather || m_panel == Panel::Modify) {
+    if (m_panel == Panel::Feather || m_panel == Panel::Modify || m_panel == Panel::Adjust) {
         closePanels();
     }
 }
@@ -373,6 +386,11 @@ void Ui::toolFrame(Canvas& canvas) {
     if (m_canvasTool == CanvasTool::Transform && !canvas.transforming()) {
         m_transform.stop();
         m_canvasTool = m_toolBeforeTransform;
+    }
+    // El ajuste de imagen también: otra operación lo aplicó o deshacer lo quitó.
+    if (m_canvasTool == CanvasTool::Adjust && !canvas.adjusting()) {
+        m_adjustDrag = {};
+        m_canvasTool = m_toolBeforeAdjust;
     }
     // Difuminar: si deshacer lo quitó, se cierra su panel; si el panel se cerró (tocando
     // fuera), se guarda.
@@ -401,6 +419,9 @@ void Ui::toolPress(Canvas& canvas, const ToolView& view, ImVec2 position, Select
     case CanvasTool::Transform:
         m_transform.press(canvas, view, position);
         break;
+    case CanvasTool::Adjust:
+        adjustPress(position);
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -418,6 +439,9 @@ void Ui::toolDrag(Canvas& canvas, const ToolView& view, ImVec2 position, bool co
     case CanvasTool::Transform:
         m_transform.drag(canvas, view, position);
         break;
+    case CanvasTool::Adjust:
+        adjustDrag(canvas, position);
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -431,6 +455,9 @@ void Ui::toolRelease(Canvas& canvas, const ToolView& view, ImVec2 position) {
     case CanvasTool::Transform:
         m_transform.release(canvas);
         break;
+    case CanvasTool::Adjust:
+        adjustRelease();
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -439,6 +466,7 @@ void Ui::toolRelease(Canvas& canvas, const ToolView& view, ImVec2 position) {
 void Ui::toolCancel(Canvas& canvas) {
     m_select.cancel(canvas);
     m_transform.cancel(canvas);
+    adjustCancel(canvas);
 }
 
 void Ui::selectionNotice(SelectTool::Result result) {
@@ -461,7 +489,7 @@ void Ui::selectionNotice(SelectTool::Result result) {
 bool Ui::undoStep(Canvas& canvas, bool redo) {
     // Un gesto a medias (arrastrando la caja o el umbral) solo se cancela: es lo que se
     // deshace, como un trazo que aún no ha terminado.
-    if (!redo && (m_select.gestureActive() || m_transform.gestureActive())) {
+    if (!redo && (m_select.gestureActive() || m_transform.gestureActive() || m_adjustDrag.active)) {
         toolCancel(canvas);
         return true;
     }
@@ -478,6 +506,11 @@ bool Ui::undoStep(Canvas& canvas, bool redo) {
         }
     }
     if (!redo && m_canvasTool == CanvasTool::Transform && m_transform.undo(canvas)) {
+        return true;
+    }
+    // Un ajuste a medias no está en el historial: deshacer lo cancela.
+    if (!redo && m_canvasTool == CanvasTool::Adjust && canvas.adjusting()) {
+        finishAdjust(canvas, false);
         return true;
     }
     return redo ? canvas.redo() : canvas.undo();
@@ -577,10 +610,14 @@ bool Ui::toolKeys(Canvas& canvas) {
             setCanvasTool(canvas, m_toolBeforeTransform);
             return true;
         }
+        if (m_canvasTool == CanvasTool::Adjust) {
+            finishAdjust(canvas, true);
+            return true;
+        }
         return false;
     }
     if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) &&
-        canvas.hasSelection() && m_canvasTool != CanvasTool::Transform) {
+        canvas.hasSelection() && (m_canvasTool == CanvasTool::Paint || m_canvasTool == CanvasTool::Select)) {
         clearSelected(canvas);
         return true;
     }
@@ -629,6 +666,7 @@ void Ui::drawDock(Canvas& canvas) {
     m_dock = ImRect();
     selectDock(canvas);
     transformDock(canvas);
+    adjustDock(canvas);
     drawPolygonBar(canvas);
 }
 
@@ -914,23 +952,46 @@ void Ui::drawPolygonBar(Canvas& canvas) {
     }
 }
 
-void Ui::drawThreshold() {
-    // Umbral de la selección automática o del relleno mientras se ajusta, donde salen los
-    // avisos.
+void Ui::drawThreshold(const Canvas& canvas) {
+    // Donde salen los avisos, mientras se ajusta algo deslizando: el umbral de la selección
+    // automática o del relleno, o el valor principal del ajuste de imagen.
     const bool selecting = m_canvasTool == CanvasTool::Select && m_select.adjustingThreshold();
-    const bool shown = selecting || m_drop.filling;
+    const bool adjusting = m_canvasTool == CanvasTool::Adjust && m_adjustDrag.active && canvas.adjusting();
+    const bool shown = selecting || m_drop.filling || adjusting;
     if (shown) {
-        m_thresholdFill = !selecting;   // al ocultarse sigue mostrando el mismo
+        // Al ocultarse sigue mostrando lo mismo.
+        m_pill = selecting ? Pill::Select : (m_drop.filling ? Pill::Fill : Pill::Adjust);
     }
     const ImGuiID id = ImHashStr("##threshold");
     const float p = ui::anim::followFrom(id, 0.0f, shown ? 1.0f : 0.0f, shown ? 22.0f : 9.0f);
     if (p <= 0.002f) {
         return;
     }
+    const char* glyph = icon::kWand;
+    const char* title = "Umbral";
+    char value[24];
+    float t = 0.0f;
+    switch (m_pill) {
+    case Pill::Select:
+        t = m_select.threshold();
+        break;
+    case Pill::Fill:
+        glyph = icon::kPaintBucket;
+        title = "Umbral de relleno";
+        t = m_fillThreshold;
+        break;
+    case Pill::Adjust:
+        adjustPill(canvas, &glyph, &title, value, sizeof(value), &t);
+        break;
+    }
+    if (m_pill != Pill::Adjust) {
+        std::snprintf(value, sizeof(value), "%d %%", static_cast<int>(std::lround(t * 100.0f)));
+    }
     const Layout& L = m_layout;
-    const char* title = m_thresholdFill ? "Umbral de relleno" : "Umbral";
     const float needed = pt(16.0f + 24.0f) + ui::measure(Weight::SemiBold, th::kSubhead, title).x +
-                         ui::measure(Weight::SemiBold, th::kSubhead, "100 %").x + pt(16.0f + 16.0f);
+                         std::max(ui::measure(Weight::SemiBold, th::kSubhead, value).x,
+                                  ui::measure(Weight::SemiBold, th::kSubhead, "100 %").x) +
+                         pt(16.0f + 16.0f);
     const float width = std::min(std::max(pt(236.0f), needed), L.right - L.left);
     const float height = pt(52.0f);
     const float x = std::round((L.display.x - width) * 0.5f);
@@ -944,21 +1005,19 @@ void Ui::drawThreshold() {
     ui::shadow(dl, rect, radius, pt(26.0f), pt(8.0f), 0.24f);
     ui::popUnclipped(dl);
     ui::glass(dl, rect, radius, IM_COL32(40, 40, 44, 184));
-    const float t = m_thresholdFill ? m_fillThreshold : m_select.threshold();
-    char value[16];
-    std::snprintf(value, sizeof(value), "%d %%", static_cast<int>(std::lround(t * 100.0f)));
     const float left = rect.Min.x + pt(16.0f);
     const float right = rect.Max.x - pt(16.0f);
     const float cy = rect.Min.y + pt(20.0f);
-    ui::icon(dl, m_thresholdFill ? icon::kPaintBucket : icon::kWand, ImVec2(left + pt(8.0f), cy), 16.0f,
-             th::kAccentText);
-    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(left + pt(24.0f), cy), Align::Left, th::kLabel, title);
+    ui::icon(dl, glyph, ImVec2(left + pt(8.0f), cy), 16.0f, th::kAccentText);
+    const float valueWidth = ui::measure(Weight::SemiBold, th::kSubhead, value).x;
+    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(left + pt(24.0f), cy), Align::Left, th::kLabel, title,
+              std::max(pt(40.0f), right - valueWidth - pt(12.0f) - (left + pt(24.0f))));
     ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(right, cy), Align::Right, th::kLabel, value);
     const float barY = rect.Max.y - pt(13.0f);
     dl->AddRectFilled(ImVec2(left, barY - pt(1.5f)), ImVec2(right, barY + pt(1.5f)), IM_COL32(255, 255, 255, 46),
                       pt(1.5f));
-    dl->AddRectFilled(ImVec2(left, barY - pt(1.5f)), ImVec2(left + (right - left) * t, barY + pt(1.5f)), th::kAccent,
-                      pt(1.5f));
+    dl->AddRectFilled(ImVec2(left, barY - pt(1.5f)), ImVec2(left + (right - left) * std::clamp(t, 0.0f, 1.0f), barY + pt(1.5f)),
+                      th::kAccent, pt(1.5f));
     ui::transform(mark, rect.GetCenter(), 1.0f, ImVec2(0.0f, -pt(10.0f) * (1.0f - p)), p);
     ui::endSurface();
 }
@@ -1019,10 +1078,10 @@ void Ui::featherPanel(Canvas& canvas) {
 }
 
 void Ui::modifyPanel(Canvas& canvas) {
-    // Teléfono: Selección y Transformar van detrás de un botón.
+    // Teléfono: Selección, Transformar y Ajustes van detrás de un botón.
     const Layout& L = m_layout;
     const float row = pt(64.0f);
-    const float content = pt(th::kHeaderHeight + 8.0f) + row * 2.0f + pt(6.0f + 12.0f);
+    const float content = pt(th::kHeaderHeight + 8.0f) + row * 3.0f + pt(6.0f * 2.0f + 12.0f);
     const float anchorX = m_modifyButton.GetWidth() > 0.0f ? m_modifyButton.GetCenter().x : L.leftBar.GetCenter().x;
     PanelFrame f;
     if (!beginPanel(f, Panel::Modify, "##panel-modify", L.leftBar.Min.x, pt(320.0f), content, anchorX, false)) {
@@ -1039,13 +1098,13 @@ void Ui::modifyPanel(Canvas& canvas) {
         const char* title;
         const char* detail;
     };
-    const Entry entries[2] = {
+    const Entry entries[3] = {
         {CanvasTool::Select, icon::kSelection, "Selección", "Lazo, rectángulo, elipse o automática"},
         {CanvasTool::Transform, icon::kTransform, "Transformar", "Mover, escalar, girar o distorsionar"},
+        {CanvasTool::Adjust, icon::kAdjust, "Ajustes", "Color, desenfoque, enfocar y ruido"},
     };
-    CanvasTool chosen = m_canvasTool;
-    bool picked = false;
-    for (int i = 0; i < 2; ++i) {
+    int picked = -1;
+    for (int i = 0; i < 3; ++i) {
         const Entry& e = entries[i];
         const ImRect r(ImVec2(f.content.Min.x + pt(8.0f), y), ImVec2(f.content.Max.x - pt(8.0f), y + row));
         const bool active = m_canvasTool == e.tool;
@@ -1062,19 +1121,27 @@ void Ui::modifyPanel(Canvas& canvas) {
         ui::label(dl, Weight::SemiBold, th::kBody, ImVec2(x, cy - pt(9.0f)), Align::Left, color, e.title, maxWidth);
         ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(x, cy + pt(11.0f)), Align::Left, th::kSecondaryLabel,
                   e.detail, maxWidth);
-        if (active) {
+        if (e.tool == CanvasTool::Adjust) {
+            ui::icon(dl, icon::kChevronRight, ImVec2(r.Max.x - pt(22.0f), cy), 18.0f, th::kTertiaryLabel);
+        } else if (active) {
             ui::icon(dl, icon::kCheck, ImVec2(r.Max.x - pt(22.0f), cy), 18.0f, th::kAccentText);
         }
-        if (c.press.clicked) {
-            // Tocar la que ya está elegida vuelve a pintar.
-            chosen = active ? CanvasTool::Paint : e.tool;
-            picked = true;
+        if (c.press.clicked && f.open) {
+            picked = i;
         }
         y += row + pt(6.0f);
     }
     endPanel(f);
-    if (picked) {
-        closePanels();
-        setCanvasTool(canvas, chosen);
+    if (picked < 0) {
+        return;
     }
+    const Entry& e = entries[picked];
+    if (e.tool == CanvasTool::Adjust) {
+        // La lista de ajustes sustituye a este panel.
+        m_panel = Panel::Adjust;
+        return;
+    }
+    closePanels();
+    // Tocar la que ya está elegida vuelve a pintar.
+    setCanvasTool(canvas, m_canvasTool == e.tool ? CanvasTool::Paint : e.tool);
 }

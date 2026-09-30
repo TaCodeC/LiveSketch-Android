@@ -5,6 +5,7 @@
 #include "Canvas/ColorFill.h"
 #include "Canvas/Compositor.h"
 #include "Canvas/History.h"
+#include "Canvas/ImageAdjust.h"
 #include "Canvas/LayerStack.h"
 #include "Canvas/Selection.h"
 #include "Canvas/SelectionShapes.h"
@@ -122,8 +123,9 @@ public:
     void renameLayer(int index, std::string name);
 
     // Deshacer y rehacer. Terminan antes el trazo en curso, el cambio de propiedades, la
-    // selección automática, el difuminado y el relleno (así deshacer los quita). Con una
-    // transformación a medias, deshacer la cancela (y no toca el historial).
+    // selección automática, el difuminado, el relleno y el ajuste de imagen (así deshacer
+    // los quita). Con una transformación a medias, deshacer la cancela (y no toca el
+    // historial).
     bool canUndo() const { return m_history.canUndo() || editPending() || livePending(); }
     bool canRedo() const { return m_history.canRedo() && !editPending() && !livePending(); }
     bool undo();
@@ -131,8 +133,8 @@ public:
     const History& history() const { return m_history; }
 
     // Cierra lo que esté a medias antes de otra operación: el trazo, el cambio de
-    // propiedades, la selección automática, el difuminado y el relleno (se guardan) y la
-    // transformación (se aplica).
+    // propiedades, la selección automática, el difuminado, el relleno y el ajuste de imagen
+    // (se guardan) y la transformación (se aplica).
     void settle();
 
     // --- Selección (CanvasSelection.cpp) ---
@@ -210,6 +212,25 @@ public:
     bool endFill(bool apply);
     bool filling() const { return m_fill.active; }
 
+    // --- Ajustes de imagen (CanvasAdjust.cpp) ---
+    // Cambia la capa activa con un ajuste (ver ImageAdjust.h) cuyos valores se pueden
+    // cambiar en vivo con setAdjust mientras se ve el resultado. Con selección, solo en lo
+    // seleccionado (el desenfoque también lee lo de alrededor); con el alfa bloqueado, el
+    // alfa de la capa no cambia. endAdjust lo aplica (un paso de deshacer, si cambia algo)
+    // o lo quita, y devuelve si cambió la capa. beginAdjust devuelve Hidden si la capa
+    // activa no se ve, y NoMemory (como setAdjust, false) si no caben los intermedios del
+    // desenfoque; entonces se sigue viendo lo de antes.
+    Edit beginAdjust(Adjustment kind, const AdjustParams& params);
+    bool setAdjust(const AdjustParams& params);
+    bool endAdjust(bool apply);
+    bool adjusting() const { return m_adjust.active; }
+    Adjustment adjustKind() const { return m_adjust.kind; }
+    const AdjustParams& adjustParams() const { return m_adjust.params; }
+    // Mientras `original`, la capa se ve sin el ajuste (para comparar).
+    void showAdjustOriginal(bool original);
+    // Sigma máxima del desenfoque, en píxeles del lienzo.
+    float maxBlur() const;
+
     // Color del compuesto en un punto del lienzo, sin premultiplicar. Devuelve false si
     // el punto cae fuera del lienzo o es transparente.
     bool pickColor(float x, float y, float rgb[3]);
@@ -269,8 +290,10 @@ private:
     void recordProperties(int index, const LayerProperties& before);
     void beginLayerEdit(int index);
     bool editPending() const;
-    // Selección automática, difuminado, transformación o relleno a medias.
-    bool livePending() const { return m_auto.active || m_feather.active || m_transform.active || m_fill.active; }
+    // Selección automática, difuminado, transformación, relleno o ajuste a medias.
+    bool livePending() const {
+        return m_auto.active || m_feather.active || m_transform.active || m_fill.active || m_adjust.active;
+    }
     bool saveRegion(const Layer& layer, const IRect& rect, gfx::RenderTarget& out);
     void swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stored);
     void record(HistoryStep step);
@@ -303,6 +326,9 @@ private:
     // Lo que cambia el relleno con el umbral actual.
     IRect fillReach() const;
     void drawFill();
+
+    // Ajustes de imagen (CanvasAdjust.cpp). False: sin memoria (no cambia lo que se ve).
+    bool drawAdjust();
 
     bool m_ready = false;
     int m_maxTextureSize = 0;          // lado máximo de una textura en esta GPU
@@ -397,4 +423,18 @@ private:
         bool alphaLock = false;
         IRect drawn;                          // zona del buffer de trazo con la vista previa
     } m_fill;
+
+    // Ajuste de imagen: la vista previa va en el buffer de trazo, como la del relleno.
+    ImageAdjust m_imageAdjust;
+    struct Adjust {
+        bool active = false;
+        uint32_t layerId = 0;
+        Adjustment kind = Adjustment::HueSaturation;
+        AdjustParams params;
+        bool alphaLock = false;
+        IRect rect;              // zona que cambia: lo seleccionado o todo el lienzo
+        IRect drawn;             // zona del buffer de trazo con la vista previa
+        bool original = false;   // se ve la capa sin el ajuste
+    } m_adjust;
+    uint32_t m_adjustCount = 0;   // semilla del ruido de cada ajuste
 };

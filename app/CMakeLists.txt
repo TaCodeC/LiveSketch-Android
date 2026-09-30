@@ -102,12 +102,14 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/BrushTips.cpp
         ${SRC_DIR}/Canvas/Camera.cpp
         ${SRC_DIR}/Canvas/Canvas.cpp
+        ${SRC_DIR}/Canvas/CanvasAdjust.cpp
         ${SRC_DIR}/Canvas/CanvasFill.cpp
         ${SRC_DIR}/Canvas/CanvasSelection.cpp
         ${SRC_DIR}/Canvas/CanvasView.cpp
         ${SRC_DIR}/Canvas/ColorFill.cpp
         ${SRC_DIR}/Canvas/Compositor.cpp
         ${SRC_DIR}/Canvas/History.cpp
+        ${SRC_DIR}/Canvas/ImageAdjust.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
         ${SRC_DIR}/Canvas/Selection.cpp
         ${SRC_DIR}/Canvas/SelectionShapes.cpp
@@ -128,6 +130,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/PanelParts.cpp
         ${SRC_DIR}/UI/Previews.cpp
         ${SRC_DIR}/UI/Ui.cpp
+        ${SRC_DIR}/UI/UiAdjust.cpp
         ${SRC_DIR}/UI/UiBrushes.cpp
         ${SRC_DIR}/UI/UiDialogs.cpp
         ${SRC_DIR}/UI/UiFill.cpp
@@ -202,6 +205,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
     set(TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     add_executable(livesketch_tests
             ${TESTS_DIR}/TestMain.cpp
+            ${TESTS_DIR}/AdjustTests.cpp
             ${TESTS_DIR}/BrushTests.cpp
             ${TESTS_DIR}/CameraTests.cpp
             ${TESTS_DIR}/CanvasTests.cpp

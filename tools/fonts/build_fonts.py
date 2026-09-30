@@ -134,6 +134,8 @@ ICONS = {
     "kUnite": "squares-unite",
     "kSubtract": "squares-subtract",
     # Ajustes de imagen.
+    "kAdjust": "wand",
+    "kGrain": "grip",
     "kSun": "sun-medium",
     "kScale": "scale",
     "kAperture": "aperture",

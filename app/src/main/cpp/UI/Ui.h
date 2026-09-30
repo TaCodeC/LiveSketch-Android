@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Canvas/BrushLibrary.h"
+#include "Canvas/ImageAdjust.h"
 #include "Canvas/Selection.h"
 #include "Tools/SelectTool.h"
 #include "Tools/ToolView.h"
@@ -53,9 +54,9 @@ enum class Notice { Info, Success, Warning, Error, Progress, Undo, Redo };
 enum class Tool { Brush, Eraser, Smudge };
 inline constexpr int kToolCount = 3;
 
-// Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar
-// o transformar.
-enum class CanvasTool { Paint, Select, Transform };
+// Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar,
+// transformar o, con un ajuste de imagen, cambiar su valor principal deslizando a los lados.
+enum class CanvasTool { Paint, Select, Transform, Adjust };
 
 // Interfaz al estilo de Procreate: barras flotantes de cristal arriba, barra lateral con
 // tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se abren desde las
@@ -63,8 +64,9 @@ enum class CanvasTool { Paint, Select, Transform };
 //
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
-// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiFill.cpp
-// (arrastrar el color para rellenar) y UiDialogs.cpp (alertas y lienzo nuevo).
+// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
+// (ajustes de imagen), UiFill.cpp (arrastrar el color para rellenar) y UiDialogs.cpp
+// (alertas y lienzo nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -107,9 +109,10 @@ public:
     // Diálogo de salir (botón atrás de Android con todo cerrado).
     void askExit();
 
-    // --- Selección y Transformar (UiTools.cpp) ---
+    // --- Selección, Transformar y Ajustes (UiTools.cpp) ---
     CanvasTool canvasTool() const { return m_canvasTool; }
-    // Un puntero sobre el lienzo con la herramienta Selección o Transformar (unidades).
+    // Un puntero sobre el lienzo con la herramienta Selección, Transformar o un ajuste
+    // (unidades).
     // `modifier`: Add o Subtract si los pide el teclado (Mayús o Alt); `constrain`: Mayús
     // mientras se arrastra (cuadrado o círculo).
     void toolPress(Canvas& canvas, const ToolView& view, ImVec2 position, SelectOp modifier);
@@ -135,7 +138,7 @@ public:
     uint64_t wakeDeadline() const;
 
 private:
-    enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify };
+    enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify, Adjust };
     enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas };
 
     struct Layout {
@@ -222,7 +225,7 @@ private:
     void togglePanel(Panel panel);
     void closePanels();
     // Cierra lo último que se abrió (el botón atrás o Escape). Con `canvas`, también sale
-    // de la herramienta Selección o Transformar.
+    // de la herramienta Selección o Transformar, o cancela el ajuste de imagen.
     bool closeTopmost(Canvas* canvas);
     void handleKeys(Canvas& canvas);
     void undo(Canvas& canvas, bool redo);
@@ -297,9 +300,42 @@ private:
     void selectDock(Canvas& canvas);
     void transformDock(Canvas& canvas);
     void drawPolygonBar(Canvas& canvas);
-    void drawThreshold();
+    // Indicador de arriba mientras se ajusta algo arrastrando en el lienzo.
+    void drawThreshold(const Canvas& canvas);
     void featherPanel(Canvas& canvas);
     void modifyPanel(Canvas& canvas);
+
+    // --- UiAdjust.cpp ---
+    // Deslizador de la barra de un ajuste: su valor (0..1), su nombre, el texto del valor
+    // y su aspecto.
+    struct AdjustSlider {
+        float* t = nullptr;
+        const char* text = "";
+        char value[24] = {};
+        ui::SliderStyle style;
+    };
+    // Empieza el ajuste `kind` en la capa activa, con los valores a cero. El que hubiera a
+    // medias se aplica antes, y la transformación también.
+    void startAdjust(Canvas& canvas, Adjustment kind);
+    // Termina el ajuste (aplicándolo o no) y vuelve a la herramienta de antes.
+    void finishAdjust(Canvas& canvas, bool apply);
+    AdjustParams adjustParams(const Canvas& canvas) const;
+    // Pasa los deslizadores al lienzo (que vuelve a dibujar el resultado).
+    void updateAdjust(Canvas& canvas);
+    // Los deslizadores del ajuste que se está haciendo (el principal, primero). Devuelve
+    // cuántos hay.
+    int adjustSliders(const Canvas& canvas, AdjustSlider out[3]);
+    // El valor que cambia deslizando en el lienzo (desenfoque, enfocar y ruido), o null.
+    float* adjustMain();
+    void adjustPress(ImVec2 position);
+    void adjustDrag(Canvas& canvas, ImVec2 position);
+    void adjustRelease();
+    // Otro dedo o el sistema cancelan el arrastre: el valor vuelve al de antes.
+    void adjustCancel(Canvas& canvas);
+    // Lo que muestra el indicador de arriba mientras se desliza en el lienzo.
+    void adjustPill(const Canvas& canvas, const char** glyph, const char** title, char* value, size_t size, float* t);
+    void adjustPanel(Canvas& canvas);
+    void adjustDock(Canvas& canvas);
 
     // --- UiFill.cpp ---
     // El botón del color (`button`) está pulsado o se acaba de soltar: arrastrarlo lleva
@@ -377,7 +413,30 @@ private:
     ImRect m_modifyButton;          // "Modificar" en un teléfono
     float m_featherValue = 0.0f;    // posición del deslizador de difuminar (0..1)
     bool m_autoHint = false;        // ya se explicó la selección automática
-    bool m_thresholdFill = false;   // el umbral que se muestra (o se está ocultando) es el del relleno
+    // Lo que muestra el indicador de arriba (o lo que mostraba, mientras se oculta).
+    enum class Pill { Select, Fill, Adjust };
+    Pill m_pill = Pill::Select;
+
+    // Ajustes de imagen: los deslizadores de cada uno (0..1) y el arrastre en el lienzo.
+    CanvasTool m_toolBeforeAdjust = CanvasTool::Paint;   // adónde vuelve al terminar
+    Adjustment m_adjustKind = Adjustment::HueSaturation;
+    struct AdjustSliders {
+        float hsb[3] = {0.5f, 0.5f, 0.5f};   // el centro es el cero
+        float balance[3][3] = {{0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}};
+        float blur = 0.0f;
+        float sharpen = 0.0f;
+        float noise = 0.0f;
+        float noiseSize = 0.0f;
+    } m_adjust;
+    int m_balanceRange = 1;         // sombras, medios tonos o luces
+    struct AdjustDrag {
+        bool pressed = false;
+        bool active = false;        // ya se movió: cambia el valor
+        float startX = 0.0f;
+        float startT = 0.0f;
+    } m_adjustDrag;
+    ImRect m_adjustButton;          // botón de Ajustes en la barra de una tableta
+    bool m_adjustHint = false;      // ya se explicó que se puede deslizar en el lienzo
 
     // Arrastrar el color al lienzo para rellenar.
     struct ColorDrop {

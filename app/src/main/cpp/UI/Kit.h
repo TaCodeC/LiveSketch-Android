@@ -178,6 +178,23 @@ bool fillSlider(const char* id, const ImRect& rect, float* t, bool* active = nul
 // `value` a la derecha. `active`: se está arrastrando.
 bool paramSlider(const char* id, const ImRect& rect, float* t, const char* text, const char* value,
                  bool enabled = true, bool* active = nullptr);
+// Variantes de paramSlider.
+struct SliderStyle {
+    // De dónde sale el relleno: 0, la izquierda; 0,5, el centro (valores con signo, que
+    // llevan una marca en el cero).
+    float origin = 0.0f;
+    // Al arrastrar cerca de `origin` se queda en él, y dos toques lo devuelven ahí.
+    bool snap = false;
+    // Balance de color: los nombres de los extremos, con un punto de su color, van a los
+    // lados y el relleno se tiñe del color del lado al que va. El valor, fuera del origen,
+    // va en medio sobre una píldora oscura.
+    const char* leftText = nullptr;
+    const char* rightText = nullptr;
+    ImU32 leftColor = 0;
+    ImU32 rightColor = 0;
+};
+bool paramSlider(const char* id, const ImRect& rect, float* t, const char* text, const char* value,
+                 const SliderStyle& style, bool enabled = true, bool* active = nullptr);
 
 // Campo de texto. `focus`: poner el teclado en él en este frame. Devuelve true con Intro.
 bool textField(const char* id, const ImRect& rect, char* buffer, size_t size, bool focus, const char* placeholder);

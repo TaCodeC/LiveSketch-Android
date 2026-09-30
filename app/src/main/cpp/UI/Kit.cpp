@@ -22,6 +22,8 @@ namespace {
 constexpr float kInterLineHeight = 2478.0f / 2048.0f;
 // Distancia que puede moverse el dedo en un toque (más, y es un arrastre).
 constexpr float kTapSlop = 10.0f;
+// Un deslizador con origen se queda en él si se suelta a menos de esto (pt).
+constexpr float kSnapDistance = 6.0f;
 
 float g_scale = 1.0f;
 float g_pixels = 1.0f;
@@ -843,6 +845,11 @@ bool barSlider(const char* strId, const ImRect& rect, float* value, const char* 
 
 bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* text, const char* value, bool enabled,
                  bool* active) {
+    return paramSlider(strId, rect, t, text, value, SliderStyle{}, enabled, active);
+}
+
+bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* text, const char* value,
+                 const SliderStyle& style, bool enabled, bool* active) {
     const ImGuiID id = ImGui::GetID(strId);
     ImGui::ItemAdd(rect, id, nullptr, enabled ? ImGuiItemFlags_None : ImGuiItemFlags_Disabled);
     bool hovered = false;
@@ -850,6 +857,7 @@ bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* te
     const bool released = ImGui::ButtonBehavior(rect, id, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
     const ImGuiIO& io = ImGui::GetIO();
     SliderDrag& drag = g_sliderDrags[id];
+    const float origin = std::clamp(style.origin, 0.0f, 1.0f);
     bool changed = false;
     bool wasDragging = drag.active;
     if (enabled && held && rect.GetWidth() > 0.0f) {
@@ -864,17 +872,26 @@ bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* te
             }
         }
         if (drag.active) {
-            const float v = std::clamp(drag.startValue + (io.MousePos.x - drag.startX) / rect.GetWidth(), 0.0f, 1.0f);
+            float v = std::clamp(drag.startValue + (io.MousePos.x - drag.startX) / rect.GetWidth(), 0.0f, 1.0f);
+            if (style.snap && std::fabs(v - origin) * rect.GetWidth() < pt(kSnapDistance)) {
+                v = origin;
+            }
             changed = v != *t;
             *t = v;
         }
     } else {
         drag.active = false;
     }
-    // Un toque sin arrastrar (ni desplazar la lista) pone el valor en ese punto.
+    // Un toque sin arrastrar (ni desplazar la lista) pone el valor en ese punto; con
+    // `snap`, cerca del origen se queda en él, y dos toques lo devuelven ahí (al soltar,
+    // MouseClickedCount ya es 0: el recuento del último toque sigue en MouseClickedLastCount).
     const float slop = pt(kTapSlop);
     if (enabled && released && !wasDragging && io.MouseDragMaxDistanceSqr[0] <= slop * slop && rect.GetWidth() > 0.0f) {
-        const float v = std::clamp((io.MousePos.x - rect.Min.x) / rect.GetWidth(), 0.0f, 1.0f);
+        float v = std::clamp((io.MousePos.x - rect.Min.x) / rect.GetWidth(), 0.0f, 1.0f);
+        const bool twice = io.MouseClickedLastCount[0] >= 2;
+        if (style.snap && (twice || std::fabs(v - origin) * rect.GetWidth() < pt(kSnapDistance))) {
+            v = origin;
+        }
         changed = v != *t;
         *t = v;
     }
@@ -889,28 +906,80 @@ bool paramSlider(const char* strId, const ImRect& rect, float* t, const char* te
     dl->AddRectFilled(rect.Min, rect.Max, withAlpha(mix(theme::kControl, IM_COL32(255, 255, 255, 28), focus), alpha),
                       radius);
     const float shown = anim::follow(id + 1u, std::clamp(*t, 0.0f, 1.0f), drag.active ? 60.0f : 24.0f, 0.0005f);
-    const float cut = rect.Min.x + rect.GetWidth() * shown;
-    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
-    dl->AddRectFilled(rect.Min, rect.Max, withAlpha(IM_COL32(255, 255, 255, 225), alpha), radius);
-    dl->PopClipRect();
+    const float mid = rect.Min.x + rect.GetWidth() * origin;
+    const float end = rect.Min.x + rect.GetWidth() * shown;
+    const float from = std::min(mid, end);
+    const float to = std::max(mid, end);
+    if (origin > 0.0f) {
+        // La marca del cero (la tapa el relleno cuando sale de ella).
+        const float x = snap(mid);
+        dl->AddLine(ImVec2(x, rect.Min.y + pt(9.0f)), ImVec2(x, rect.Max.y - pt(9.0f)),
+                    withAlpha(theme::kControlBorderStrong, alpha), hairline() * 1.5f);
+    }
+    ImU32 fill = IM_COL32(255, 255, 255, 225);
+    const ImU32 side = shown < origin ? style.leftColor : style.rightColor;
+    if (side != 0) {
+        fill = mix(fill, side | IM_COL32_A_MASK, 0.42f);
+    }
+    if (to - from > 0.25f) {
+        dl->PushClipRect(ImVec2(from, rect.Min.y), ImVec2(to, rect.Max.y), true);
+        dl->AddRectFilled(rect.Min, rect.Max, withAlpha(fill, alpha), radius);
+        dl->PopClipRect();
+    }
     insideBorder(dl, rect, radius, withAlpha(theme::kControlBorder, alpha), pt(1.0f));
 
     // Textos oscuros sobre el relleno y claros fuera de él.
     const float cy = rect.GetCenter().y;
     const float pad = pt(12.0f);
     const float valueWidth = measure(Weight::SemiBold, theme::kFootnote, value).x;
+    const bool ends = style.leftText && style.rightText;
+    // Con un nombre en cada extremo, el valor va sobre una píldora en el origen, que tapa
+    // el principio del relleno (el texto no queda partido en dos colores). En el origen
+    // no se muestra: basta la marca del cero, y los nombres tienen más sitio.
+    const float chip = ends ? anim::follow(id + 2u, *t != origin ? 1.0f : 0.0f, 24.0f) : 0.0f;
+    const float chipWidth = valueWidth + pt(12.0f);
     auto texts = [&](ImU32 color) {
-        label(dl, Weight::Regular, theme::kFootnote, ImVec2(rect.Min.x + pad, cy), Align::Left, withAlpha(color, alpha),
-              text, std::max(pt(20.0f), rect.GetWidth() - pad * 3.0f - valueWidth));
-        label(dl, Weight::SemiBold, theme::kFootnote, ImVec2(rect.Max.x - pad, cy), Align::Right,
-              withAlpha(color, alpha), value);
+        const ImU32 c = withAlpha(color, alpha);
+        if (!ends) {
+            label(dl, Weight::Regular, theme::kFootnote, ImVec2(rect.Min.x + pad, cy), Align::Left, c, text,
+                  std::max(pt(20.0f), rect.GetWidth() - pad * 3.0f - valueWidth));
+            label(dl, Weight::SemiBold, theme::kFootnote, ImVec2(rect.Max.x - pad, cy), Align::Right, c, value);
+            return;
+        }
+        const float dot = pt(3.5f);
+        const float middle = chip > 0.0f ? chipWidth * 0.5f + pt(3.0f) : pt(4.0f);
+        const float room = std::max(pt(20.0f), rect.GetWidth() * 0.5f - middle - pad - dot * 2.0f - pt(6.0f));
+        dl->AddCircleFilled(ImVec2(rect.Min.x + pad + dot, cy), dot, withAlpha(style.leftColor | IM_COL32_A_MASK, alpha));
+        label(dl, Weight::Regular, theme::kFootnote, ImVec2(rect.Min.x + pad + dot * 2.0f + pt(6.0f), cy), Align::Left, c,
+              style.leftText, room);
+        dl->AddCircleFilled(ImVec2(rect.Max.x - pad - dot, cy), dot, withAlpha(style.rightColor | IM_COL32_A_MASK, alpha));
+        label(dl, Weight::Regular, theme::kFootnote, ImVec2(rect.Max.x - pad - dot * 2.0f - pt(6.0f), cy), Align::Right, c,
+              style.rightText, room);
     };
-    dl->PushClipRect(ImVec2(cut, rect.Min.y), rect.Max, true);
-    texts(theme::kLabel);
-    dl->PopClipRect();
-    dl->PushClipRect(rect.Min, ImVec2(cut, rect.Max.y), true);
-    texts(IM_COL32(28, 28, 30, 255));
-    dl->PopClipRect();
+    if (from - rect.Min.x > 0.25f) {
+        dl->PushClipRect(rect.Min, ImVec2(from, rect.Max.y), true);
+        texts(theme::kLabel);
+        dl->PopClipRect();
+    }
+    if (rect.Max.x - to > 0.25f) {
+        dl->PushClipRect(ImVec2(to, rect.Min.y), rect.Max, true);
+        texts(theme::kLabel);
+        dl->PopClipRect();
+    }
+    if (to - from > 0.25f) {
+        dl->PushClipRect(ImVec2(from, rect.Min.y), ImVec2(to, rect.Max.y), true);
+        texts(IM_COL32(28, 28, 30, 255));
+        dl->PopClipRect();
+    }
+    if (chip > 0.002f) {
+        const float h = pt(20.0f);
+        const ImRect r(ImVec2(std::round(mid - chipWidth * 0.5f), std::round(cy - h * 0.5f)),
+                       ImVec2(std::round(mid + chipWidth * 0.5f), std::round(cy + h * 0.5f)));
+        const float a = alpha * chip;
+        dl->AddRectFilled(r.Min, r.Max, withAlpha(theme::kValueChip, a), h * 0.5f);
+        insideBorder(dl, r, h * 0.5f, withAlpha(theme::kControlBorderStrong, a), pt(1.0f));
+        label(dl, Weight::SemiBold, theme::kFootnote, r.GetCenter(), Align::Center, withAlpha(theme::kLabel, a), value);
+    }
     return changed;
 }
 

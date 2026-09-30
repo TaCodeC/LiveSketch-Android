@@ -39,6 +39,7 @@ inline constexpr ImU32 kControlBorderStrong = IM_COL32(255, 255, 255, 46);
 inline constexpr ImU32 kAccentSoft = IM_COL32(10, 132, 255, 38);          // ficha o pestaña elegida
 inline constexpr ImU32 kRule = IM_COL32(255, 255, 255, 20);               // líneas de cabeceras y secciones
 inline constexpr ImU32 kFill = IM_COL32(120, 120, 128, 77);               // deslizadores de la barra lateral
+inline constexpr ImU32 kValueChip = IM_COL32(44, 44, 49, 255);            // píldora del valor en un deslizador
 inline constexpr ImU32 kSeparator = IM_COL32(255, 255, 255, 26);
 inline constexpr ImU32 kPressed = IM_COL32(255, 255, 255, 36);            // botón abierto o pulsado
 inline constexpr ImU32 kDim = IM_COL32(0, 0, 0, 115);                     // detrás de un diálogo

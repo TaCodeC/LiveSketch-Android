@@ -94,7 +94,7 @@ bool Canvas::createGpuObjects() {
     m_maxTextureSize = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m_maxTextureSize);
     if (!m_compositor.init(w, h) || !m_brush.init() || !m_strokeTarget.create(w, h) || !m_selection.init(w, h) ||
-        !m_bounds.init() || !m_warp.init() || !m_colorFill.init()) {
+        !m_bounds.init() || !m_warp.init() || !m_colorFill.init() || !m_imageAdjust.init()) {
         destroyGpuObjects();
         return false;
     }
@@ -107,6 +107,8 @@ void Canvas::destroyGpuObjects() {
     m_transform = {};
     m_fill = {};
     m_colorFill.destroy();
+    m_adjust = {};
+    m_imageAdjust.destroy();
     m_warp.destroy();
     m_bounds.destroy();
     m_selection.destroy();
@@ -129,6 +131,7 @@ void Canvas::settle() {
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
+    endAdjust(true);
     applyTransform();
 }
 
@@ -1041,6 +1044,7 @@ bool Canvas::undo() {
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
+    endAdjust(true);
     // Una transformación a medias no está en el historial: deshacer la cancela.
     if (m_transform.active) {
         cancelTransform();
@@ -1065,6 +1069,7 @@ bool Canvas::redo() {
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
+    endAdjust(true);
     HistoryStep* step = m_history.stepToRedo();
     if (!step) {
         return false;
@@ -1111,6 +1116,14 @@ bool Canvas::update() {
         filled.mode = StrokePreview::Mode::Replace;
         filled.area = m_fill.drawn;
         shown = &filled;
+    }
+    // Ajustando, la capa se ve con el resultado en la zona del ajuste (salvo al comparar).
+    StrokePreview adjusted;
+    if (m_adjust.active && !m_adjust.original && m_layers.indexOf(m_adjust.layerId) == m_layers.activeIndex()) {
+        adjusted.texture = m_strokeTarget.texture.id();
+        adjusted.mode = StrokePreview::Mode::Replace;
+        adjusted.area = m_adjust.drawn;
+        shown = &adjusted;
     }
     m_compositor.compose(m_layers, dirty, shown);
 
