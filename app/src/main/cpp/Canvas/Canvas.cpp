@@ -94,7 +94,7 @@ bool Canvas::createGpuObjects() {
     m_maxTextureSize = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m_maxTextureSize);
     if (!m_compositor.init(w, h) || !m_brush.init() || !m_strokeTarget.create(w, h) || !m_selection.init(w, h) ||
-        !m_bounds.init() || !m_warp.init()) {
+        !m_bounds.init() || !m_warp.init() || !m_colorFill.init()) {
         destroyGpuObjects();
         return false;
     }
@@ -105,6 +105,8 @@ void Canvas::destroyGpuObjects() {
     m_auto = {};
     m_feather = {};
     m_transform = {};
+    m_fill = {};
+    m_colorFill.destroy();
     m_warp.destroy();
     m_bounds.destroy();
     m_selection.destroy();
@@ -126,6 +128,7 @@ void Canvas::settle() {
     finishLayerEdit();
     endAutoSelect(true);
     endFeather(true);
+    endFill(true);
     applyTransform();
 }
 
@@ -1037,6 +1040,7 @@ bool Canvas::undo() {
     finishLayerEdit();
     endAutoSelect(true);
     endFeather(true);
+    endFill(true);
     // Una transformación a medias no está en el historial: deshacer la cancela.
     if (m_transform.active) {
         cancelTransform();
@@ -1060,6 +1064,7 @@ bool Canvas::redo() {
     finishLayerEdit();
     endAutoSelect(true);
     endFeather(true);
+    endFill(true);
     HistoryStep* step = m_history.stepToRedo();
     if (!step) {
         return false;
@@ -1098,6 +1103,14 @@ bool Canvas::update() {
         working.mode = StrokePreview::Mode::Replace;
         working.area = IRect::ofSize(width(), height());
         shown = &working;
+    }
+    // Rellenando, la capa se ve con el resultado donde está la vista previa.
+    StrokePreview filled;
+    if (m_fill.active && m_layers.indexOf(m_fill.layerId) == m_layers.activeIndex()) {
+        filled.texture = m_strokeTarget.texture.id();
+        filled.mode = StrokePreview::Mode::Replace;
+        filled.area = m_fill.drawn;
+        shown = &filled;
     }
     m_compositor.compose(m_layers, dirty, shown);
 

@@ -358,6 +358,7 @@ void Ui::paintWith(Canvas& canvas, Tool tool) {
 }
 
 void Ui::canvasCreated() {
+    m_drop = {};
     m_select.dropPolygon();
     m_transform.stop();
     m_canvasTool = CanvasTool::Paint;
@@ -462,6 +463,10 @@ bool Ui::undoStep(Canvas& canvas, bool redo) {
     // deshace, como un trazo que aún no ha terminado.
     if (!redo && (m_select.gestureActive() || m_transform.gestureActive())) {
         toolCancel(canvas);
+        return true;
+    }
+    if (!redo && m_drop.filling) {
+        cancelDrop(canvas);
         return true;
     }
     // Lo que la herramienta tenga a medias va primero: los puntos del lazo y los pasos de
@@ -910,15 +915,23 @@ void Ui::drawPolygonBar(Canvas& canvas) {
 }
 
 void Ui::drawThreshold() {
-    // Umbral de la selección automática mientras se arrastra, donde salen los avisos.
-    const bool shown = m_canvasTool == CanvasTool::Select && m_select.adjustingThreshold();
+    // Umbral de la selección automática o del relleno mientras se ajusta, donde salen los
+    // avisos.
+    const bool selecting = m_canvasTool == CanvasTool::Select && m_select.adjustingThreshold();
+    const bool shown = selecting || m_drop.filling;
+    if (shown) {
+        m_thresholdFill = !selecting;   // al ocultarse sigue mostrando el mismo
+    }
     const ImGuiID id = ImHashStr("##threshold");
     const float p = ui::anim::followFrom(id, 0.0f, shown ? 1.0f : 0.0f, shown ? 22.0f : 9.0f);
     if (p <= 0.002f) {
         return;
     }
     const Layout& L = m_layout;
-    const float width = pt(236.0f);
+    const char* title = m_thresholdFill ? "Umbral de relleno" : "Umbral";
+    const float needed = pt(16.0f + 24.0f) + ui::measure(Weight::SemiBold, th::kSubhead, title).x +
+                         ui::measure(Weight::SemiBold, th::kSubhead, "100 %").x + pt(16.0f + 16.0f);
+    const float width = std::min(std::max(pt(236.0f), needed), L.right - L.left);
     const float height = pt(52.0f);
     const float x = std::round((L.display.x - width) * 0.5f);
     const ImRect rect(x, L.toastTop, x + width, L.toastTop + height);
@@ -931,14 +944,15 @@ void Ui::drawThreshold() {
     ui::shadow(dl, rect, radius, pt(26.0f), pt(8.0f), 0.24f);
     ui::popUnclipped(dl);
     ui::glass(dl, rect, radius, IM_COL32(40, 40, 44, 184));
-    const float t = m_select.threshold();
+    const float t = m_thresholdFill ? m_fillThreshold : m_select.threshold();
     char value[16];
     std::snprintf(value, sizeof(value), "%d %%", static_cast<int>(std::lround(t * 100.0f)));
     const float left = rect.Min.x + pt(16.0f);
     const float right = rect.Max.x - pt(16.0f);
     const float cy = rect.Min.y + pt(20.0f);
-    ui::icon(dl, icon::kWand, ImVec2(left + pt(8.0f), cy), 16.0f, th::kAccentText);
-    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(left + pt(24.0f), cy), Align::Left, th::kLabel, "Umbral");
+    ui::icon(dl, m_thresholdFill ? icon::kPaintBucket : icon::kWand, ImVec2(left + pt(8.0f), cy), 16.0f,
+             th::kAccentText);
+    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(left + pt(24.0f), cy), Align::Left, th::kLabel, title);
     ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(right, cy), Align::Right, th::kLabel, value);
     const float barY = rect.Max.y - pt(13.0f);
     dl->AddRectFilled(ImVec2(left, barY - pt(1.5f)), ImVec2(right, barY + pt(1.5f)), IM_COL32(255, 255, 255, 46),

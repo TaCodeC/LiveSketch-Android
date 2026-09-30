@@ -193,6 +193,23 @@ bool Canvas::selectPolygon(std::span<const glm::vec2> polygon, SelectOp op) {
     return true;
 }
 
+bool Canvas::floodLevels(float x, float y, selection::AutoLevels& levels) {
+    std::vector<uint8_t> pixels;
+    const int reference = m_layers.referenceIndex();
+    const bool read = reference >= 0 ? readPixels(m_layers.at(reference).target, pixels) : readComposite(pixels);
+    if (!read) {
+        return false;
+    }
+    const int px = std::clamp(static_cast<int>(std::floor(x)), 0, width() - 1);
+    const int py = std::clamp(static_cast<int>(std::floor(y)), 0, height() - 1);
+    try {
+        return selection::autoLevels(pixels.data(), width(), height(), px, py, levels);
+    } catch (const std::bad_alloc&) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Sin memoria para buscar la zona del color");
+        return false;
+    }
+}
+
 bool Canvas::beginAutoSelect(float x, float y, SelectOp op, float threshold) {
     if (!m_ready || !(x >= 0.0f && y >= 0.0f && x < static_cast<float>(width()) && y < static_cast<float>(height()))) {
         return false;
@@ -206,25 +223,10 @@ bool Canvas::beginAutoSelect(float x, float y, SelectOp op, float threshold) {
         op = SelectOp::Replace;
     }
 
-    // Lo que se ve, o la capa de referencia (el dibujo de líneas) si la hay.
-    std::vector<uint8_t> pixels;
-    const int reference = m_layers.referenceIndex();
-    const bool read = reference >= 0 ? readPixels(m_layers.at(reference).target, pixels) : readComposite(pixels);
-    if (!read) {
-        return false;
-    }
     selection::AutoLevels levels;
-    const int px = std::clamp(static_cast<int>(std::floor(x)), 0, width() - 1);
-    const int py = std::clamp(static_cast<int>(std::floor(y)), 0, height() - 1);
-    try {
-        if (!selection::autoLevels(pixels.data(), width(), height(), px, py, levels)) {
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Sin memoria para la selección automática");
+    if (!floodLevels(x, y, levels)) {
         return false;
     }
-    std::vector<uint8_t>().swap(pixels);
     if (!m_selection.ensureMask() || !m_selection.ensureScratch() || !m_selection.uploadLevels(levels.levels)) {
         m_selection.dropLevels();
         return false;

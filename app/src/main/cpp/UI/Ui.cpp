@@ -137,6 +137,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     drawHud(*canvas);
     drawThreshold();
     drawPicker(*canvas);
+    drawDrop(*canvas);
     drawDialogs(canvas, requests);
     drawToast();
     m_previews.pruneThumbnails(canvas->layers());
@@ -423,6 +424,11 @@ void Ui::handleKeys(Canvas& canvas) {
     const ImGuiIO& io = ImGui::GetIO();
     const bool back = ImGui::IsKeyPressed(ImGuiKey_AppBack, false);
     if (back || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        // Arrastrando el color, lo cancela.
+        if (m_drop.dragging && !m_drop.finished) {
+            cancelDrop(canvas);
+            return;
+        }
         // El botón atrás cierra lo último que se abrió; con todo cerrado, pregunta si salir.
         if (!closeTopmost(&canvas) && back) {
             askExit();
@@ -604,6 +610,8 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         const ImRect rect = slot(L.rightBar, 4);
         const ImGuiID id = ImGui::GetID("##color");
         const Press press = ui::pressable(id, rect);
+        // Arrastrarlo lleva el color al lienzo para rellenar (un toque abre el panel).
+        colorDrop(canvas, id);
         ui::highlight(dl, id, rect, rect.GetHeight() * 0.5f, m_panel == Panel::Color, press);
         const float squeeze = ui::anim::follow(id + 3u, press.held ? 1.0f : 0.0f, 24.0f);
         const float radius = pt(13.0f) * (1.0f - 0.08f * squeeze);

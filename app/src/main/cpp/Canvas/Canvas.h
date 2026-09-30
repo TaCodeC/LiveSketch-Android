@@ -2,6 +2,7 @@
 
 #include "Canvas/Bounds.h"
 #include "Canvas/Brush.h"
+#include "Canvas/ColorFill.h"
 #include "Canvas/Compositor.h"
 #include "Canvas/History.h"
 #include "Canvas/LayerStack.h"
@@ -121,7 +122,7 @@ public:
     void renameLayer(int index, std::string name);
 
     // Deshacer y rehacer. Terminan antes el trazo en curso, el cambio de propiedades, la
-    // selección automática y el difuminado (así deshacer los quita). Con una
+    // selección automática, el difuminado y el relleno (así deshacer los quita). Con una
     // transformación a medias, deshacer la cancela (y no toca el historial).
     bool canUndo() const { return m_history.canUndo() || editPending() || livePending(); }
     bool canRedo() const { return m_history.canRedo() && !editPending() && !livePending(); }
@@ -130,7 +131,7 @@ public:
     const History& history() const { return m_history; }
 
     // Cierra lo que esté a medias antes de otra operación: el trazo, el cambio de
-    // propiedades, la selección automática y el difuminado (se guardan) y la
+    // propiedades, la selección automática, el difuminado y el relleno (se guardan) y la
     // transformación (se aplica).
     void settle();
 
@@ -195,6 +196,20 @@ public:
     void applyTransform();
     void cancelTransform();
 
+    // --- Relleno (CanvasFill.cpp) ---
+    // Arrastrar el color al lienzo: la capa activa se rellena con el color del pincel en
+    // lo parecido al color del punto (x, y) y unido a él, en lo que se ve (o en la capa de
+    // referencia, si la hay), como la selección automática. Con selección, solo en lo
+    // seleccionado; con el alfa bloqueado, solo cambia el color de lo que ya está pintado.
+    // `threshold` (0..1) se puede cambiar en vivo mientras se ve el resultado; endFill lo
+    // aplica (un paso de deshacer) o lo quita, y devuelve si cambió la capa (con
+    // selección, la zona puede caer fuera). beginFill devuelve Hidden si la capa activa no
+    // se ve y Nothing si el punto cae fuera del lienzo.
+    Edit beginFill(float x, float y, float threshold);
+    void setFillThreshold(float threshold);
+    bool endFill(bool apply);
+    bool filling() const { return m_fill.active; }
+
     // Color del compuesto en un punto del lienzo, sin premultiplicar. Devuelve false si
     // el punto cae fuera del lienzo o es transparente.
     bool pickColor(float x, float y, float rgb[3]);
@@ -254,8 +269,8 @@ private:
     void recordProperties(int index, const LayerProperties& before);
     void beginLayerEdit(int index);
     bool editPending() const;
-    // Selección automática, difuminado o transformación a medias.
-    bool livePending() const { return m_auto.active || m_feather.active || m_transform.active; }
+    // Selección automática, difuminado, transformación o relleno a medias.
+    bool livePending() const { return m_auto.active || m_feather.active || m_transform.active || m_fill.active; }
     bool saveRegion(const Layer& layer, const IRect& rect, gfx::RenderTarget& out);
     void swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stored);
     void record(HistoryStep step);
@@ -272,6 +287,9 @@ private:
     void setSelectionState(const SelectionState& state);
     // Caja exacta de la máscara dentro de `within` (vacía si no queda nada).
     IRect maskBounds(const IRect& within);
+    // Niveles de la inundación desde (x, y) en lo que se ve, o en la capa de referencia si
+    // la hay (el dibujo de líneas): de ahí salen la selección automática y el relleno.
+    bool floodLevels(float x, float y, selection::AutoLevels& levels);
     void drawAutoLevels();
     // Lo seleccionado de `layer` (o todo) en el buffer de trazo, en `rect`. Quien lo usa
     // lo deja transparente después.
@@ -280,6 +298,11 @@ private:
     IRect selectedContent(const Layer& layer, bool masked);
     void updateTransformPreview();
     void endTransform();
+
+    // Relleno (CanvasFill.cpp).
+    // Lo que cambia el relleno con el umbral actual.
+    IRect fillReach() const;
+    void drawFill();
 
     bool m_ready = false;
     int m_maxTextureSize = 0;          // lado máximo de una textura en esta GPU
@@ -362,4 +385,16 @@ private:
         bool nearest = false;
         IRect drawn;                   // caja de lo dibujado en la vista previa
     } m_transform;
+
+    // Relleno: la vista previa va en el buffer de trazo y se ve en lugar de la capa.
+    ColorFill m_colorFill;
+    struct Fill {
+        bool active = false;
+        uint32_t layerId = 0;
+        std::array<IRect, 256> levelBounds;   // caja de lo que entra con cada nivel
+        int cutoff = -1;
+        float color[3] = {0.0f, 0.0f, 0.0f};
+        bool alphaLock = false;
+        IRect drawn;                          // zona del buffer de trazo con la vista previa
+    } m_fill;
 };

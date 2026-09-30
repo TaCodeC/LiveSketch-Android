@@ -63,8 +63,8 @@ enum class CanvasTool { Paint, Select, Transform };
 //
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
-// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar) y
-// UiDialogs.cpp (alertas y lienzo nuevo).
+// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiFill.cpp
+// (arrastrar el color para rellenar) y UiDialogs.cpp (alertas y lienzo nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -301,6 +301,22 @@ private:
     void featherPanel(Canvas& canvas);
     void modifyPanel(Canvas& canvas);
 
+    // --- UiFill.cpp ---
+    // El botón del color (`button`) está pulsado o se acaba de soltar: arrastrarlo lleva
+    // el color al lienzo, y soltarlo rellena la zona. Quieto un momento sobre el lienzo,
+    // el relleno se ve y deslizar en horizontal ajusta el umbral hasta soltar.
+    void colorDrop(Canvas& canvas, ImGuiID button);
+    void finishDrop(Canvas& canvas);
+    // Escape o deshacer mientras se arrastra: no se rellena nada (hasta soltar no hace nada).
+    void cancelDrop(Canvas& canvas);
+    // Empieza el relleno donde está el puntero; si no se puede, avisa por qué.
+    bool startFill(Canvas& canvas, ImVec2 position);
+    void fillApplied(Canvas& canvas, bool changed);
+    // El puntero está sobre el lienzo y no sobre la interfaz.
+    bool overCanvas(const Canvas& canvas, ImVec2 position) const;
+    // El círculo del color que va con el puntero.
+    void drawDrop(Canvas& canvas);
+
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
     void openDialog(Dialog dialog, const Canvas* canvas);
@@ -361,6 +377,25 @@ private:
     ImRect m_modifyButton;          // "Modificar" en un teléfono
     float m_featherValue = 0.0f;    // posición del deslizador de difuminar (0..1)
     bool m_autoHint = false;        // ya se explicó la selección automática
+    bool m_thresholdFill = false;   // el umbral que se muestra (o se está ocultando) es el del relleno
+
+    // Arrastrar el color al lienzo para rellenar.
+    struct ColorDrop {
+        bool dragging = false;      // el color va con el puntero
+        bool filling = false;       // se paró sobre el lienzo: se ve el relleno y se ajusta el umbral
+        bool finished = false;      // ya terminó (deshacer lo quitó): no hace nada hasta soltar
+        bool refused = false;       // no se pudo rellenar aquí: no se vuelve a probar sin moverse
+        ImVec2 position;            // del puntero (unidades)
+        ImVec2 stillAt;             // dónde se quedó quieto
+        double stillSince = 0.0;
+        ImVec2 fillAt;              // dónde empezó el relleno
+        float startThreshold = 0.0f;
+    } m_drop;
+    float m_fillThreshold = 0.3f;   // umbral del relleno (0..1); se recuerda para la siguiente vez
+    struct DropMark {               // lo que se dibuja del color (se queda al soltar, mientras se desvanece)
+        ImVec2 center;
+        bool small = false;         // el punto de donde sale el relleno
+    } m_dropMark;
 
     // Deshacer mantenido pulsado: se repite.
     ImGuiID m_repeatId = 0;

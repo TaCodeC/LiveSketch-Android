@@ -102,8 +102,10 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/BrushTips.cpp
         ${SRC_DIR}/Canvas/Camera.cpp
         ${SRC_DIR}/Canvas/Canvas.cpp
+        ${SRC_DIR}/Canvas/CanvasFill.cpp
         ${SRC_DIR}/Canvas/CanvasSelection.cpp
         ${SRC_DIR}/Canvas/CanvasView.cpp
+        ${SRC_DIR}/Canvas/ColorFill.cpp
         ${SRC_DIR}/Canvas/Compositor.cpp
         ${SRC_DIR}/Canvas/History.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
@@ -128,6 +130,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/Ui.cpp
         ${SRC_DIR}/UI/UiBrushes.cpp
         ${SRC_DIR}/UI/UiDialogs.cpp
+        ${SRC_DIR}/UI/UiFill.cpp
         ${SRC_DIR}/UI/UiPanels.cpp
         ${SRC_DIR}/UI/UiTools.cpp
 )
@@ -203,6 +206,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/CameraTests.cpp
             ${TESTS_DIR}/CanvasTests.cpp
             ${TESTS_DIR}/ExportTests.cpp
+            ${TESTS_DIR}/FillTests.cpp
             ${TESTS_DIR}/HistoryTests.cpp
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
