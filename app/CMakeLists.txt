@@ -112,6 +112,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/History.cpp
         ${SRC_DIR}/Canvas/ImageAdjust.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
+        ${SRC_DIR}/Canvas/PressureCurve.cpp
         ${SRC_DIR}/Canvas/QuickShape.cpp
         ${SRC_DIR}/Canvas/Selection.cpp
         ${SRC_DIR}/Canvas/SelectionShapes.cpp
@@ -138,6 +139,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/UiFill.cpp
         ${SRC_DIR}/UI/UiGuide.cpp
         ${SRC_DIR}/UI/UiPanels.cpp
+        ${SRC_DIR}/UI/UiPen.cpp
         ${SRC_DIR}/UI/UiTools.cpp
 )
 target_include_directories(livesketch_core PUBLIC ${SRC_DIR} ${EXTERNALS_DIR}/glm)
@@ -218,6 +220,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/HistoryTests.cpp
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
+            ${TESTS_DIR}/PenTests.cpp
             ${TESTS_DIR}/QuickShapeTests.cpp
             ${TESTS_DIR}/SelectionTests.cpp
             ${TESTS_DIR}/WetMixTests.cpp

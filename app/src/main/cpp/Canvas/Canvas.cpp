@@ -168,6 +168,12 @@ void Canvas::setViewScale(float canvasPixelsPerPoint) {
     }
 }
 
+void Canvas::setSmoothing(float amount) {
+    if (std::isfinite(amount)) {
+        m_smoothing = std::clamp(amount, 0.0f, 1.0f);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Trazo
 // -----------------------------------------------------------------------------
@@ -209,6 +215,8 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     std::copy(m_settings.color, m_settings.color + 3, m_strokeColor);
     m_strokeParams = m_settings.brush;
     brushes::sanitize(m_strokeParams);
+    // El suavizado de Preferencias se suma a la estabilización del pincel, sin pasar del máximo.
+    m_strokeParams.streamline = 1.0f - (1.0f - m_strokeParams.streamline) * (1.0f - m_smoothing);
     // Sin la textura de la punta no se pinta nada, pero el resto de la app funciona.
     m_brush.prepare(m_strokeParams);
     // Borrar no mezcla: un pincel húmedo borra como cualquier otro.

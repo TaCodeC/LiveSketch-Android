@@ -66,6 +66,10 @@ public:
     // Píxeles del lienzo por punto de pantalla con el zoom actual: la estabilización se
     // mide en la pantalla.
     void setViewScale(float canvasPixelsPerPoint);
+    // Suavizado de todos los trazos (0..1, de Preferencias): se suma a la estabilización
+    // de cada pincel.
+    void setSmoothing(float amount);
+    float smoothing() const { return m_smoothing; }
 
     // Por qué no se puede pintar en la capa activa.
     enum class StrokeBlock {
@@ -389,6 +393,7 @@ private:
     Brush m_brush;
     BrushSettings m_settings;
     float m_pixelsPerPoint = 1.0f;
+    float m_smoothing = 0.0f;
 
     gfx::RenderTarget m_strokeTarget;   // lo que se ve del trazo
     gfx::RenderTarget m_strokeBase;     // sellos definitivos (con afinado); se crea al usarlo

@@ -492,15 +492,17 @@ void App::flushPenSample() {
         return;
     }
     const glm::vec2 pixels = windowToPixels(m_pen.x, m_pen.y);
+    // La presión que mide el lápiz pasa por la curva de Preferencias.
+    const float pressure = m_ui.pressureCurve()(m_pen.pressure);
     if (m_pen.strokePending) {
         m_pen.strokePending = false;
-        m_pen.drawing = beginCanvasStroke(pixels, m_pen.pressure, m_pen.eraser);
+        m_pen.drawing = beginCanvasStroke(pixels, pressure, m_pen.eraser);
         if (m_pen.drawing) {
             startHold(ToolPointer::Pen, pixels);
         }
     } else {
         const glm::vec2 point = toCanvas(pixels);
-        m_canvas.strokeTo(point.x, point.y, m_pen.pressure);
+        m_canvas.strokeTo(point.x, point.y, pressure);
         trackHold(pixels);
     }
 }

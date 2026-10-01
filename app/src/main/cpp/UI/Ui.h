@@ -3,6 +3,7 @@
 #include "Canvas/BrushLibrary.h"
 #include "Canvas/DrawingGuide.h"
 #include "Canvas/ImageAdjust.h"
+#include "Canvas/PressureCurve.h"
 #include "Canvas/Selection.h"
 #include "Tools/SelectTool.h"
 #include "Tools/ToolView.h"
@@ -36,6 +37,7 @@ struct UiStatus {
     bool viewFlipped = false;     // la vista está volteada en horizontal
     bool viewTurning = false;     // se está girando la vista: se muestra el ángulo
     StrokePointer strokePointer = StrokePointer::None;   // con qué se dibuja el trazo en curso
+    float penPressure = -1.0f;    // presión del lápiz mientras toca la pantalla (0..1), o -1
 
     bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
     bool ndiRunning = false;
@@ -78,7 +80,8 @@ enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
 // (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
 // (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
-// rellenar) y UiDialogs.cpp (alertas y lienzo nuevo).
+// rellenar), UiPen.cpp (curva de presión y suavizado) y UiDialogs.cpp (alertas y lienzo
+// nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -102,6 +105,8 @@ public:
     bool rotateWithFingers() const { return m_prefs.rotateWithFingers; }
     // Forma rápida: mantener quieto el final de un trazo lo convierte en una forma.
     bool quickShape() const { return m_prefs.quickShape; }
+    // Curva de presión del lápiz: la app la aplica a la presión que mide.
+    const PressureCurve& pressureCurve() const { return m_prefs.pressure; }
     // Ajustes del pincel justo antes de empezar un trazo. La goma del lápiz usa los del
     // borrador aunque la herramienta sea el pincel.
     void prepareStroke(Canvas& canvas, bool eraserTip);
@@ -188,6 +193,8 @@ private:
         bool rotateWithFingers = true;
         bool quickShape = true;
         int size = 1;   // tamaño de la interfaz: 0 pequeña, 1 normal, 2 grande
+        PressureCurve pressure;     // del lápiz
+        float smoothing = 0.0f;     // suavizado de todos los trazos (0..1)
     };
 
     // Ajustes de cada herramienta: el pincel, difuminar y el borrador guardan los suyos.
@@ -391,6 +398,12 @@ private:
     // El círculo del color que va con el puntero.
     void drawDrop(Canvas& canvas);
 
+    // --- UiPen.cpp ---
+    // Curva de presión y suavizado en Preferencias: alto que ocupan con este ancho, y
+    // dibujarlos entre `left` y `right` desde `y`.
+    float penSettingsHeight(float width) const;
+    void penSettings(ImDrawList* dl, float left, float right, float y);
+
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
     void openDialog(Dialog dialog, const Canvas* canvas);
@@ -403,6 +416,7 @@ private:
     Layout m_layout;
     Prefs m_prefs;
     bool m_prefsLoaded = false;
+    bool m_prefsDirty = false;      // hay cambios sin guardar (se guardan al soltar)
     float m_insets[4] = {0, 0, 0, 0};
 
     Tool m_tool = Tool::Brush;
@@ -511,6 +525,15 @@ private:
         ImVec2 center;
         bool small = false;         // el punto de donde sale el relleno
     } m_dropMark;
+
+    // Punto de la curva de presión que se arrastra (o toque para añadir uno).
+    struct CurveDrag {
+        int index = -1;             // -1: ninguno
+        bool removing = false;      // está fuera de la gráfica: al soltar se quita
+        bool tap = false;           // se tocó lejos de los puntos: al soltar sin moverse se añade uno
+        glm::vec2 grab{0.0f};       // del puntero al punto (unidades)
+        glm::vec2 at{0.0f};         // dónde va (unidades)
+    } m_curveDrag;
 
     // Deshacer mantenido pulsado: se repite.
     ImGuiID m_repeatId = 0;

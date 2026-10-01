@@ -347,7 +347,8 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
                pt(12.0f);
         break;
     case 2:
-        body = pt(8.0f + rowPoints * 4.0f + 2.0f * 3.0f + 34.0f + 58.0f + 12.0f);
+        body = pt(8.0f + rowPoints * 4.0f + 2.0f * 3.0f + 34.0f + 58.0f + 6.0f) +
+               penSettingsHeight(panelWidth - pt(16.0f)) + pt(6.0f);
         break;
     default:
         body = pt(kHelpHeight);
@@ -494,6 +495,8 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
                 savePrefs();
             }
         }
+        y += pt(58.0f + 6.0f);
+        penSettings(dl, left, right, y);
         break;
     }
 

@@ -579,6 +579,7 @@ UiStatus App::uiStatus() const {
             status.strokePointer = StrokePointer::Mouse;
         }
     }
+    status.penPressure = m_pen.down ? m_pen.pressure : -1.0f;
     status.ndiAvailable = m_ndiAvailable;
     status.ndiRunning = m_ndi.running();
     status.ndiConnections = m_ndi.connections();

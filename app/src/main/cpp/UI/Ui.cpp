@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 
 namespace th = ui::theme;
 using ui::Align;
@@ -120,19 +121,33 @@ void Ui::loadPrefs() {
         return;
     }
     std::ifstream in(path);
-    std::string key;
-    int value = 0;
-    while (in >> key >> value) {
+    std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        fields >> key;
+        if (key == "curva-presion") {
+            std::string points;
+            std::getline(fields, points);
+            m_prefs.pressure = PressureCurve::fromText(points);
+            continue;
+        }
+        float value = 0.0f;
+        if (!(fields >> value) || !std::isfinite(value)) {
+            continue;
+        }
         if (key == "dedo") {
-            m_prefs.drawWithFinger = value != 0;
+            m_prefs.drawWithFinger = value != 0.0f;
         } else if (key == "barra-derecha") {
-            m_prefs.sidebarRight = value != 0;
+            m_prefs.sidebarRight = value != 0.0f;
         } else if (key == "tamano") {
-            m_prefs.size = std::clamp(value, 0, 2);
+            m_prefs.size = static_cast<int>(std::clamp(value, 0.0f, 2.0f));
         } else if (key == "girar") {
-            m_prefs.rotateWithFingers = value != 0;
+            m_prefs.rotateWithFingers = value != 0.0f;
         } else if (key == "forma") {
-            m_prefs.quickShape = value != 0;
+            m_prefs.quickShape = value != 0.0f;
+        } else if (key == "suavizado") {
+            m_prefs.smoothing = std::clamp(value, 0.0f, 1.0f);
         }
     }
 }
@@ -147,7 +162,9 @@ void Ui::savePrefs() const {
         << "barra-derecha " << (m_prefs.sidebarRight ? 1 : 0) << '\n'
         << "tamano " << m_prefs.size << '\n'
         << "girar " << (m_prefs.rotateWithFingers ? 1 : 0) << '\n'
-        << "forma " << (m_prefs.quickShape ? 1 : 0) << '\n';
+        << "forma " << (m_prefs.quickShape ? 1 : 0) << '\n'
+        << "suavizado " << m_prefs.smoothing << '\n'
+        << "curva-presion " << m_prefs.pressure.toText() << '\n';
 }
 
 void Ui::beginFrame(const UiStatus& status) {
@@ -320,7 +337,10 @@ void Ui::syncBrush(Canvas& canvas) {
     }
 }
 
-void Ui::prepareStroke(Canvas& canvas, bool eraserTip) { applyPreset(canvas, eraserTip ? Tool::Eraser : m_tool); }
+void Ui::prepareStroke(Canvas& canvas, bool eraserTip) {
+    applyPreset(canvas, eraserTip ? Tool::Eraser : m_tool);
+    canvas.setSmoothing(m_prefs.smoothing);
+}
 
 void Ui::strokeStarted(const Canvas& canvas, bool erasing) {
     // Difuminar no pone color: no cuenta como usado.
