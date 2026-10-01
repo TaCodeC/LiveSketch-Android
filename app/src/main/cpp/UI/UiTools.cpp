@@ -321,12 +321,21 @@ void Ui::setCanvasTool(Canvas& canvas, CanvasTool tool) {
             canvas.endAdjust(true);
         }
         break;
+    case CanvasTool::Guide:
+        m_guideDrag = {};   // la guía se queda como está
+        break;
     case CanvasTool::Paint:
         break;
     }
-    // Un ajuste se empieza con startAdjust; al salir de él se vuelve a lo de antes.
-    const CanvasTool resting = previous == CanvasTool::Adjust ? m_toolBeforeAdjust : previous;
-    if (tool == CanvasTool::Adjust) {
+    // Un ajuste y la guía se empiezan con startAdjust y startGuide; al salir de ellos se
+    // vuelve a lo de antes.
+    CanvasTool resting = previous;
+    if (previous == CanvasTool::Adjust) {
+        resting = m_toolBeforeAdjust;
+    } else if (previous == CanvasTool::Guide) {
+        resting = m_toolBeforeGuide;
+    }
+    if (tool == CanvasTool::Adjust || tool == CanvasTool::Guide) {
         tool = resting;
     }
     m_canvasTool = tool == CanvasTool::Transform ? resting : tool;
@@ -374,6 +383,7 @@ void Ui::canvasCreated() {
     m_select.dropPolygon();
     m_transform.stop();
     m_adjustDrag = {};
+    m_guideDrag = {};
     m_canvasTool = CanvasTool::Paint;
     if (m_panel == Panel::Feather || m_panel == Panel::Modify || m_panel == Panel::Adjust) {
         closePanels();
@@ -422,6 +432,9 @@ void Ui::toolPress(Canvas& canvas, const ToolView& view, ImVec2 position, Select
     case CanvasTool::Adjust:
         adjustPress(position);
         break;
+    case CanvasTool::Guide:
+        guidePress(canvas, view, position);
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -442,6 +455,9 @@ void Ui::toolDrag(Canvas& canvas, const ToolView& view, ImVec2 position, bool co
     case CanvasTool::Adjust:
         adjustDrag(canvas, position);
         break;
+    case CanvasTool::Guide:
+        guideDrag(canvas, view, position);
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -458,6 +474,9 @@ void Ui::toolRelease(Canvas& canvas, const ToolView& view, ImVec2 position) {
     case CanvasTool::Adjust:
         adjustRelease();
         break;
+    case CanvasTool::Guide:
+        guideRelease();
+        break;
     case CanvasTool::Paint:
         break;
     }
@@ -467,6 +486,7 @@ void Ui::toolCancel(Canvas& canvas) {
     m_select.cancel(canvas);
     m_transform.cancel(canvas);
     adjustCancel(canvas);
+    guideCancel(canvas);
 }
 
 void Ui::selectionNotice(SelectTool::Result result) {
@@ -489,7 +509,8 @@ void Ui::selectionNotice(SelectTool::Result result) {
 bool Ui::undoStep(Canvas& canvas, bool redo) {
     // Un gesto a medias (arrastrando la caja o el umbral) solo se cancela: es lo que se
     // deshace, como un trazo que aún no ha terminado.
-    if (!redo && (m_select.gestureActive() || m_transform.gestureActive() || m_adjustDrag.active)) {
+    if (!redo && (m_select.gestureActive() || m_transform.gestureActive() || m_adjustDrag.active ||
+                  m_guideDrag.handle != 0)) {
         toolCancel(canvas);
         return true;
     }
@@ -614,6 +635,10 @@ bool Ui::toolKeys(Canvas& canvas) {
             finishAdjust(canvas, true);
             return true;
         }
+        if (m_canvasTool == CanvasTool::Guide) {
+            finishGuide(canvas, true);
+            return true;
+        }
         return false;
     }
     if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) &&
@@ -648,8 +673,9 @@ bool Ui::toolKeys(Canvas& canvas) {
 // Dibujo
 // -----------------------------------------------------------------------------
 
-void Ui::drawToolOverlay() {
+void Ui::drawToolOverlay(const Canvas& canvas) {
     // Encima del lienzo y debajo de todas las ventanas de la interfaz.
+    drawGuide(canvas);
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ToolView& view = m_status.canvasView;
     if (m_canvasTool == CanvasTool::Select) {
@@ -667,6 +693,7 @@ void Ui::drawDock(Canvas& canvas) {
     selectDock(canvas);
     transformDock(canvas);
     adjustDock(canvas);
+    guideDock(canvas);
     drawPolygonBar(canvas);
 }
 

@@ -166,10 +166,7 @@ SelectTool::Result SelectTool::release(Canvas& canvas, const ToolView& view, ImV
             }
             return Result::None;
         }
-        const glm::vec2 corner = boxCorner();
-        const std::vector<glm::vec2> polygon = m_shape == Shape::Rectangle ? selection::rectangle(m_anchor, corner)
-                                                                          : selection::ellipse(m_anchor, corner);
-        return select(canvas, polygon, m_gestureOp);
+        return select(canvas, boxShape(view), m_gestureOp);
     }
 
     case Gesture::Auto:
@@ -242,6 +239,29 @@ glm::vec2 SelectTool::boxCorner() const {
     return corner;
 }
 
+std::vector<glm::vec2> SelectTool::boxShape(const ToolView& view) const {
+    if (view.upright()) {
+        const glm::vec2 corner = boxCorner();
+        return m_shape == Shape::Rectangle ? selection::rectangle(m_anchor, corner) : selection::ellipse(m_anchor, corner);
+    }
+    // En un marco con los ejes de la pantalla y la escala del lienzo (así la elipse lleva los
+    // puntos que necesita en el lienzo).
+    auto toFrame = [&](glm::vec2 p) { return view.axisX * p.x + view.axisY * p.y; };
+    auto fromFrame = [&](glm::vec2 f) { return glm::vec2(glm::dot(f, view.axisX), glm::dot(f, view.axisY)); };
+    const glm::vec2 a = toFrame(m_anchor);
+    glm::vec2 b = toFrame(m_current);
+    if (m_constrain) {
+        const glm::vec2 d = b - a;
+        const float side = std::max(std::fabs(d.x), std::fabs(d.y));
+        b = a + glm::vec2(d.x < 0.0f ? -side : side, d.y < 0.0f ? -side : side);
+    }
+    std::vector<glm::vec2> shape = m_shape == Shape::Rectangle ? selection::rectangle(a, b) : selection::ellipse(a, b);
+    for (glm::vec2& p : shape) {
+        p = fromFrame(p);
+    }
+    return shape;
+}
+
 bool SelectTool::nearFirstPoint(const ToolView& view, ImVec2 position) const {
     if (m_polygon.empty()) {
         return false;
@@ -287,9 +307,6 @@ void SelectTool::drawOverlay(ImDrawList* dl, const ToolView& view) const {
 
     // Rectángulo o elipse mientras se arrastra.
     if (m_gesture == Gesture::Box && m_moved) {
-        const glm::vec2 corner = boxCorner();
-        const std::vector<glm::vec2> shape = m_shape == Shape::Rectangle ? selection::rectangle(m_anchor, corner)
-                                                                        : selection::ellipse(m_anchor, corner);
-        outlinedPath(dl, toScreen(view, shape), true);
+        outlinedPath(dl, toScreen(view, boxShape(view)), true);
     }
 }

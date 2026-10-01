@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <vector>
 
 // Rectángulo entero en píxeles del lienzo: [x0, x1) × [y0, y1), con y hacia abajo.
 struct IRect {
@@ -42,4 +44,27 @@ struct IRect {
         IRect r{std::max(x0, other.x0), std::max(y0, other.y0), std::min(x1, other.x1), std::min(y1, other.y1)};
         return r.empty() ? IRect{} : r;
     }
+
+    // Está a menos de `gap` píxeles de `other` (o se solapan).
+    bool near(const IRect& other, int gap) const {
+        return x0 - gap < other.x1 && other.x0 < x1 + gap && y0 - gap < other.y1 && other.y0 < y1 + gap;
+    }
 };
+
+// Añade `rect` a una lista de zonas que no se solapan: se junta con las que están a menos
+// de `gap` píxeles, y la unión con las que queden cerca de ella.
+inline void addRegion(std::vector<IRect>& regions, IRect rect, int gap) {
+    if (rect.empty()) {
+        return;
+    }
+    for (size_t i = 0; i < regions.size();) {
+        if (regions[i].near(rect, gap)) {
+            rect.unite(regions[i]);
+            regions.erase(regions.begin() + static_cast<std::ptrdiff_t>(i));
+            i = 0;
+        } else {
+            ++i;
+        }
+    }
+    regions.push_back(rect);
+}

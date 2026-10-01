@@ -109,7 +109,9 @@ constexpr HelpItem kGestures[] = {
     {"2 DEDOS", "Deshacer", "Toca el lienzo con dos dedos"},
     {"3 DEDOS", "Rehacer", "Toca el lienzo con tres dedos"},
     {"PELLIZCA", "Mover y hacer zoom", "Arrastra o pellizca con dos dedos"},
+    {"GIRA", "Girar la vista", "Gira dos dedos sobre el lienzo"},
     {"MANTÉN", "Cuentagotas con el dedo", "Deja el dedo quieto al empezar"},
+    {"ESPERA", "Forma rápida", "Quédate quieto al acabar un trazo"},
 };
 constexpr HelpItem kShortcuts[] = {
     {"B", "Pincel", nullptr},
@@ -118,6 +120,10 @@ constexpr HelpItem kShortcuts[] = {
     {"S", "Selección", nullptr},
     {"V", "Transformar", nullptr},
     {"[  ]", "Tamaño del pincel", nullptr},
+    {"4  6", "Girar la vista", nullptr},
+    {"5", "Enderezar la vista", nullptr},
+    {"M", "Voltear la vista", nullptr},
+    {"MAYÚS", "Forma rápida perfecta", nullptr},
     {"CTRL Z", "Deshacer", nullptr},
     {"CTRL Y", "Rehacer", nullptr},
     {"CTRL C / X", "Copiar o cortar", nullptr},
@@ -332,7 +338,7 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     float body = 0.0f;
     switch (tab) {
     case 0:
-        body = pt(8.0f + rowPoints * 3.0f + 2.0f * 2.0f + 8.0f);
+        body = pt(8.0f + rowPoints * 6.0f + 2.0f * 5.0f + 8.0f);
         break;
     case 1:
         body = pt(8.0f + rowPoints + 10.0f) +
@@ -341,7 +347,7 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
                pt(12.0f);
         break;
     case 2:
-        body = pt(8.0f + rowPoints * 2.0f + 2.0f + 34.0f + 58.0f + 12.0f);
+        body = pt(8.0f + rowPoints * 4.0f + 2.0f * 3.0f + 34.0f + 58.0f + 12.0f);
         break;
     default:
         body = pt(kHelpHeight);
@@ -402,6 +408,26 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
             closePanels();
         }
         y += row + pt(2.0f);
+        {
+            bool flipped = m_status.viewFlipped;
+            if (toggleRow(dl, "##flip", ImRect(left, y, right, y + row), icon::kFlipView, "Voltear la vista",
+                          &flipped)) {
+                requests.flipView = true;
+            }
+        }
+        y += row + pt(2.0f);
+        {
+            DrawingGuide guide = canvas.guide();
+            if (toggleRow(dl, "##guide", ImRect(left, y, right, y + row), icon::kGrid, "Guía de dibujo",
+                          &guide.enabled)) {
+                canvas.setGuide(guide);
+            }
+        }
+        y += row + pt(2.0f);
+        if (menuRow(dl, "##edit-guide", ImRect(left, y, right, y + row), icon::kRuler, "Editar guía de dibujo…")) {
+            startGuide(canvas);
+        }
+        y += row + pt(2.0f);
         menuRow(dl, nullptr, ImRect(left, y, right, y + row), icon::kProportions, "Tamaño del lienzo", size);
         break;
 
@@ -429,6 +455,19 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         if (toggleRow(dl, "##side", ImRect(left, y, right, y + row), icon::kPanelRight, "Barra lateral a la derecha",
                       &sideRight)) {
             m_prefs.sidebarRight = sideRight;
+            savePrefs();
+        }
+        y += row + pt(2.0f);
+        bool rotate = m_prefs.rotateWithFingers;
+        if (toggleRow(dl, "##rotate", ImRect(left, y, right, y + row), icon::kRotateView, "Girar con dos dedos",
+                      &rotate)) {
+            m_prefs.rotateWithFingers = rotate;
+            savePrefs();
+        }
+        y += row + pt(2.0f);
+        bool shapes = m_prefs.quickShape;
+        if (toggleRow(dl, "##shapes", ImRect(left, y, right, y + row), icon::kShapes, "Forma rápida", &shapes)) {
+            m_prefs.quickShape = shapes;
             savePrefs();
         }
         y += row;

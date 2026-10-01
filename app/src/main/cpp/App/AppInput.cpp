@@ -1,10 +1,13 @@
 // Enrutado de la entrada: qué va a la interfaz y qué al lienzo.
 //
 // - Lápiz: dibuja (con presión y goma). Para ImGui llega también como ratón emulado.
-// - Dedos: un dedo mueve la vista y dos hacen zoom, o dibujan si está activado
-//   "Dibujar con el dedo" (y entonces dejar el dedo quieto al empezar abre el
-//   cuentagotas). Un toque con dos dedos deshace y con tres rehace. Mientras el lápiz
-//   está cerca o tocando se ignoran (palma).
+// - Dedos: un dedo mueve la vista y dos hacen zoom y la giran (con imán en 0°, 90°...), o
+//   dibujan si está activado "Dibujar con el dedo" (y entonces dejar el dedo quieto al
+//   empezar abre el cuentagotas). Un toque con dos dedos deshace y con tres rehace.
+//   Mientras el lápiz está cerca o tocando se ignoran (palma).
+// - Forma rápida: con el lápiz, el dedo o el ratón quietos un momento al final de un trazo,
+//   el trazo pasa a ser la forma que se le parece y, sin soltar, se ajusta. Un dedo más (o
+//   Mayús) la hace perfecta.
 // - Ratón de verdad (escritorio): izquierdo dibuja (con Alt, cuentagotas), derecho o
 //   central mueve, rueda zoom.
 // - Con el cuentagotas de la barra lateral armado, la siguiente pulsación en el lienzo
@@ -42,6 +45,53 @@ constexpr uint64_t kTapMaxMs = 350;
 constexpr float kTapSlopPoints = 12.0f;
 // Dedo quieto este tiempo al empezar un trazo: cuentagotas.
 constexpr uint64_t kLongPressMs = 450;
+// Forma rápida: el puntero quieto este tiempo, sin salirse de esta holgura (pt), y
+// durante unos frames seguidos (un frame lento no cuenta como quieto: los movimientos
+// de ese rato llegan en el siguiente).
+constexpr uint64_t kHoldMs = 500;
+constexpr int kHoldFrames = 3;
+constexpr float kHoldSlopPoints = 4.0f;
+constexpr float kFingerHoldSlopPoints = 8.0f;
+// Un trazo más corto que esto en la pantalla (pt) no es ninguna forma.
+constexpr float kShapeMinPoints = 24.0f;
+
+constexpr float kPi = 3.14159265358979f;
+constexpr float kQuarter = kPi * 0.5f;
+// Imán del giro con dos dedos: hasta este ángulo a cada lado de 0°, 90°, 180° y 270° la
+// vista se queda derecha; más allá sigue a los dedos sin saltos.
+constexpr float kTwistMagnet = 6.0f * kPi / 180.0f;
+// Giro con el teclado.
+constexpr float kRotateStep = 15.0f * kPi / 180.0f;
+constexpr uint64_t kAngleShownMs = 900;
+
+// De -π a π.
+float wrapAngle(float angle) {
+    angle = std::remainder(angle, 2.0f * kPi);
+    return angle <= -kPi ? angle + 2.0f * kPi : angle;
+}
+
+// Del giro de los dedos al de la vista: cerca de un múltiplo de 90° se queda en él, y el
+// resto del cuarto se reparte de forma continua (sin saltos al salir del imán).
+float magnetAngle(float raw) {
+    const float k = std::round(raw / kQuarter);
+    const float d = raw - k * kQuarter;
+    const float half = kQuarter * 0.5f;
+    if (std::fabs(d) <= kTwistMagnet) {
+        return k * kQuarter;
+    }
+    return k * kQuarter + std::copysign((std::fabs(d) - kTwistMagnet) * half / (half - kTwistMagnet), d);
+}
+
+// Al revés: un giro de los dedos que da el de la vista (para empezar sin saltos).
+float unmagnetAngle(float angle) {
+    const float k = std::round(angle / kQuarter);
+    const float e = angle - k * kQuarter;
+    const float half = kQuarter * 0.5f;
+    if (std::fabs(e) < 1e-6f) {
+        return k * kQuarter;
+    }
+    return k * kQuarter + std::copysign(kTwistMagnet + std::fabs(e) * (half - kTwistMagnet) / half, e);
+}
 
 bool isEmulatedMouse(SDL_MouseID which) {
     return which == SDL_TOUCH_MOUSEID || which == SDL_PEN_MOUSEID;
@@ -102,6 +152,8 @@ ToolView App::toolView() const {
     ToolView view;
     view.offset = m_camera.offset() / density;
     view.zoom = m_camera.zoom() / density;
+    view.axisX = m_camera.orient({1.0f, 0.0f});
+    view.axisY = m_camera.orient({0.0f, 1.0f});
     return view;
 }
 
@@ -135,6 +187,62 @@ void App::endToolGesture(bool cancel) {
         m_ui.toolRelease(m_canvas, toolView(), ImVec2(m_toolGesture.x, m_toolGesture.y));
     }
     m_toolGesture = {};
+}
+
+// -----------------------------------------------------------------------------
+// Forma rápida
+// -----------------------------------------------------------------------------
+
+void App::startHold(ToolPointer pointer, glm::vec2 pixels) {
+    m_hold = {};
+    m_hold.pointer = pointer;
+    m_hold.anchor = pixels;
+    m_hold.sinceMs = SDL_GetTicks();
+}
+
+void App::trackHold(glm::vec2 pixels) {
+    if (m_hold.pointer == ToolPointer::None || m_hold.snapped) {
+        return;
+    }
+    const float slop = pointsToPixels(m_hold.pointer == ToolPointer::Finger ? kFingerHoldSlopPoints : kHoldSlopPoints);
+    if (glm::length(pixels - m_hold.anchor) > slop) {
+        m_hold.anchor = pixels;
+        m_hold.sinceMs = SDL_GetTicks();
+        m_hold.stillFrames = 0;
+        m_hold.tried = false;
+    }
+}
+
+void App::checkHold() {
+    if (m_hold.pointer == ToolPointer::None) {
+        return;
+    }
+    if (!m_canvas.stroking()) {
+        m_hold = {};
+        return;
+    }
+    const bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+    if (m_hold.snapped) {
+        if (shift) {
+            m_canvas.setShapeRegular(true);
+        }
+        return;
+    }
+    ++m_hold.stillFrames;
+    if (!m_ui.quickShape() || m_hold.tried || m_hold.stillFrames < kHoldFrames ||
+        SDL_GetTicks() - m_hold.sinceMs < kHoldMs) {
+        return;
+    }
+    m_hold.tried = true;
+    quickshape::Options options;
+    options.screenRight = toolView().screenRight();
+    options.minLength = pointsToPixels(kShapeMinPoints) / std::max(m_camera.zoom(), 1e-4f);
+    if (m_canvas.snapStroke(options)) {
+        m_hold.snapped = true;
+        if (shift) {
+            m_canvas.setShapeRegular(true);
+        }
+    }
 }
 
 void App::notifyStrokeBlocked(bool eraserTip) {
@@ -387,9 +495,13 @@ void App::flushPenSample() {
     if (m_pen.strokePending) {
         m_pen.strokePending = false;
         m_pen.drawing = beginCanvasStroke(pixels, m_pen.pressure, m_pen.eraser);
+        if (m_pen.drawing) {
+            startHold(ToolPointer::Pen, pixels);
+        }
     } else {
         const glm::vec2 point = toCanvas(pixels);
         m_canvas.strokeTo(point.x, point.y, m_pen.pressure);
+        trackHold(pixels);
     }
 }
 
@@ -415,9 +527,37 @@ void App::resetGestureReference() {
         center += finger.position;
     }
     m_gestureCenter = center / static_cast<float>(m_fingers.size());
-    m_gestureDistance = m_fingers.size() >= 2
-                            ? glm::length(m_fingers[0].position - m_fingers[1].position)
-                            : 0.0f;
+    m_gestureDistance = 0.0f;
+    if (m_fingers.size() >= 2) {
+        const glm::vec2 d = m_fingers[1].position - m_fingers[0].position;
+        m_gestureDistance = glm::length(d);
+        m_gestureDirection = std::atan2(d.y, d.x);
+    }
+}
+
+void App::startTwist() {
+    m_twistStart = unmagnetAngle(m_camera.angle());
+    m_twist = 0.0f;
+    m_twisting = false;
+}
+
+void App::rotateView(int steps) {
+    if (!m_canvas.ready()) {
+        return;
+    }
+    m_fitAnimation.active = false;
+    // Alrededor del centro de la ventana, a múltiplos de 15°.
+    const float angle = m_camera.angle();
+    float target = 0.0f;
+    if (steps != 0) {
+        const float step = std::round(angle / kRotateStep);
+        target = (std::fabs(angle - step * kRotateStep) < 1e-3f ? step + static_cast<float>(steps)
+                                                                 : (steps > 0 ? std::ceil(angle / kRotateStep)
+                                                                              : std::floor(angle / kRotateStep))) *
+                 kRotateStep;
+    }
+    m_camera.rotateAt(m_camera.viewport() * 0.5f, wrapAngle(target - angle));
+    m_angleShownUntil = SDL_GetTicks() + kAngleShownMs;
 }
 
 void App::finishTapGesture(bool canceled) {
@@ -447,6 +587,13 @@ void App::onFingerEvent(const SDL_Event& event) {
 
     switch (event.type) {
     case SDL_EVENT_FINGER_DOWN: {
+        if (m_hold.snapped && m_canvas.stroking()) {
+            // Un dedo mientras se ajusta la forma rápida (con el lápiz, el ratón u otro dedo):
+            // la hace perfecta. No es un gesto.
+            m_canvas.setShapeRegular(true);
+            m_hold.fingers.push_back(touch.fingerID);
+            return;
+        }
         if (penBlocksFingers() || m_pick.source == PickSource::Finger) {
             return;
         }
@@ -481,6 +628,9 @@ void App::onFingerEvent(const SDL_Event& event) {
                 // La presión de un dedo no es fiable: se dibuja como con presión 1.
                 m_fingerDrawing = beginCanvasStroke(position, 1.0f, false);
                 m_fingerStrokeStartMs = now;
+                if (m_fingerDrawing) {
+                    startHold(ToolPointer::Finger, position);
+                }
             }
         } else if (m_toolGesture.pointer == ToolPointer::Finger) {
             // Segundo dedo: como al dibujar, pronto es un pellizco (o deshacer) y lo que
@@ -502,6 +652,9 @@ void App::onFingerEvent(const SDL_Event& event) {
             m_fingerDrawing = false;
         }
         resetGestureReference();
+        if (m_fingers.size() == 2) {
+            startTwist();
+        }
         break;
     }
 
@@ -526,15 +679,25 @@ void App::onFingerEvent(const SDL_Event& event) {
         if (m_fingerDrawing) {
             const glm::vec2 point = toCanvas(position);
             m_canvas.strokeTo(point.x, point.y, 1.0f);
+            trackHold(position);
             return;
         }
 
         const glm::vec2 previousCenter = m_gestureCenter;
         const float previousDistance = m_gestureDistance;
+        const float previousDirection = m_gestureDirection;
         resetGestureReference();
         m_camera.pan(m_gestureCenter - previousCenter);
         if (m_fingers.size() >= 2 && previousDistance > 0.0f && m_gestureDistance > 0.0f) {
             m_camera.zoomAt(m_gestureCenter, m_gestureDistance / previousDistance);
+            if (m_ui.rotateWithFingers()) {
+                m_twist += wrapAngle(m_gestureDirection - previousDirection);
+                const float turn = wrapAngle(magnetAngle(m_twistStart + m_twist) - m_camera.angle());
+                if (std::fabs(turn) > 1e-6f) {
+                    m_camera.rotateAt(m_gestureCenter, turn);
+                    m_twisting = true;
+                }
+            }
         }
         break;
     }
@@ -542,6 +705,14 @@ void App::onFingerEvent(const SDL_Event& event) {
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_CANCELED: {
         const bool canceled = event.type == SDL_EVENT_FINGER_CANCELED;
+        const auto held = std::find(m_hold.fingers.begin(), m_hold.fingers.end(), touch.fingerID);
+        if (held != m_hold.fingers.end()) {
+            m_hold.fingers.erase(held);
+            if (canceled && m_hold.fingers.empty() && (SDL_GetModState() & SDL_KMOD_SHIFT) == 0) {
+                m_canvas.setShapeRegular(false);   // el sistema decidió que era la palma
+            }
+            return;
+        }
         if (picking) {
             endPick(!canceled);
         }
@@ -560,6 +731,7 @@ void App::onFingerEvent(const SDL_Event& event) {
             m_fingers.erase(finger);
             // Con el dedo que queda, el movimiento sigue desde su posición actual, sin saltos.
             resetGestureReference();
+            m_twisting = false;
         }
         if (tapFinger != m_tap.fingers.end()) {
             m_tap.fingers.erase(tapFinger);
@@ -598,6 +770,9 @@ void App::onMouseEvent(const SDL_Event& event) {
                 beginToolGesture(ToolPointer::Mouse, 0, event.button.x, event.button.y);
             } else {
                 m_mouseDrawing = beginCanvasStroke(position, 1.0f, false);
+                if (m_mouseDrawing) {
+                    startHold(ToolPointer::Mouse, position);
+                }
             }
         } else if (event.button.button == SDL_BUTTON_RIGHT || event.button.button == SDL_BUTTON_MIDDLE) {
             m_mousePanning = true;
@@ -613,6 +788,7 @@ void App::onMouseEvent(const SDL_Event& event) {
         if (m_mouseDrawing) {
             const glm::vec2 point = toCanvas(position);
             m_canvas.strokeTo(point.x, point.y, 1.0f);
+            trackHold(position);
         }
         if (m_toolGesture.pointer == ToolPointer::Mouse) {
             moveToolGesture(event.motion.x, event.motion.y);
@@ -661,6 +837,7 @@ void App::endGestures() {
     m_fingers.clear();
     m_tap = {};
     m_gestureDistance = 0.0f;
+    m_twisting = false;
     if (m_mouseDrawing) {
         m_canvas.endStroke();
         m_mouseDrawing = false;

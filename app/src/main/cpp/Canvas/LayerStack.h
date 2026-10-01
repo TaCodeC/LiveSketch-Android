@@ -63,11 +63,18 @@ public:
     // `wanted` si ninguna capa lo usa; si no, "<wanted> 2", "<wanted> 3"...
     std::string availableName(const std::string& wanted) const;
 
-    // Región del lienzo que hay que recomponer.
+    // Región del lienzo que hay que recomponer: la caja que la cubre y las zonas sueltas que
+    // la forman (que no se solapan; como mucho kMaxDirtyRects). Un trazo con simetría marca
+    // zonas lejanas entre sí, y recomponer toda la caja que las abarca costaría mucho más.
+    static constexpr size_t kMaxDirtyRects = 16;
     const IRect& dirty() const { return m_dirty; }
+    const std::vector<IRect>& dirtyRects() const { return m_dirtyRects; }
     void markDirty(const IRect& rect);
     void markAllDirty() { markDirty(IRect::ofSize(m_width, m_height)); }
-    void clearDirty() { m_dirty = {}; }
+    void clearDirty() {
+        m_dirty = {};
+        m_dirtyRects.clear();
+    }
 
 private:
     bool nameInUse(const std::string& name) const;
@@ -78,4 +85,5 @@ private:
     int m_width = 0;
     int m_height = 0;
     IRect m_dirty;
+    std::vector<IRect> m_dirtyRects;
 };

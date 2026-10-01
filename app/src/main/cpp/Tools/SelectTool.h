@@ -71,6 +71,9 @@ private:
     Result select(Canvas& canvas, const std::vector<glm::vec2>& polygon, SelectOp op);
     // La caja del rectángulo o la elipse, con la proporción fijada si hace falta.
     glm::vec2 boxCorner() const;
+    // El rectángulo o la elipse que se está arrastrando, en el lienzo. Con la vista girada
+    // va derecho en la pantalla (y torcido en el lienzo).
+    std::vector<glm::vec2> boxShape(const ToolView& view) const;
     bool nearFirstPoint(const ToolView& view, ImVec2 position) const;
 
     Shape m_shape = Shape::Lasso;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Canvas/BrushLibrary.h"
+#include "Canvas/DrawingGuide.h"
 #include "Canvas/ImageAdjust.h"
 #include "Canvas/Selection.h"
 #include "Tools/SelectTool.h"
@@ -15,6 +16,9 @@
 
 class Canvas;
 
+// Con qué se dibuja el trazo en curso (la forma rápida explica cómo hacerla perfecta).
+enum class StrokePointer { None, Pen, Finger, Mouse };
+
 // Lo que la interfaz necesita saber de la app en cada frame.
 struct UiStatus {
     float pointScale = 1.0f;      // unidades de ImGui (coordenadas de la ventana) por punto
@@ -28,6 +32,10 @@ struct UiStatus {
     int maxCanvasSize = 0;        // lado máximo de textura que admite la GPU
     float canvasZoom = 1.0f;      // píxeles de la pantalla por píxel del lienzo
     ToolView canvasView;          // dónde se ve el lienzo (unidades)
+    float viewAngle = 0.0f;       // giro de la vista, en grados (de -180 a 180)
+    bool viewFlipped = false;     // la vista está volteada en horizontal
+    bool viewTurning = false;     // se está girando la vista: se muestra el ángulo
+    StrokePointer strokePointer = StrokePointer::None;   // con qué se dibuja el trazo en curso
 
     bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
     bool ndiRunning = false;
@@ -41,6 +49,9 @@ struct UiRequests {
     int canvasWidth = 0;    // > 0: crear un lienzo nuevo de este tamaño
     int canvasHeight = 0;
     bool fitView = false;   // centrar el lienzo (animado)
+    int rotateView = 0;     // girar la vista de 15 en 15 grados (+: en el sentido de las agujas del reloj)
+    bool straightenView = false;   // dejar la vista derecha
+    bool flipView = false;  // voltear la vista en horizontal (o quitar el volteo)
     bool savePng = false;
     bool quit = false;
     int ndi = -1;           // 1: encender NDI, 0: apagarlo
@@ -55,8 +66,9 @@ enum class Tool { Brush, Eraser, Smudge };
 inline constexpr int kToolCount = 3;
 
 // Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar,
-// transformar o, con un ajuste de imagen, cambiar su valor principal deslizando a los lados.
-enum class CanvasTool { Paint, Select, Transform, Adjust };
+// transformar, con un ajuste de imagen, cambiar su valor principal deslizando a los lados
+// o, mientras se edita la guía de dibujo, mover su centro y girarla.
+enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
 
 // Interfaz al estilo de Procreate: barras flotantes de cristal arriba, barra lateral con
 // tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se abren desde las
@@ -65,8 +77,8 @@ enum class CanvasTool { Paint, Select, Transform, Adjust };
 // Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
 // (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
-// (ajustes de imagen), UiFill.cpp (arrastrar el color para rellenar) y UiDialogs.cpp
-// (alertas y lienzo nuevo).
+// (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
+// rellenar) y UiDialogs.cpp (alertas y lienzo nuevo).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -86,6 +98,10 @@ public:
 
     // --- Para la entrada de la app ---
     bool drawWithFinger() const { return m_prefs.drawWithFinger; }
+    // Girar la vista con dos dedos.
+    bool rotateWithFingers() const { return m_prefs.rotateWithFingers; }
+    // Forma rápida: mantener quieto el final de un trazo lo convierte en una forma.
+    bool quickShape() const { return m_prefs.quickShape; }
     // Ajustes del pincel justo antes de empezar un trazo. La goma del lápiz usa los del
     // borrador aunque la herramienta sea el pincel.
     void prepareStroke(Canvas& canvas, bool eraserTip);
@@ -169,6 +185,8 @@ private:
     struct Prefs {
         bool drawWithFinger = false;
         bool sidebarRight = false;
+        bool rotateWithFingers = true;
+        bool quickShape = true;
         int size = 1;   // tamaño de la interfaz: 0 pequeña, 1 normal, 2 grande
     };
 
@@ -227,7 +245,7 @@ private:
     // Cierra lo último que se abrió (el botón atrás o Escape). Con `canvas`, también sale
     // de la herramienta Selección o Transformar, o cancela el ajuste de imagen.
     bool closeTopmost(Canvas* canvas);
-    void handleKeys(Canvas& canvas);
+    void handleKeys(Canvas& canvas, UiRequests& requests);
     void undo(Canvas& canvas, bool redo);
     bool canUndo(const Canvas& canvas) const;
     void setColor(Canvas& canvas, const float rgb[3]);
@@ -244,6 +262,9 @@ private:
     void drawHud(Canvas& canvas);
     void drawPicker(Canvas& canvas);
     void drawToast();
+    // Cápsula de arriba (donde salen los avisos) mientras se gira la vista o se ajusta una
+    // forma rápida. Va antes que los avisos: mientras se ve, los oculta.
+    void drawCapsules(const Canvas& canvas);
 
     // --- UiPanels.cpp ---
     bool beginPanel(PanelFrame& frame, Panel panel, const char* name, float x, float width, float contentHeight,
@@ -295,7 +316,7 @@ private:
     void duplicateSelection(Canvas& canvas);
     void clearSelected(Canvas& canvas);
     void fillSelected(Canvas& canvas);
-    void drawToolOverlay();
+    void drawToolOverlay(const Canvas& canvas);
     void drawDock(Canvas& canvas);
     void selectDock(Canvas& canvas);
     void transformDock(Canvas& canvas);
@@ -336,6 +357,23 @@ private:
     void adjustPill(const Canvas& canvas, const char** glyph, const char** title, char* value, size_t size, float* t);
     void adjustPanel(Canvas& canvas);
     void adjustDock(Canvas& canvas);
+
+    // --- UiGuide.cpp ---
+    // Edita la guía de dibujo: la activa y muestra su barra y sus tiradores (el centro y el
+    // giro). Al terminar se vuelve a la herramienta de antes; sin `keep`, la guía vuelve a
+    // como estaba.
+    void startGuide(Canvas& canvas);
+    void finishGuide(Canvas& canvas, bool keep);
+    // Un puntero sobre el lienzo mientras se edita: arrastra el tirador que toque.
+    void guidePress(const Canvas& canvas, const ToolView& view, ImVec2 position);
+    void guideDrag(Canvas& canvas, const ToolView& view, ImVec2 position);
+    void guideRelease();
+    // Otro dedo o el sistema cancelan el arrastre: el tirador vuelve a donde estaba.
+    void guideCancel(Canvas& canvas);
+    // Las líneas de la guía, si está activa, y al editarla sus tiradores (debajo de la
+    // interfaz).
+    void drawGuide(const Canvas& canvas);
+    void guideDock(Canvas& canvas);
 
     // --- UiFill.cpp ---
     // El botón del color (`button`) está pulsado o se acaba de soltar: arrastrarlo lleva
@@ -416,6 +454,24 @@ private:
     // Lo que muestra el indicador de arriba (o lo que mostraba, mientras se oculta).
     enum class Pill { Select, Fill, Adjust };
     Pill m_pill = Pill::Select;
+    // Cápsula del giro de la vista o de la forma rápida (lo que muestra o, mientras se
+    // oculta, lo que mostraba).
+    struct Capsule {
+        const char* glyph = nullptr;
+        std::string title;
+        std::string hint;           // cómo hacer perfecta la forma ("" si no hay)
+        bool flipped = false;       // la vista está volteada
+    } m_capsule;
+
+    // Guía de dibujo mientras se edita.
+    CanvasTool m_toolBeforeGuide = CanvasTool::Paint;   // adónde vuelve al terminar
+    DrawingGuide m_guideBefore;     // la de antes de editarla (para cancelar)
+    struct GuideDrag {
+        int handle = 0;             // 0 ninguno, 1 el centro, 2 el giro
+        glm::vec2 grab{0.0f};       // del puntero al centro, en el lienzo
+        float spin = 0.0f;          // del puntero al tirador del giro (radianes)
+        DrawingGuide before;        // la guía al empezar el arrastre
+    } m_guideDrag;
 
     // Ajustes de imagen: los deslizadores de cada uno (0..1) y el arrastre en el lienzo.
     CanvasTool m_toolBeforeAdjust = CanvasTool::Paint;   // adónde vuelve al terminar

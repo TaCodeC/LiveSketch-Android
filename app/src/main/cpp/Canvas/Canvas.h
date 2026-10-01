@@ -4,9 +4,11 @@
 #include "Canvas/Brush.h"
 #include "Canvas/ColorFill.h"
 #include "Canvas/Compositor.h"
+#include "Canvas/DrawingGuide.h"
 #include "Canvas/History.h"
 #include "Canvas/ImageAdjust.h"
 #include "Canvas/LayerStack.h"
+#include "Canvas/QuickShape.h"
 #include "Canvas/Selection.h"
 #include "Canvas/SelectionShapes.h"
 #include "Canvas/StrokePath.h"
@@ -14,6 +16,7 @@
 
 #include <glm/mat3x3.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include <array>
 #include <cstddef>
@@ -39,6 +42,10 @@
 //
 // Con una selección activa, pintar, borrar, rellenar, vaciar e invertir solo cambian lo
 // seleccionado, y copiar y transformar toman solo eso (ver CanvasSelection.cpp).
+//
+// Con la simetría de la guía de dibujo, cada sello del trazo se pinta también en sus copias
+// (reflejadas o giradas alrededor del centro de la guía), y con la forma rápida el trazo se
+// vuelve a pintar entero como la forma perfecta que se le parece.
 class Canvas {
 public:
     // Crea el lienzo con una capa "Fondo" blanca y una "Capa 1" transparente encima.
@@ -77,6 +84,23 @@ public:
     void endStroke();
     void cancelStroke();
     bool stroking() const { return m_stroking; }
+
+    // --- Forma rápida ---
+    // Convierte el trazo en curso en la forma perfecta que se le parece (ver QuickShape.h):
+    // se vuelve a pintar como ella, con la presión que solía llevar. Desde entonces strokeTo
+    // la ajusta (ver quickshape::adjust) en vez de seguir el trazo. Devuelve false si no se
+    // parece a ninguna (el trazo sigue igual).
+    bool snapStroke(const quickshape::Options& options);
+    // La hace perfecta (ver quickshape::regular), o la deja como se reconoció.
+    void setShapeRegular(bool regular);
+    // La forma del trazo en curso (Kind::None si no la tiene).
+    const quickshape::Shape& strokeShape() const { return m_shape; }
+
+    // --- Guía de dibujo ---
+    // Cuadrícula o simetría (ver DrawingGuide.h). Es del documento: un lienzo nuevo empieza
+    // con guide::defaults(). Cambiarla no se deshace y no cambia el trazo en curso.
+    const DrawingGuide& guide() const { return m_guide; }
+    void setGuide(const DrawingGuide& guide);
 
     // Resultado de las operaciones que pueden no llegar a hacerse.
     enum class Edit {
@@ -263,6 +287,28 @@ private:
     void fill(Layer& layer, float r, float g, float b, float a);
     void flushDabs();
     void commitStroke();
+    // Deja el trazo terminado: sin copias, sin forma y sin nada pintado pendiente.
+    void resetStroke();
+    // Simetría: `dabs` como los pinta la copia `copy`.
+    void transformDabs(size_t copy, std::span<const Dab> dabs, std::vector<Dab>& out) const;
+    // Las copias de `dabs` en m_copyDabs (sin reflejar y reflejadas), y en `rects` la caja
+    // de cada una, recortada al lienzo.
+    void expandCopies(std::span<const Dab> dabs, std::vector<IRect>& rects);
+    // Pinta m_copyDabs en `target`.
+    void drawCopies(GLuint target);
+    // Lo pintado por la copia `copy` en `rect`.
+    void touch(size_t copy, const IRect& rect);
+    // Lo que pintó el trazo (cada copia por su lado, juntando las que se tocan) dentro de
+    // `limit`.
+    std::vector<IRect> strokeRegions(const IRect& limit) const;
+    // Guarda el paso de deshacer de las zonas `regions` de la capa (sin memoria, olvida el
+    // historial). Hay que llamarlo antes de cambiarlas: `finish` las cambia.
+    template <typename Finish>
+    void changeRegions(Layer& layer, const std::vector<IRect>& regions, Finish finish);
+    // Forma rápida: quita lo que ha pintado el trazo, que sigue, y lo vuelve a empezar con la
+    // forma si cambió.
+    void discardStroke();
+    void applyShape();
     // Mezcla húmeda y Difuminar.
     void flushWet();
     void commitWet();
@@ -273,9 +319,15 @@ private:
     // La cobertura del trazo húmedo (el segundo buffer), o nullptr si no se lleva.
     const gfx::RenderTarget* wetCoverage() const;
     // El final afinado provisional se pinta encima de la copia de trabajo: antes se guarda
-    // lo que pisa (`rect`, con su cobertura) y en la tanda siguiente se devuelve.
-    bool saveWetTail(const IRect& rect);
-    IRect restoreWetTail();
+    // lo que pisa (`rect`, con su cobertura) y en la tanda siguiente se devuelve. Uno por
+    // copia de la simetría.
+    struct WetTail {
+        IRect rect;                   // lo que pisa (guardado abajo)
+        gfx::RenderTarget pixels;     // lo que había ahí, desde (0, 0)
+        gfx::RenderTarget coverage;
+    };
+    bool saveWetTail(WetTail& tail, const IRect& rect);
+    IRect restoreWetTail(WetTail& tail);
     // Deja transparentes los buffers de trazo en `rect`.
     void clearStrokeBuffer(const IRect& rect);
     bool ensureStrokeBase();
@@ -350,17 +402,36 @@ private:
     StrokePath m_path;
     std::vector<Dab> m_dabs;            // tanda de sellos que se va a pintar
     bool m_useBase = false;
-    IRect m_provisionalBounds;          // provisionales pintados en m_strokeTarget
     uint32_t m_drawnRevision = 0;
     uint32_t m_strokeCount = 0;         // semilla del azar de cada trazo
     bool m_wet = false;                 // el trazo mezcla con la capa (húmedo o Difuminar)
     bool m_wetCoverage = false;         // m_strokeBase lleva la cobertura del trazo húmedo
     WetMix m_wetMix;
-    WetCursor m_wetCursor;              // tras el último sello definitivo
     IRect m_wetValid;                   // zona de m_strokeTarget con la copia de la capa
-    IRect m_wetTail;                    // lo que pisa el final provisional (guardado abajo)
-    gfx::RenderTarget m_wetTailPixels;  // lo que había ahí, desde (0, 0)
-    gfx::RenderTarget m_wetTailCoverage;
+
+    // Simetría del trazo en curso: sus copias (la primera, el trazo mismo), el centro y, de
+    // cada copia, lo que pintó, sus provisionales y, si es húmedo, por dónde va y su final.
+    DrawingGuide m_guide;
+    std::vector<guide::Copy> m_copies;
+    glm::vec2 m_copyCenter{0.0f};
+    std::vector<IRect> m_copyBounds;
+    std::vector<IRect> m_provisionalRects;   // provisionales pintados en m_strokeTarget
+    std::vector<WetCursor> m_wetCursors;     // tras el último sello definitivo
+    std::vector<WetTail> m_wetTails;
+    std::vector<Dab> m_copyDabs[2];          // copias de una tanda: sin reflejar y reflejadas
+    std::vector<std::vector<Dab>> m_wetDabs; // húmedo: los provisionales de cada copia
+    std::vector<IRect> m_rects[2];           // cajas de cada copia (intermedias)
+
+    // Forma rápida.
+    std::vector<glm::vec3> m_input;          // muestras del trazo: x, y y presión
+    quickshape::Shape m_shapeRecognized;     // la reconocida
+    quickshape::Shape m_shapeBase;           // esa o la perfecta
+    quickshape::Shape m_shape;               // ajustada al puntero
+    quickshape::Options m_shapeOptions;
+    glm::vec2 m_shapeFrom{0.0f};             // el puntero al reconocerla
+    glm::vec2 m_shapeTo{0.0f};               // y ahora
+    float m_shapePressure = 1.0f;
+    bool m_shapeDirty = false;               // hay que volver a pintarla
 
     uint64_t m_version = 0;
     std::vector<std::vector<uint8_t>> m_snapshot; // una entrada por capa, de abajo arriba

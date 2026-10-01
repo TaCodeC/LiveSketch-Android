@@ -2,7 +2,10 @@
 
 #include "Canvas/BrushLibrary.h"
 
+#include <glm/vec2.hpp>
+
 #include <cstdint>
+#include <span>
 #include <vector>
 
 // Un sello listo para la GPU: seis floats seguidos, que se suben tal cual.
@@ -32,6 +35,10 @@ public:
 
     void begin(const BrushParams& params, const Settings& settings, float x, float y, float pressure);
     void moveTo(float x, float y, float pressure);
+    // Forma rápida: el recorrido pasa a ser `points` (en píxeles del lienzo) con la presión
+    // `pressure`, sin estabilizar, y los sellos vuelven a salir desde el principio (los de
+    // antes los tiene que quitar quien los pintó). El trazo sigue sin terminar.
+    void reshape(std::span<const glm::vec2> points, float pressure);
     // Levanta el lápiz: el trazo alcanza al puntero y todos los sellos pasan a definitivos.
     void finish();
     bool active() const { return m_active; }

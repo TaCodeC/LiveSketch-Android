@@ -56,9 +56,10 @@ public:
     bool prepare(const BrushParams& params);
 
     // Pinta `dabs` en `target` (un FBO de width×height, el tamaño del lienzo) con `color`,
-    // en alfa premultiplicado. Devuelve la zona que pueden haber tocado.
+    // en alfa premultiplicado. Devuelve la zona que pueden haber tocado. `mirrored`: la
+    // punta se ve reflejada (las copias reflejadas de la simetría).
     IRect draw(GLuint target, int width, int height, std::span<const Dab> dabs, const BrushParams& params,
-               const float color[3]);
+               const float color[3], bool mirrored = false);
     // Caja que cubre los sellos, en píxeles del lienzo.
     static IRect bounds(std::span<const Dab> dabs);
 
@@ -73,7 +74,7 @@ public:
     // el primero (Difuminar no pinta y no lo necesita). `target` tiene que tener la capa en
     // toda la zona que leen (wetBounds). Devuelve la zona que cambió.
     IRect drawWet(const gfx::RenderTarget& target, const gfx::RenderTarget* coverage, std::span<const Dab> dabs,
-                  const BrushParams& params, const WetMix& mix, WetCursor& cursor);
+                  const BrushParams& params, const WetMix& mix, WetCursor& cursor, bool mirrored = false);
     // Zona que leen y escriben esos sellos (sin recortar al lienzo).
     static IRect wetBounds(std::span<const Dab> dabs, const WetCursor& cursor);
 

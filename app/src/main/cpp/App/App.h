@@ -56,6 +56,11 @@ private:
     bool penBlocksFingers() const;
     bool canvasInteractionActive() const;
     void resetGestureReference();
+    // Empieza el giro con dos dedos desde el giro que tiene la vista.
+    void startTwist();
+    // Gira la vista: con el teclado, de 15 en 15 grados (`steps`) alrededor del centro; con
+    // `steps` = 0, la deja derecha.
+    void rotateView(int steps);
     void notifyStrokeBlocked(bool eraserTip);
     // Empieza un trazo con los ajustes de la herramienta (o del borrador, con la goma
     // del lápiz). `pixels`: posición en la ventana, en píxeles.
@@ -82,6 +87,14 @@ private:
     void moveToolGesture(float x, float y);
     // `cancel`: otro dedo o el sistema lo interrumpen y no se hace nada.
     void endToolGesture(bool cancel);
+
+    // Forma rápida: el puntero que dibuja se queda quieto un momento al final del trazo
+    // (`pixels`: su posición en la ventana).
+    void startHold(ToolPointer pointer, glm::vec2 pixels);
+    void trackHold(glm::vec2 pixels);
+    // Cada frame: si lleva quieto lo bastante, el trazo pasa a ser la forma que se le
+    // parece; con Mayús (o tocando con un dedo, ver onFingerEvent), perfecta.
+    void checkHold();
 
     void onPenEvent(const SDL_Event& event);
     void flushPenSample();
@@ -117,7 +130,8 @@ private:
         bool active = false;
         uint64_t startMs = 0;
         float fromZoom = 1.0f;
-        glm::vec2 fromOffset{0.0f};
+        float fromAngle = 0.0f;
+        glm::vec2 fromCenter{0.0f};   // centro del lienzo en la pantalla
     } m_fitAnimation;
 
     // Guardar PNG: la lectura del lienzo es en el hilo de GL; la compresión, en otro.
@@ -155,9 +169,17 @@ private:
     std::vector<FingerPoint> m_fingers;   // dedos que tocaron el lienzo
     bool m_fingerDrawing = false;
     uint64_t m_fingerStrokeStartMs = 0;
-    // Referencia del gesto de uno o dos dedos (centro y distancia en píxeles).
+    // Referencia del gesto de uno o dos dedos (centro y distancia en píxeles, y dirección
+    // de un dedo al otro).
     glm::vec2 m_gestureCenter{0.0f};
     float m_gestureDistance = 0.0f;
+    float m_gestureDirection = 0.0f;
+    // Giro con dos dedos: lo que han girado desde que se puso el segundo, sobre el giro que
+    // tenía la vista (sin el imán: ver magnetAngle).
+    float m_twistStart = 0.0f;
+    float m_twist = 0.0f;
+    bool m_twisting = false;          // este gesto ya giró la vista
+    uint64_t m_angleShownUntil = 0;   // el giro se muestra arriba hasta entonces (teclado)
 
     // Toque con varios dedos (deshacer con dos, rehacer con tres) y dedo quieto al
     // empezar (cuentagotas). Sigue a todos los dedos del gesto, también al tercero.
@@ -191,6 +213,17 @@ private:
         float x = 0.0f;              // última posición (coordenadas de ventana)
         float y = 0.0f;
     } m_toolGesture;
+
+    // Forma rápida del trazo en curso.
+    struct Hold {
+        ToolPointer pointer = ToolPointer::None;   // con qué se dibuja
+        glm::vec2 anchor{0.0f};      // dónde se paró (píxeles)
+        uint64_t sinceMs = 0;        // desde cuándo
+        int stillFrames = 0;         // frames seguidos sin moverse de ahí
+        bool tried = false;          // ya se probó ahí (no se parecía a ninguna forma)
+        bool snapped = false;        // el trazo ya es una forma
+        std::vector<SDL_FingerID> fingers;   // dedos que la hicieron perfecta (no son gestos)
+    } m_hold;
 
     // Ratón de verdad (no el emulado desde el lápiz o los dedos).
     bool m_mouseDrawing = false;

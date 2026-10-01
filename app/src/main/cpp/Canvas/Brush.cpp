@@ -447,7 +447,7 @@ IRect Brush::bounds(std::span<const Dab> dabs) {
 }
 
 IRect Brush::draw(GLuint target, int width, int height, std::span<const Dab> dabs, const BrushParams& params,
-                  const float color[3]) {
+                  const float color[3], bool mirrored) {
     if (dabs.empty() || !m_program || !prepare(params)) {
         return {};
     }
@@ -469,7 +469,7 @@ IRect Brush::draw(GLuint target, int width, int height, std::span<const Dab> dab
     glUniform2f(m_uCanvasSize, static_cast<float>(width), static_cast<float>(height));
     glUniform1f(m_uRoundness, std::clamp(params.roundness, 0.1f, 1.0f));
     glUniform1f(m_uPad, round ? kRoundPad : 0.0f);
-    glUniform1f(m_uFlip, isClassic(params.tip) ? 1.0f : 0.0f);
+    glUniform1f(m_uFlip, isClassic(params.tip) != mirrored ? 1.0f : 0.0f);
     glUniform1i(m_uRound, round ? 1 : 0);
     glUniform1f(m_uHardness, std::clamp(params.hardness, 0.0f, 1.0f));
     glUniform3f(m_uColor, color[0], color[1], color[2]);
@@ -544,7 +544,7 @@ bool Brush::ensureWetPatch(int width, int height) {
 }
 
 IRect Brush::drawWet(const gfx::RenderTarget& target, const gfx::RenderTarget* coverage, std::span<const Dab> dabs,
-                     const BrushParams& params, const WetMix& mix, WetCursor& cursor) {
+                     const BrushParams& params, const WetMix& mix, WetCursor& cursor, bool mirrored) {
     if (dabs.empty() || !m_wetProgram || !target || !prepare(params)) {
         return {};
     }
@@ -597,7 +597,7 @@ IRect Brush::drawWet(const gfx::RenderTarget& target, const gfx::RenderTarget* c
     glUniform2f(m_wet.patchTexel, 1.0f / static_cast<float>(m_wetPatchWidth), 1.0f / static_cast<float>(m_wetPatchHeight));
     glUniform1i(m_wet.coverageOn, coverage ? 1 : 0);
     glUniform1f(m_wet.roundness, std::clamp(params.roundness, 0.1f, 1.0f));
-    glUniform1f(m_wet.flip, isClassic(params.tip) ? 1.0f : 0.0f);
+    glUniform1f(m_wet.flip, isClassic(params.tip) != mirrored ? 1.0f : 0.0f);
     glUniform1i(m_wet.round, round ? 1 : 0);
     glUniform1f(m_wet.hardness, std::clamp(params.hardness, 0.0f, 1.0f));
     glUniform3f(m_wet.color, mix.color[0], mix.color[1], mix.color[2]);

@@ -149,6 +149,13 @@ ICONS = {
     "kFlipView": "flip-horizontal",
     "kSpline": "spline",
     "kMinus": "minus",
+    "kSymmetryHorizontal": "square-split-vertical",
+    "kQuadrant": "grid-2x2",
+    "kRadial": "snowflake",
+    "kRotational": "refresh-cw",
+    "kCenter": "locate-fixed",
+    "kCurve": "chart-spline",
+    "kPen": "pen-line",
 }
 
 

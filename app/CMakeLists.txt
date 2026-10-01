@@ -108,9 +108,11 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/CanvasView.cpp
         ${SRC_DIR}/Canvas/ColorFill.cpp
         ${SRC_DIR}/Canvas/Compositor.cpp
+        ${SRC_DIR}/Canvas/DrawingGuide.cpp
         ${SRC_DIR}/Canvas/History.cpp
         ${SRC_DIR}/Canvas/ImageAdjust.cpp
         ${SRC_DIR}/Canvas/LayerStack.cpp
+        ${SRC_DIR}/Canvas/QuickShape.cpp
         ${SRC_DIR}/Canvas/Selection.cpp
         ${SRC_DIR}/Canvas/SelectionShapes.cpp
         ${SRC_DIR}/Canvas/StrokePath.cpp
@@ -134,6 +136,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/UiBrushes.cpp
         ${SRC_DIR}/UI/UiDialogs.cpp
         ${SRC_DIR}/UI/UiFill.cpp
+        ${SRC_DIR}/UI/UiGuide.cpp
         ${SRC_DIR}/UI/UiPanels.cpp
         ${SRC_DIR}/UI/UiTools.cpp
 )
@@ -211,9 +214,11 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/CanvasTests.cpp
             ${TESTS_DIR}/ExportTests.cpp
             ${TESTS_DIR}/FillTests.cpp
+            ${TESTS_DIR}/GuideTests.cpp
             ${TESTS_DIR}/HistoryTests.cpp
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
+            ${TESTS_DIR}/QuickShapeTests.cpp
             ${TESTS_DIR}/SelectionTests.cpp
             ${TESTS_DIR}/WetMixTests.cpp
     )

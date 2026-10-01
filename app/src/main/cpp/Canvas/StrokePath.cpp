@@ -104,6 +104,26 @@ void StrokePath::moveTo(float x, float y, float pressure) {
     emit();
 }
 
+void StrokePath::reshape(std::span<const glm::vec2> points, float pressure) {
+    if (!m_active || m_finished || points.empty()) {
+        return;
+    }
+    pressure = std::clamp(pressure, 0.0f, 1.0f);
+    m_path.clear();
+    m_path.push_back({points[0].x, points[0].y, pressure, 0.0f});
+    for (size_t i = 1; i < points.size(); ++i) {
+        appendPoint(points[i].x, points[i].y, pressure);
+    }
+    m_rawX = points.back().x;
+    m_rawY = points.back().y;
+    m_rawPressure = pressure;
+    m_pull = 0.0f;
+    m_final = {};
+    m_finalDabs.clear();
+    m_provisional.clear();
+    emit();
+}
+
 void StrokePath::finish() {
     if (!m_active || m_finished) {
         return;

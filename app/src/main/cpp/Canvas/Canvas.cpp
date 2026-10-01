@@ -3,6 +3,7 @@
 #include "Canvas/BrushTips.h"
 
 #include <SDL3/SDL_log.h>
+#include <glm/common.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -30,12 +31,31 @@ size_t bytesOf(int width, int height) {
     return static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
 }
 
+// Las zonas de un trazo con simetría a menos de esto se guardan juntas para deshacer.
+constexpr int kRegionJoin = 32;
+
 // Copia un rectángulo entre FBO del mismo formato (sin escalar).
 void copyRect(GLuint source, const IRect& from, GLuint target, int toX, int toY) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
     glBlitFramebuffer(from.x0, from.y0, from.x1, from.y1, toX, toY, toX + from.width(), toY + from.height(),
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
+}
+
+// Deja transparente `rect` de `target` (si existe).
+void clearTarget(const gfx::RenderTarget& target, const IRect& rect) {
+    const IRect area = rect.intersected(IRect::ofSize(target.width, target.height));
+    if (!target || area.empty()) {
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo.id());
+    glViewport(0, 0, target.width, target.height);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(area.x0, area.y0, area.width(), area.height());
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 } // namespace
@@ -49,6 +69,7 @@ bool Canvas::init(int width, int height) {
         return false;
     }
     m_layers.reset(width, height);
+    m_guide = guide::defaults({static_cast<float>(width), static_cast<float>(height)});
     if (!createGpuObjects()) {
         destroy();
         return false;
@@ -74,12 +95,7 @@ bool Canvas::init(int width, int height) {
 
 void Canvas::destroy() {
     m_ready = false;
-    m_stroking = false;
-    m_wet = false;
-    m_wetCoverage = false;
-    m_wetValid = {};
-    m_wetTail = {};
-    m_strokeBounds = {};
+    resetStroke();
     m_layerEdit = {};
     m_history.clear();
     m_layers.clearAll();
@@ -113,8 +129,7 @@ void Canvas::destroyGpuObjects() {
     m_bounds.destroy();
     m_selection.destroy();
     ++m_selectionVersion;
-    m_wetTailPixels.destroy();
-    m_wetTailCoverage.destroy();
+    m_wetTails.clear();
     m_strokeBase.destroy();
     m_strokeTarget.destroy();
     m_brush.destroy();
@@ -218,8 +233,18 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     path.pixelsPerPoint = m_pixelsPerPoint;
     path.seed = ++m_strokeCount * 0x9E3779B9U;
     m_path.begin(m_strokeParams, path, x, y, pressure);
-    m_provisionalBounds = {};
     m_drawnRevision = m_path.revision() - 1;
+
+    // Con simetría, el trazo se repite con cada copia de la guía.
+    m_copies = guide::copies(m_guide);
+    m_copyCenter = m_guide.center;
+    m_copyBounds.assign(m_copies.size(), IRect{});
+    m_provisionalRects.assign(m_copies.size(), IRect{});
+    m_input.assign(1, glm::vec3(x, y, std::clamp(pressure, 0.0f, 1.0f)));
+    m_shapeRecognized = {};
+    m_shapeBase = {};
+    m_shape = {};
+    m_shapeDirty = false;
 
     if (!m_wet) {
         // Sin memoria para el segundo buffer, el final afinado se ve al levantar el lápiz.
@@ -230,7 +255,6 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
         // sello pinta como el primero. Difuminar no pinta y no lo necesita.
         m_useBase = false;
         m_wetCoverage = !m_settings.smudge && ensureStrokeBase();
-        m_wetTail = {};
         m_strokeMode = StrokePreview::Mode::Replace;
         m_wetMix = {};
         std::copy(m_strokeColor, m_strokeColor + 3, m_wetMix.color);
@@ -243,22 +267,40 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
         m_wetMix.grainScale = m_strokeGrain.scale;
         m_wetMix.grainDepth = m_strokeGrain.depth;
         m_wetMix.original = m_layers.active().target.texture.id();   // no cambia hasta el final
-        m_wetCursor = {};
+        m_wetCursors.assign(m_copies.size(), WetCursor{});
+        m_wetTails.resize(m_copies.size());
+        for (WetTail& tail : m_wetTails) {
+            tail.rect = {};
+        }
+        m_wetDabs.resize(m_copies.size());
         m_wetValid = {};
     }
     return true;
 }
 
 void Canvas::strokeTo(float x, float y, float pressure) {
-    if (m_stroking) {
-        m_path.moveTo(x, y, pressure);
+    if (!m_stroking) {
+        return;
     }
+    if (m_shape.kind != quickshape::Kind::None) {
+        // Con la forma rápida, el puntero la ajusta.
+        const glm::vec2 to(x, y);
+        if (to != m_shapeTo) {
+            m_shapeTo = to;
+            m_shape = quickshape::adjust(m_shapeBase, m_shapeFrom, m_shapeTo, m_shapeOptions);
+            m_shapeDirty = true;
+        }
+        return;
+    }
+    m_input.emplace_back(x, y, std::clamp(pressure, 0.0f, 1.0f));
+    m_path.moveTo(x, y, pressure);
 }
 
 void Canvas::endStroke() {
     if (!m_stroking) {
         return;
     }
+    applyShape();
     m_path.finish();
     flushDabs();
     commitStroke();
@@ -273,11 +315,31 @@ void Canvas::cancelStroke() {
         endWet();   // la capa no ha cambiado
         return;
     }
-    clearStrokeBuffer(m_strokeBounds);
-    m_layers.markDirty(m_strokeBounds);
-    m_strokeBounds = {};
-    m_provisionalBounds = {};
+    for (const IRect& rect : m_copyBounds) {
+        clearStrokeBuffer(rect);
+        m_layers.markDirty(rect);
+    }
+    resetStroke();
+}
+
+void Canvas::resetStroke() {
     m_stroking = false;
+    m_strokeBounds = {};
+    m_copies.clear();
+    m_copyBounds.clear();
+    m_provisionalRects.clear();
+    m_wetCursors.clear();
+    for (WetTail& tail : m_wetTails) {
+        tail.rect = {};
+    }
+    m_input.clear();
+    m_shapeRecognized = {};
+    m_shapeBase = {};
+    m_shape = {};
+    m_shapeDirty = false;
+    m_wetValid = {};
+    m_wetCoverage = false;
+    m_wet = false;
 }
 
 bool Canvas::ensureStrokeBase() {
@@ -291,10 +353,190 @@ bool Canvas::ensureStrokeBase() {
     return true;
 }
 
+// --- Simetría ---
+
+void Canvas::transformDabs(size_t copy, std::span<const Dab> dabs, std::vector<Dab>& out) const {
+    out.clear();
+    if (copy == 0) {
+        out.assign(dabs.begin(), dabs.end());   // el trazo mismo
+        return;
+    }
+    out.reserve(dabs.size());
+    for (const Dab& dab : dabs) {
+        out.push_back(guide::transform(dab, m_copies[copy], m_copyCenter));
+    }
+}
+
+void Canvas::expandCopies(std::span<const Dab> dabs, std::vector<IRect>& rects) {
+    const IRect canvas = IRect::ofSize(width(), height());
+    rects.assign(m_copies.size(), IRect{});
+    m_copyDabs[0].clear();
+    m_copyDabs[1].clear();
+    for (size_t k = 0; k < m_copies.size(); ++k) {
+        std::vector<Dab>& out = m_copyDabs[m_copies[k].mirrored ? 1 : 0];
+        const size_t first = out.size();
+        if (k == 0) {
+            out.insert(out.end(), dabs.begin(), dabs.end());
+        } else {
+            for (const Dab& dab : dabs) {
+                out.push_back(guide::transform(dab, m_copies[k], m_copyCenter));
+            }
+        }
+        rects[k] = Brush::bounds(std::span<const Dab>(out).subspan(first)).intersected(canvas);
+    }
+}
+
+void Canvas::drawCopies(GLuint target) {
+    // Un trazo pinta lo mismo en cualquier orden (un solo color: encima o el máximo).
+    for (int mirrored = 0; mirrored < 2; ++mirrored) {
+        if (!m_copyDabs[mirrored].empty()) {
+            m_brush.draw(target, width(), height(), m_copyDabs[mirrored], m_strokeParams, m_strokeColor,
+                         mirrored == 1);
+        }
+    }
+}
+
+void Canvas::touch(size_t copy, const IRect& rect) {
+    if (rect.empty()) {
+        return;
+    }
+    m_strokeBounds.unite(rect);
+    m_copyBounds[copy].unite(rect);
+    m_layers.markDirty(rect);
+}
+
+std::vector<IRect> Canvas::strokeRegions(const IRect& limit) const {
+    std::vector<IRect> regions;
+    for (const IRect& rect : m_copyBounds) {
+        addRegion(regions, rect.intersected(limit), kRegionJoin);
+    }
+    return regions;
+}
+
+template <typename Finish>
+void Canvas::changeRegions(Layer& layer, const std::vector<IRect>& regions, Finish finish) {
+    std::vector<HistoryStep> steps;
+    bool saved = true;
+    size_t bytes = 0;
+    for (const IRect& rect : regions) {
+        HistoryStep step;
+        step.kind = HistoryStep::Kind::Pixels;
+        step.layerId = layer.id;
+        step.rect = rect;
+        saved = saved && saveRegion(layer, rect, step.pixels);
+        step.bytes = bytesOf(rect.width(), rect.height());
+        bytes += step.bytes;
+        steps.push_back(std::move(step));
+    }
+    for (const IRect& rect : regions) {
+        finish(rect);
+        m_layers.markDirty(rect);
+    }
+    ++layer.revision;
+    if (!saved) {
+        m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
+    } else if (steps.size() == 1) {
+        record(std::move(steps.front()));
+    } else {
+        // Varias zonas (las copias de la simetría): se deshacen juntas.
+        HistoryStep group;
+        group.kind = HistoryStep::Kind::Group;
+        group.bytes = bytes;
+        group.children = std::move(steps);
+        record(std::move(group));
+    }
+}
+
+// --- Forma rápida ---
+
+bool Canvas::snapStroke(const quickshape::Options& options) {
+    if (!m_stroking || m_shape.kind != quickshape::Kind::None || m_input.size() < 2) {
+        return false;
+    }
+    std::vector<glm::vec2> points;
+    std::vector<float> pressures;
+    points.reserve(m_input.size());
+    pressures.reserve(m_input.size());
+    for (const glm::vec3& sample : m_input) {
+        points.emplace_back(sample.x, sample.y);
+        pressures.push_back(sample.z);
+    }
+    const quickshape::Shape shape = quickshape::recognize(points, options);
+    if (shape.kind == quickshape::Kind::None) {
+        return false;
+    }
+    // La presión de la mitad del trazo: al empezar y al terminar suele ir más floja.
+    const auto middle = pressures.begin() + static_cast<std::ptrdiff_t>(pressures.size() / 2);
+    std::nth_element(pressures.begin(), middle, pressures.end());
+    m_shapePressure = *middle;
+    m_shapeRecognized = shape;
+    m_shapeBase = shape;
+    m_shape = shape;
+    m_shapeOptions = options;
+    m_shapeFrom = points.back();
+    m_shapeTo = m_shapeFrom;
+    m_shapeDirty = true;
+    return true;
+}
+
+void Canvas::setShapeRegular(bool regular) {
+    if (!m_stroking || m_shape.kind == quickshape::Kind::None || m_shapeBase.regular == regular) {
+        return;
+    }
+    m_shapeBase = regular ? quickshape::regular(m_shapeRecognized) : m_shapeRecognized;
+    m_shape = quickshape::adjust(m_shapeBase, m_shapeFrom, m_shapeTo, m_shapeOptions);
+    m_shapeDirty = true;
+}
+
+void Canvas::applyShape() {
+    if (!m_shapeDirty || !m_stroking) {
+        return;
+    }
+    m_shapeDirty = false;
+    const std::vector<glm::vec2> outline = quickshape::outline(m_shape);
+    if (outline.size() < 2) {
+        return;
+    }
+    discardStroke();
+    m_path.reshape(outline, m_shapePressure);
+    m_drawnRevision = m_path.revision() - 1;
+}
+
+void Canvas::discardStroke() {
+    const GLuint layer = m_layers.active().target.fbo.id();
+    for (IRect& rect : m_copyBounds) {
+        if (rect.empty()) {
+            continue;
+        }
+        if (m_wet) {
+            // La copia de trabajo vuelve a ser la capa, y la cobertura, cero.
+            glDisable(GL_SCISSOR_TEST);
+            copyRect(layer, rect, m_strokeTarget.fbo.id(), rect.x0, rect.y0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            if (m_wetCoverage) {
+                clearTarget(m_strokeBase, rect);
+            }
+        } else {
+            clearStrokeBuffer(rect);
+        }
+        m_layers.markDirty(rect);
+        rect = {};
+    }
+    m_strokeBounds = {};
+    std::fill(m_provisionalRects.begin(), m_provisionalRects.end(), IRect{});
+    std::fill(m_wetCursors.begin(), m_wetCursors.end(), WetCursor{});
+    for (WetTail& tail : m_wetTails) {
+        tail.rect = {};
+    }
+}
+
+// --- Pintar ---
+
 void Canvas::flushDabs() {
     if (!m_stroking) {
         return;
     }
+    applyShape();
     if (m_wet) {
         flushWet();
         return;
@@ -305,10 +547,11 @@ void Canvas::flushDabs() {
         if (m_dabs.empty()) {
             return;
         }
-        const IRect touched = m_brush.draw(m_strokeTarget.fbo.id(), width(), height(), m_dabs, m_strokeParams,
-                                           m_strokeColor);
-        m_strokeBounds.unite(touched);
-        m_layers.markDirty(touched);
+        expandCopies(m_dabs, m_rects[0]);
+        drawCopies(m_strokeTarget.fbo.id());
+        for (size_t k = 0; k < m_copies.size(); ++k) {
+            touch(k, m_rects[0][k]);
+        }
         return;
     }
     if (m_dabs.empty() && m_path.revision() == m_drawnRevision) {
@@ -317,24 +560,25 @@ void Canvas::flushDabs() {
 
     // Los definitivos van a la base. Lo que se ve es la base más los provisionales: se
     // copia la base sobre los provisionales de antes y lo nuevo, y encima van los de ahora.
-    const IRect canvas = IRect::ofSize(width(), height());
-    const IRect finals = m_brush.draw(m_strokeBase.fbo.id(), width(), height(), m_dabs, m_strokeParams,
-                                      m_strokeColor);
-    const std::vector<Dab>& provisional = m_path.provisional();
-    const IRect provisionalBounds = Brush::bounds(provisional).intersected(canvas);
-    IRect restore = m_provisionalBounds;
-    restore.unite(finals);
-    restore.unite(provisionalBounds);
-    if (!restore.empty()) {
-        glDisable(GL_SCISSOR_TEST);
-        copyRect(m_strokeBase.fbo.id(), restore, m_strokeTarget.fbo.id(), restore.x0, restore.y0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    std::vector<IRect>& finals = m_rects[0];
+    std::vector<IRect>& provisional = m_rects[1];
+    expandCopies(m_dabs, finals);
+    drawCopies(m_strokeBase.fbo.id());
+    expandCopies(m_path.provisional(), provisional);
+    glDisable(GL_SCISSOR_TEST);
+    for (size_t k = 0; k < m_copies.size(); ++k) {
+        IRect restore = m_provisionalRects[k];
+        restore.unite(finals[k]);
+        restore.unite(provisional[k]);
+        if (!restore.empty()) {
+            copyRect(m_strokeBase.fbo.id(), restore, m_strokeTarget.fbo.id(), restore.x0, restore.y0);
+        }
+        m_provisionalRects[k] = provisional[k];
+        touch(k, restore);
     }
-    m_brush.draw(m_strokeTarget.fbo.id(), width(), height(), provisional, m_strokeParams, m_strokeColor);
-    m_provisionalBounds = provisionalBounds;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    drawCopies(m_strokeTarget.fbo.id());
     m_drawnRevision = m_path.revision();
-    m_strokeBounds.unite(restore);
-    m_layers.markDirty(restore);
 }
 
 void Canvas::commitStroke() {
@@ -343,39 +587,26 @@ void Canvas::commitStroke() {
         return;
     }
     // Con selección, la capa solo cambia en lo seleccionado.
-    const IRect bounds = m_strokeBounds.intersected(operationRect());
-    if (!bounds.empty()) {
+    const std::vector<IRect> regions = strokeRegions(operationRect());
+    if (!regions.empty()) {
         Layer& layer = m_layers.active();
-        HistoryStep step;
-        step.kind = HistoryStep::Kind::Pixels;
-        step.layerId = layer.id;
-        step.rect = bounds;
-        const bool saved = saveRegion(layer, bounds, step.pixels);
-
         Compositor::Blend blend = Compositor::Blend::Over;
         if (m_strokeMode == StrokePreview::Mode::Erase) {
             blend = Compositor::Blend::Erase;
         } else if (m_strokeMode == StrokePreview::Mode::PaintAtop) {
             blend = Compositor::Blend::Atop;
         }
-        m_compositor.draw(layer.target.fbo.id(), m_strokeTarget.texture.id(), m_strokeOpacity, blend, bounds,
-                          &m_strokeGrain, operationMask());
-        ++layer.revision;
-        m_layers.markDirty(bounds);
-
-        if (saved) {
-            step.bytes = bytesOf(bounds.width(), bounds.height());
-            record(std::move(step));
-        } else {
-            m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
-        }
+        changeRegions(layer, regions, [&](const IRect& rect) {
+            m_compositor.draw(layer.target.fbo.id(), m_strokeTarget.texture.id(), m_strokeOpacity, blend, rect,
+                              &m_strokeGrain, operationMask());
+        });
     }
     // Lo que se pintó fuera de la selección tampoco se queda en el buffer.
-    clearStrokeBuffer(m_strokeBounds);
-    m_layers.markDirty(m_strokeBounds.intersected(IRect::ofSize(width(), height())));
-    m_strokeBounds = {};
-    m_provisionalBounds = {};
-    m_stroking = false;
+    for (const IRect& rect : m_copyBounds) {
+        clearStrokeBuffer(rect);
+        m_layers.markDirty(rect);
+    }
+    resetStroke();
 }
 
 void Canvas::prepareWet(const IRect& needed) {
@@ -421,31 +652,56 @@ void Canvas::flushWet() {
     if (m_dabs.empty() && (!m_path.tapered() || m_path.revision() == m_drawnRevision)) {
         return;
     }
+    const IRect canvas = IRect::ofSize(width(), height());
+    const size_t copies = m_copies.size();
+    std::vector<IRect>& changed = m_rects[0];
+    changed.assign(copies, IRect{});
     // El final afinado que se pintó de prueba se quita antes de seguir: los sellos
     // definitivos parten de lo que dejaron los anteriores.
-    IRect changed = restoreWetTail();
-    prepareWet(Brush::wetBounds(m_dabs, m_wetCursor));
-    changed.unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), m_dabs, m_strokeParams, m_wetMix, m_wetCursor));
+    for (size_t k = 0; k < copies; ++k) {
+        changed[k] = restoreWetTail(m_wetTails[k]);
+    }
+    // Cada copia sigue su camino y mezcla con lo que encuentra (las otras copias incluidas).
+    std::vector<Dab>& dabs = m_copyDabs[0];
+    for (size_t k = 0; k < copies && !m_dabs.empty(); ++k) {
+        transformDabs(k, m_dabs, dabs);
+        prepareWet(Brush::wetBounds(dabs, m_wetCursors[k]));
+        changed[k].unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), dabs, m_strokeParams, m_wetMix,
+                                         m_wetCursors[k], m_copies[k].mirrored));
+    }
     if (!provisional.empty()) {
-        // Se guarda lo que van a pisar para quitarlos en la tanda siguiente.
-        prepareWet(Brush::wetBounds(provisional, m_wetCursor));
-        if (saveWetTail(Brush::bounds(provisional).intersected(IRect::ofSize(width(), height())))) {
-            WetCursor tail = m_wetCursor;
-            changed.unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), provisional, m_strokeParams, m_wetMix, tail));
+        // Se guarda lo que van a pisar para quitarlos en la tanda siguiente: de todas las
+        // copias antes de pintar ninguna, así se devuelve bien aunque se solapen.
+        for (size_t k = 0; k < copies; ++k) {
+            transformDabs(k, provisional, m_wetDabs[k]);
+            prepareWet(Brush::wetBounds(m_wetDabs[k], m_wetCursors[k]));
+        }
+        for (size_t k = 0; k < copies; ++k) {
+            saveWetTail(m_wetTails[k], Brush::bounds(m_wetDabs[k]).intersected(canvas));
+        }
+        for (size_t k = 0; k < copies; ++k) {
+            if (m_wetTails[k].rect.empty()) {
+                continue;   // sin memoria para guardarlo: el final se ve al levantar el lápiz
+            }
+            WetCursor tail = m_wetCursors[k];
+            changed[k].unite(m_brush.drawWet(m_strokeTarget, wetCoverage(), m_wetDabs[k], m_strokeParams, m_wetMix,
+                                             tail, m_copies[k].mirrored));
         }
     }
     m_drawnRevision = m_path.revision();
-    m_strokeBounds.unite(changed);
-    m_layers.markDirty(changed);
+    for (size_t k = 0; k < copies; ++k) {
+        touch(k, changed[k].intersected(canvas));
+    }
 }
 
-bool Canvas::saveWetTail(const IRect& rect) {
+bool Canvas::saveWetTail(WetTail& tail, const IRect& rect) {
+    tail.rect = {};
     if (rect.empty()) {
         return false;
     }
     const bool coverage = wetCoverage() != nullptr;
-    for (gfx::RenderTarget* copy : {&m_wetTailPixels, &m_wetTailCoverage}) {
-        if (copy == &m_wetTailCoverage && !coverage) {
+    for (gfx::RenderTarget* copy : {&tail.pixels, &tail.coverage}) {
+        if (copy == &tail.coverage && !coverage) {
             continue;
         }
         if (*copy && copy->width >= rect.width() && copy->height >= rect.height()) {
@@ -460,52 +716,41 @@ bool Canvas::saveWetTail(const IRect& rect) {
         }
     }
     glDisable(GL_SCISSOR_TEST);
-    copyRect(m_strokeTarget.fbo.id(), rect, m_wetTailPixels.fbo.id(), 0, 0);
+    copyRect(m_strokeTarget.fbo.id(), rect, tail.pixels.fbo.id(), 0, 0);
     if (coverage) {
-        copyRect(m_strokeBase.fbo.id(), rect, m_wetTailCoverage.fbo.id(), 0, 0);
+        copyRect(m_strokeBase.fbo.id(), rect, tail.coverage.fbo.id(), 0, 0);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    m_wetTail = rect;
+    tail.rect = rect;
     return true;
 }
 
-IRect Canvas::restoreWetTail() {
-    const IRect rect = m_wetTail;
+IRect Canvas::restoreWetTail(WetTail& tail) {
+    const IRect rect = tail.rect;
     if (rect.empty()) {
         return {};
     }
     const IRect stored = IRect::ofSize(rect.width(), rect.height());
     glDisable(GL_SCISSOR_TEST);
-    copyRect(m_wetTailPixels.fbo.id(), stored, m_strokeTarget.fbo.id(), rect.x0, rect.y0);
+    copyRect(tail.pixels.fbo.id(), stored, m_strokeTarget.fbo.id(), rect.x0, rect.y0);
     if (wetCoverage()) {
-        copyRect(m_wetTailCoverage.fbo.id(), stored, m_strokeBase.fbo.id(), rect.x0, rect.y0);
+        copyRect(tail.coverage.fbo.id(), stored, m_strokeBase.fbo.id(), rect.x0, rect.y0);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    m_wetTail = {};
+    tail.rect = {};
     return rect;
 }
 
 void Canvas::commitWet() {
     // La copia de trabajo ya tiene el resultado (y solo cambió en lo seleccionado).
-    const IRect bounds = m_strokeBounds.intersected(operationRect());
-    if (!bounds.empty()) {
+    const std::vector<IRect> regions = strokeRegions(operationRect());
+    if (!regions.empty()) {
         Layer& layer = m_layers.active();
-        HistoryStep step;
-        step.kind = HistoryStep::Kind::Pixels;
-        step.layerId = layer.id;
-        step.rect = bounds;
-        const bool saved = saveRegion(layer, bounds, step.pixels);
-        glDisable(GL_SCISSOR_TEST);
-        copyRect(m_strokeTarget.fbo.id(), bounds, layer.target.fbo.id(), bounds.x0, bounds.y0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        ++layer.revision;
-        m_layers.markDirty(bounds);
-        if (saved) {
-            step.bytes = bytesOf(bounds.width(), bounds.height());
-            record(std::move(step));
-        } else {
-            m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
-        }
+        changeRegions(layer, regions, [&](const IRect& rect) {
+            glDisable(GL_SCISSOR_TEST);
+            copyRect(m_strokeTarget.fbo.id(), rect, layer.target.fbo.id(), rect.x0, rect.y0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        });
     }
     endWet();
 }
@@ -514,33 +759,33 @@ void Canvas::endWet() {
     // Los dos buffers vuelven a quedar transparentes (la cobertura va en el segundo).
     clearStrokeBuffer(m_wetValid);
     // Lo que se veía de la copia de trabajo vuelve a salir de la capa.
-    m_layers.markDirty(m_strokeBounds.intersected(IRect::ofSize(width(), height())));
-    m_strokeBounds = {};
-    m_provisionalBounds = {};
-    m_wetValid = {};
-    m_wetTail = {};
-    m_wetCoverage = false;
-    m_wet = false;
-    m_stroking = false;
+    for (const IRect& rect : m_copyBounds) {
+        m_layers.markDirty(rect);
+    }
+    resetStroke();
 }
 
 void Canvas::clearStrokeBuffer(const IRect& rect) {
-    const IRect area = rect.intersected(IRect::ofSize(width(), height()));
-    if (area.empty()) {
-        return;
+    clearTarget(m_strokeTarget, rect);
+    clearTarget(m_strokeBase, rect);
+}
+
+// -----------------------------------------------------------------------------
+// Guía de dibujo
+// -----------------------------------------------------------------------------
+
+void Canvas::setGuide(const DrawingGuide& guide) {
+    DrawingGuide g = guide;
+    const glm::vec2 size(static_cast<float>(width()), static_cast<float>(height()));
+    if (!std::isfinite(g.center.x) || !std::isfinite(g.center.y)) {
+        g.center = size * 0.5f;
     }
-    glViewport(0, 0, width(), height());
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(area.x0, area.y0, area.width(), area.height());
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    for (const gfx::RenderTarget* target : {&m_strokeTarget, &m_strokeBase}) {
-        if (*target) {
-            glBindFramebuffer(GL_FRAMEBUFFER, target->fbo.id());
-            glClear(GL_COLOR_BUFFER_BIT);
-        }
-    }
-    glDisable(GL_SCISSOR_TEST);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    g.center = glm::clamp(g.center, glm::vec2(0.0f), size);
+    g.angle = std::isfinite(g.angle) ? std::remainder(g.angle, 2.0f * 3.14159265358979f) : 0.0f;
+    g.opacity = std::isfinite(g.opacity) ? std::clamp(g.opacity, 0.0f, 1.0f) : 1.0f;
+    g.gridSize = std::isfinite(g.gridSize) ? std::clamp(g.gridSize, guide::kMinGridSize, guide::kMaxGridSize)
+                                           : guide::defaults(size).gridSize;
+    m_guide = g;
 }
 
 // -----------------------------------------------------------------------------
@@ -1087,8 +1332,7 @@ bool Canvas::update() {
         return false;
     }
     flushDabs();
-    const IRect dirty = m_layers.dirty();
-    if (dirty.empty()) {
+    if (m_layers.dirty().empty()) {
         return false;
     }
 
@@ -1125,7 +1369,10 @@ bool Canvas::update() {
         adjusted.area = m_adjust.drawn;
         shown = &adjusted;
     }
-    m_compositor.compose(m_layers, dirty, shown);
+    // Cada zona por su lado: con simetría pueden quedar lejos unas de otras.
+    for (const IRect& rect : m_layers.dirtyRects()) {
+        m_compositor.compose(m_layers, rect, shown);
+    }
 
     m_layers.clearDirty();
     ++m_version;
@@ -1238,8 +1485,7 @@ bool Canvas::recreateGpu(bool* restored) {
     // Los objetos del contexto anterior ya no existen: se olvidan sin borrarlos. Lo que
     // guardaba el historial estaba en la GPU y se pierde con ellos.
     m_ready = false;
-    m_stroking = false;
-    m_strokeBounds = {};
+    resetStroke();
     m_layerEdit = {};
     m_history.clear();
     m_clipboard = {};   // la selección también se pierde: vive en la GPU

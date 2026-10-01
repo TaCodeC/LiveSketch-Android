@@ -53,6 +53,47 @@ bool sameColor(const float a[3], const float b[3]) {
     return true;
 }
 
+// Cómo hacer perfecta la forma rápida con lo que se está dibujando ("" si ya lo es o si no
+// cambiaría).
+std::string shapeHint(const quickshape::Shape& shape, StrokePointer pointer) {
+    using quickshape::Kind;
+    if (shape.regular) {
+        return {};
+    }
+    const char* what = nullptr;
+    switch (shape.kind) {
+    case Kind::Line:
+        what = "girarla de 15 en 15°";
+        break;
+    case Kind::Ellipse:
+        what = "hacerla un círculo";
+        break;
+    case Kind::Rectangle:
+        if (std::string(quickshape::name(shape)) != "Cuadrado") {
+            what = "hacerlo un cuadrado";
+        }
+        break;
+    case Kind::Triangle:
+        what = "hacerlo equilátero";
+        break;
+    case Kind::Polygon:
+        what = "hacerlo regular";
+        break;
+    default:
+        break;
+    }
+    if (!what) {
+        return {};
+    }
+    const char* how = "Toca con un dedo";
+    if (pointer == StrokePointer::Mouse) {
+        how = "Pulsa Mayús";
+    } else if (pointer == StrokePointer::Finger) {
+        how = "Toca con otro dedo";
+    }
+    return std::string(how) + " para " + what;
+}
+
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -88,6 +129,10 @@ void Ui::loadPrefs() {
             m_prefs.sidebarRight = value != 0;
         } else if (key == "tamano") {
             m_prefs.size = std::clamp(value, 0, 2);
+        } else if (key == "girar") {
+            m_prefs.rotateWithFingers = value != 0;
+        } else if (key == "forma") {
+            m_prefs.quickShape = value != 0;
         }
     }
 }
@@ -100,7 +145,9 @@ void Ui::savePrefs() const {
     std::ofstream out(path, std::ios::trunc);
     out << "dedo " << (m_prefs.drawWithFinger ? 1 : 0) << '\n'
         << "barra-derecha " << (m_prefs.sidebarRight ? 1 : 0) << '\n'
-        << "tamano " << m_prefs.size << '\n';
+        << "tamano " << m_prefs.size << '\n'
+        << "girar " << (m_prefs.rotateWithFingers ? 1 : 0) << '\n'
+        << "forma " << (m_prefs.quickShape ? 1 : 0) << '\n';
 }
 
 void Ui::beginFrame(const UiStatus& status) {
@@ -124,12 +171,12 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
         return;
     }
     syncBrush(*canvas);
-    handleKeys(*canvas);
+    handleKeys(*canvas, requests);
     toolFrame(*canvas);
     if (m_panel != Panel::None) {
         drawScrim();
     }
-    drawToolOverlay();
+    drawToolOverlay(*canvas);
     drawTopBars(*canvas, requests);
     drawSidebar(*canvas);
     drawDock(*canvas);
@@ -139,6 +186,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     drawPicker(*canvas);
     drawDrop(*canvas);
     drawDialogs(canvas, requests);
+    drawCapsules(*canvas);
     drawToast();
     m_previews.pruneThumbnails(canvas->layers());
 }
@@ -376,8 +424,9 @@ bool Ui::closeTopmost(Canvas* canvas) {
         m_eyedropperArmed = false;
         return true;
     }
-    // Después, la herramienta: el lazo a medias se descarta, la transformación y el ajuste
-    // de imagen se cancelan y la selección vuelve a pintar (la selección se queda).
+    // Después, la herramienta: el lazo a medias se descarta, la transformación, el ajuste
+    // de imagen y la edición de la guía se cancelan y la selección vuelve a pintar (la
+    // selección se queda).
     if (canvas && m_canvasTool == CanvasTool::Select) {
         if (m_select.pendingPolygon()) {
             m_select.dropPolygon();
@@ -395,6 +444,10 @@ bool Ui::closeTopmost(Canvas* canvas) {
     }
     if (canvas && m_canvasTool == CanvasTool::Adjust) {
         finishAdjust(*canvas, false);
+        return true;
+    }
+    if (canvas && m_canvasTool == CanvasTool::Guide) {
+        finishGuide(*canvas, false);
         return true;
     }
     return false;
@@ -424,7 +477,7 @@ uint64_t Ui::wakeDeadline() const {
 
 void Ui::undo(Canvas& canvas, bool redo) { showUndo(redo, undoStep(canvas, redo)); }
 
-void Ui::handleKeys(Canvas& canvas) {
+void Ui::handleKeys(Canvas& canvas, UiRequests& requests) {
     const ImGuiIO& io = ImGui::GetIO();
     const bool back = ImGui::IsKeyPressed(ImGuiKey_AppBack, false);
     if (back || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
@@ -465,6 +518,15 @@ void Ui::handleKeys(Canvas& canvas) {
         paintWith(canvas, Tool::Smudge);
     } else if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
         paintWith(canvas, Tool::Eraser);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_4, true) || ImGui::IsKeyPressed(ImGuiKey_Keypad4, true)) {
+        requests.rotateView = -1;   // como Krita: 4 y 6 giran, 5 endereza
+    } else if (ImGui::IsKeyPressed(ImGuiKey_6, true) || ImGui::IsKeyPressed(ImGuiKey_Keypad6, true)) {
+        requests.rotateView = 1;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_5, false) || ImGui::IsKeyPressed(ImGuiKey_Keypad5, false)) {
+        requests.straightenView = true;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+        requests.flipView = true;
+        notify(m_status.viewFlipped ? "Vista sin voltear" : "Vista volteada", Notice::Info, 1400);
     } else if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true)) {
         ToolPreset& preset = m_presets[static_cast<int>(m_tool)];
         const float step = ImGui::IsKeyDown(ImGuiKey_RightBracket) ? 0.02f : -0.02f;
@@ -548,7 +610,7 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         }
         m_modifyButton = slot(L.leftBar, 2);
         if (barButton("##modify", m_modifyButton, icon::kModify, m_panel == Panel::Modify,
-                      m_canvasTool != CanvasTool::Paint)) {
+                      m_canvasTool != CanvasTool::Paint && m_canvasTool != CanvasTool::Guide)) {
             togglePanel(Panel::Modify);
         }
     } else {
@@ -961,6 +1023,84 @@ void Ui::drawToast() {
     }
     ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(iconCenter.x + iconSide * 0.5f + gap, rect.GetCenter().y),
               Align::Left, th::kLabel, shown.c_str());
+    ui::transform(mark, rect.GetCenter(), 1.0f, ImVec2(0.0f, -pt(10.0f) * (1.0f - p)), p);
+    ui::endSurface();
+}
+
+void Ui::drawCapsules(const Canvas& canvas) {
+    // Donde salen los avisos: el giro de la vista mientras se gira y la forma rápida
+    // mientras se ajusta sin soltar el trazo.
+    const quickshape::Shape& shape = canvas.strokeShape();
+    const bool shaping = canvas.stroking() && shape.kind != quickshape::Kind::None;
+    const bool turning = m_status.viewTurning && !shaping;
+    const bool shown = shaping || turning;
+    if (shaping) {
+        m_capsule.glyph = icon::kShapes;
+        m_capsule.title = quickshape::name(shape);
+        m_capsule.hint = shapeHint(shape, m_status.strokePointer);
+        m_capsule.flipped = false;
+    } else if (turning) {
+        int degrees = static_cast<int>(std::lround(m_status.viewAngle));
+        if (degrees == -180) {
+            degrees = 180;
+        }
+        char text[16];
+        std::snprintf(text, sizeof(text), "%d°", degrees);
+        m_capsule.glyph = icon::kRotateView;
+        m_capsule.title = text;
+        m_capsule.hint.clear();
+        m_capsule.flipped = m_status.viewFlipped;
+    }
+    if (shown && !m_toast.text.empty()) {
+        m_toast.until = std::min(m_toast.until, SDL_GetTicks());   // sale en su sitio
+    }
+    const ImGuiID id = ImHashStr("##capsule");
+    const float p = ui::anim::followFrom(id, 0.0f, shown ? 1.0f : 0.0f, shown ? 22.0f : 9.0f);
+    if (p <= 0.002f || !m_capsule.glyph) {
+        return;
+    }
+    const Layout& L = m_layout;
+    const bool twoLines = !m_capsule.hint.empty();
+    const float height = pt(twoLines ? 56.0f : 44.0f);
+    const float iconSide = pt(20.0f);
+    const float gap = pt(10.0f);
+    const float padLeft = pt(14.0f);
+    const float padRight = pt(18.0f);
+    const float flipSide = m_capsule.flipped ? pt(8.0f + 18.0f) : 0.0f;
+    float textWidth = ui::measure(Weight::SemiBold, th::kSubhead, m_capsule.title.c_str()).x + flipSide;
+    if (twoLines) {
+        textWidth = std::max(textWidth, ui::measure(Weight::Regular, th::kFootnote, m_capsule.hint.c_str()).x);
+    }
+    const float maxText = std::max(pt(80.0f), (L.right - L.left) - padLeft - iconSide - gap - padRight);
+    textWidth = std::min(textWidth, maxText);
+    const float width = padLeft + iconSide + gap + textWidth + padRight;
+    const float x = std::round((L.display.x - width) * 0.5f);
+    const ImRect rect(x, L.toastTop, x + width, L.toastTop + height);
+
+    ui::beginSurface("##capsule", rect, false, true);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ui::DrawMark mark = ui::mark(dl);
+    ui::pushUnclipped(dl);
+    ui::shadow(dl, rect, height * 0.5f, pt(26.0f), pt(8.0f), 0.24f);
+    ui::popUnclipped(dl);
+    ui::glass(dl, rect, height * 0.5f, IM_COL32(40, 40, 44, 184));
+    const float cy = rect.GetCenter().y;
+    const ImVec2 iconCenter(rect.Min.x + padLeft + iconSide * 0.5f, cy);
+    ui::icon(dl, m_capsule.glyph, iconCenter, 20.0f, th::kAccentText);
+    const float textX = iconCenter.x + iconSide * 0.5f + gap;
+    const float titleY = twoLines ? cy - pt(9.0f) : cy;
+    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(textX, titleY), Align::Left, th::kLabel,
+              m_capsule.title.c_str(), textWidth - flipSide);
+    if (m_capsule.flipped) {
+        const float titleWidth = std::min(ui::measure(Weight::SemiBold, th::kSubhead, m_capsule.title.c_str()).x,
+                                          textWidth - flipSide);
+        ui::icon(dl, icon::kFlipView, ImVec2(textX + titleWidth + pt(8.0f + 9.0f), titleY), 18.0f,
+                 th::kSecondaryLabel);
+    }
+    if (twoLines) {
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(textX, cy + pt(10.0f)), Align::Left, th::kSecondaryLabel,
+                  m_capsule.hint.c_str(), textWidth);
+    }
     ui::transform(mark, rect.GetCenter(), 1.0f, ImVec2(0.0f, -pt(10.0f) * (1.0f - p)), p);
     ui::endSurface();
 }

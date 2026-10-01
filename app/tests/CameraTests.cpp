@@ -3,6 +3,7 @@
 #include "Canvas/Camera.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -124,14 +125,77 @@ TEST_CASE(camera_insets_center_in_free_area) {
 TEST_CASE(camera_fit_view_for_animation) {
     Camera camera = makeCamera({1280.0f, 800.0f}, {640.0f, 360.0f});
     camera.zoomAt({100.0f, 100.0f}, 2.5f);
+    camera.rotateAt({300.0f, 200.0f}, 0.7f);
     CHECK(camera.userMoved());
     float zoom = 0.0f;
-    glm::vec2 offset{0.0f};
-    camera.fitView(zoom, offset);
-    camera.setView(zoom, offset);
-    const glm::vec2 center = camera.canvasToScreen({320.0f, 180.0f});
-    CHECK_NEAR(center.x, 640.0f, 1e-3f);
-    CHECK_NEAR(center.y, 400.0f, 1e-3f);
+    glm::vec2 center{0.0f};
+    camera.fitView(zoom, center);
+    camera.place(zoom, 0.0f, center);
+    const glm::vec2 middle = camera.canvasToScreen({320.0f, 180.0f});
+    CHECK_NEAR(middle.x, 640.0f, 1e-3f);
+    CHECK_NEAR(middle.y, 400.0f, 1e-3f);
     camera.fit();
     CHECK(!camera.userMoved());
+    CHECK_EQ(camera.angle(), 0.0f);
+}
+
+TEST_CASE(camera_rotation_keeps_anchor) {
+    Camera camera = makeCamera({1280.0f, 800.0f}, {640.0f, 360.0f});
+    const glm::vec2 anchor(500.0f, 300.0f);
+    const glm::vec2 before = camera.screenToCanvas(anchor);
+    camera.rotateAt(anchor, 0.5f);
+    CHECK_NEAR(camera.angle(), 0.5f, 1e-6f);
+    const glm::vec2 after = camera.screenToCanvas(anchor);
+    CHECK_NEAR(after.x, before.x, 1e-2f);
+    CHECK_NEAR(after.y, before.y, 1e-2f);
+    // En el sentido de las agujas del reloj (la y hacia abajo).
+    const glm::vec2 right = camera.orient({1.0f, 0.0f});
+    CHECK_NEAR(right.x, std::cos(0.5f), 1e-6f);
+    CHECK_NEAR(right.y, std::sin(0.5f), 1e-6f);
+    const glm::vec2 p(123.0f, 45.0f);
+    const glm::vec2 back = camera.screenToCanvas(camera.canvasToScreen(p));
+    CHECK_NEAR(back.x, p.x, 1e-3f);
+    CHECK_NEAR(back.y, p.y, 1e-3f);
+    // Da la vuelta entera: el ángulo va de -180° a 180°.
+    camera.rotateAt(anchor, 3.0f);
+    CHECK_NEAR(camera.angle(), 3.5f - 2.0f * 3.14159265f, 1e-5f);
+}
+
+TEST_CASE(camera_quarter_turns_are_exact) {
+    Camera camera = makeCamera({1280.0f, 800.0f}, {640.0f, 360.0f});
+    camera.rotateAt({640.0f, 400.0f}, 0.25f);
+    camera.rotateAt({640.0f, 400.0f}, 3.14159265f * 0.5f - 0.25f);
+    const glm::vec2 right = camera.orient({1.0f, 0.0f});
+    const glm::vec2 down = camera.orient({0.0f, 1.0f});
+    CHECK_EQ(right.x, 0.0f);
+    CHECK_EQ(right.y, 1.0f);
+    CHECK_EQ(down.x, -1.0f);
+    CHECK_EQ(down.y, 0.0f);
+}
+
+TEST_CASE(camera_flip_mirrors_the_view) {
+    Camera camera = makeCamera({1280.0f, 800.0f}, {640.0f, 360.0f});
+    const glm::vec2 corner = camera.canvasToScreen({0.0f, 0.0f});
+    camera.setFlipped(true);
+    CHECK(camera.flipped());
+    // Ajustado, el lienzo se queda donde estaba con la izquierda a la derecha.
+    const glm::vec2 mirrored = camera.canvasToScreen({0.0f, 0.0f});
+    CHECK_NEAR(mirrored.x, 1280.0f - corner.x, 1e-3f);
+    CHECK_NEAR(mirrored.y, corner.y, 1e-3f);
+    const glm::vec2 p(200.0f, 100.0f);
+    const glm::vec2 back = camera.screenToCanvas(camera.canvasToScreen(p));
+    CHECK_NEAR(back.x, p.x, 1e-3f);
+    CHECK_NEAR(back.y, p.y, 1e-3f);
+    // Girada y volteada: el giro cambia de sentido y se ve igual que en un espejo.
+    camera.setFlipped(false);
+    camera.rotateAt({640.0f, 400.0f}, 0.3f);
+    const glm::vec2 turned = camera.canvasToScreen(p);
+    camera.setFlipped(true);
+    CHECK_NEAR(camera.angle(), -0.3f, 1e-6f);
+    const glm::vec2 seen = camera.canvasToScreen(p);
+    CHECK_NEAR(seen.x, 1280.0f - turned.x, 1e-2f);
+    CHECK_NEAR(seen.y, turned.y, 1e-2f);
+    // Un lienzo nuevo empieza sin voltear.
+    camera.setCanvasSize({300.0f, 200.0f});
+    CHECK(!camera.flipped());
 }

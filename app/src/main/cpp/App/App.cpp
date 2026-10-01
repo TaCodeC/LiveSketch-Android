@@ -497,6 +497,7 @@ SDL_AppResult App::iterate() {
     }
     flushPenSample();
     checkLongPress();
+    checkHold();
     if (m_exportPending) {
         m_exportPending = false;
         exportPng();
@@ -566,6 +567,18 @@ UiStatus App::uiStatus() const {
     status.maxCanvasSize = m_maxCanvasSize;
     status.canvasZoom = m_camera.zoom();
     status.canvasView = toolView();
+    status.viewAngle = m_camera.angle() * (180.0f / 3.14159265358979f);
+    status.viewFlipped = m_camera.flipped();
+    status.viewTurning = m_twisting || SDL_GetTicks() < m_angleShownUntil;
+    if (m_canvas.ready() && m_canvas.stroking()) {
+        if (m_pen.drawing) {
+            status.strokePointer = StrokePointer::Pen;
+        } else if (m_fingerDrawing) {
+            status.strokePointer = StrokePointer::Finger;
+        } else if (m_mouseDrawing) {
+            status.strokePointer = StrokePointer::Mouse;
+        }
+    }
     status.ndiAvailable = m_ndiAvailable;
     status.ndiRunning = m_ndi.running();
     status.ndiConnections = m_ndi.connections();
@@ -582,6 +595,13 @@ void App::applyRequests(const UiRequests& requests) {
     if (requests.fitView) {
         startFitAnimation();
     }
+    if (requests.rotateView != 0 || requests.straightenView) {
+        rotateView(requests.rotateView);
+    }
+    if (requests.flipView && m_canvas.ready()) {
+        m_fitAnimation.active = false;
+        m_camera.setFlipped(!m_camera.flipped());
+    }
     if (requests.savePng) {
         requestPngExport();
     }
@@ -597,7 +617,8 @@ void App::startFitAnimation() {
     m_fitAnimation.active = true;
     m_fitAnimation.startMs = SDL_GetTicks();
     m_fitAnimation.fromZoom = m_camera.zoom();
-    m_fitAnimation.fromOffset = m_camera.offset();
+    m_fitAnimation.fromAngle = m_camera.angle();
+    m_fitAnimation.fromCenter = m_camera.canvasToScreen(m_camera.canvasSize() * 0.5f);
 }
 
 void App::stepFitAnimation() {
@@ -616,18 +637,16 @@ void App::stepFitAnimation() {
         return;
     }
     float zoom = 1.0f;
-    glm::vec2 offset{0.0f};
-    m_camera.fitView(zoom, offset);
+    glm::vec2 center{0.0f};
+    m_camera.fitView(zoom, center);
     // El zoom avanza en escala logarítmica y el centro del lienzo en línea recta: así el
-    // movimiento se ve uniforme aunque el zoom cambie mucho.
+    // movimiento se ve uniforme aunque el zoom cambie mucho. El giro vuelve a 0 por el
+    // camino corto (el ángulo va de -180° a 180°).
     const float e = ui::anim::easeInOutCubic(std::clamp(t, 0.0f, 1.0f));
     const float fromZoom = std::max(m_fitAnimation.fromZoom, 1e-6f);
     const float z = std::exp(std::log(fromZoom) + (std::log(std::max(zoom, 1e-6f)) - std::log(fromZoom)) * e);
-    const glm::vec2 half = m_camera.canvasSize() * 0.5f;
-    const glm::vec2 from = m_fitAnimation.fromOffset + half * fromZoom;
-    const glm::vec2 to = offset + half * zoom;
-    const glm::vec2 center = from + (to - from) * e;
-    m_camera.setView(z, center - half * z);
+    const glm::vec2 from = m_fitAnimation.fromCenter;
+    m_camera.place(z, m_fitAnimation.fromAngle * (1.0f - e), from + (center - from) * e);
 }
 
 void App::updateBackdrop() {
@@ -645,6 +664,8 @@ void App::updateBackdrop() {
     key = mixHash(key, floatBits(m_camera.zoom()));
     key = mixHash(key, floatBits(m_camera.offset().x));
     key = mixHash(key, floatBits(m_camera.offset().y));
+    key = mixHash(key, floatBits(m_camera.angle()));
+    key = mixHash(key, m_camera.flipped() ? 1 : 0);
     key = mixHash(key, (static_cast<uint64_t>(m_pixelWidth) << 32) | static_cast<uint32_t>(m_pixelHeight));
     const float sigma = kBackdropBlurPoints * ui::scale() * SDL_GetWindowPixelDensity(m_window);
     m_backdrop.update(m_view, m_camera, m_canvas.composite().texture.id(), m_pixelWidth, m_pixelHeight, sigma, key);
@@ -670,7 +691,7 @@ void App::schedulePacing() {
     const bool imguiPending = g.InputEventsQueue.Size > 0 || (g.DimBgRatio > 0.0f && g.DimBgRatio < 1.0f);
     const bool busy = m_redrawFrames > 0 || imguiPending || canvasInteractionActive() || io.WantTextInput ||
                       ImGui::IsAnyItemActive() || m_ndi.busy() || ui::anim::active() || m_fitAnimation.active ||
-                      m_pick.source != PickSource::None;
+                      m_pick.source != PickSource::None || SDL_GetTicks() < m_angleShownUntil;
     if (m_redrawFrames > 0) {
         --m_redrawFrames;
     }

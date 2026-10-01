@@ -4,7 +4,8 @@
 #include "Gfx/GLObjects.h"
 
 // Dibuja la escena: el fondo liso, la sombra del lienzo y, encima, el lienzo compuesto
-// (con un damero donde es transparente) en la posición y con el zoom de la cámara.
+// (con un damero donde es transparente) en la posición, con el zoom y con el giro y el
+// volteo de la cámara.
 class CanvasView {
 public:
     bool init();
@@ -25,21 +26,34 @@ public:
     void drawSelection(const Camera& camera, GLuint mask, int phase, float veil, GLuint fbo, int width, int height);
 
 private:
+    // Dónde va el lienzo en la ventana (ver kCanvasVertex).
+    struct Placement {
+        float origin[2];
+        float axes[4];
+    };
+    static Placement placement(const Camera& camera);
+    static void setPlacement(GLint origin, GLint axes, const Placement& placement);
+
     gfx::Program m_shadowProgram;
-    GLint m_uShadowRect = -1;
+    GLint m_uShadowCenter = -1;
+    GLint m_uShadowSize = -1;
+    GLint m_uShadowRotation = -1;
+    GLint m_uShadowDown = -1;
     GLint m_uShadowViewport = -1;
     GLint m_uShadowParams = -1;   // sigma grande, desplazamiento grande, sigma pequeña, desplazamiento pequeño
     GLint m_uShadowAlpha = -1;
     GLint m_uShadowExtent = -1;
 
     gfx::Program m_canvasProgram;
-    GLint m_uRect = -1;
+    GLint m_uOrigin = -1;
+    GLint m_uAxes = -1;
     GLint m_uViewport = -1;
     GLint m_uCanvas = -1;
     GLint m_uCell = -1;
 
     gfx::Program m_selectionProgram;
-    GLint m_uSelectionRect = -1;
+    GLint m_uSelectionOrigin = -1;
+    GLint m_uSelectionAxes = -1;
     GLint m_uSelectionViewport = -1;
     GLint m_uSelectionMask = -1;
     GLint m_uSelectionStep = -1;

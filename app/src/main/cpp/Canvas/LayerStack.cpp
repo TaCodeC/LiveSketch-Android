@@ -1,6 +1,8 @@
 #include "Canvas/LayerStack.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 
 void LayerStack::reset(int width, int height) {
     clearAll();
@@ -11,7 +13,7 @@ void LayerStack::reset(int width, int height) {
 void LayerStack::clearAll() {
     m_layers.clear();
     m_active = 0;
-    m_dirty = {};
+    clearDirty();
 }
 
 int LayerStack::indexOf(uint32_t id) const {
@@ -190,6 +192,43 @@ std::string LayerStack::availableName(const std::string& wanted) const {
     }
 }
 
+namespace {
+
+// Las zonas a menos de esto se juntan: recomponer un poco de más cuesta menos que otra pasada.
+constexpr int kDirtyJoin = 16;
+
+int64_t area(const IRect& r) { return r.empty() ? 0 : int64_t{r.width()} * int64_t{r.height()}; }
+
+} // namespace
+
 void LayerStack::markDirty(const IRect& rect) {
-    m_dirty.unite(rect.intersected(IRect::ofSize(m_width, m_height)));
+    const IRect r = rect.intersected(IRect::ofSize(m_width, m_height));
+    if (r.empty()) {
+        return;
+    }
+    m_dirty.unite(r);
+    addRegion(m_dirtyRects, r, kDirtyJoin);
+    // Demasiadas: se juntan las dos que menos área añaden.
+    while (m_dirtyRects.size() > kMaxDirtyRects) {
+        size_t bestA = 0;
+        size_t bestB = 1;
+        int64_t bestCost = std::numeric_limits<int64_t>::max();
+        for (size_t a = 0; a < m_dirtyRects.size(); ++a) {
+            for (size_t b = a + 1; b < m_dirtyRects.size(); ++b) {
+                IRect u = m_dirtyRects[a];
+                u.unite(m_dirtyRects[b]);
+                const int64_t cost = area(u) - area(m_dirtyRects[a]) - area(m_dirtyRects[b]);
+                if (cost < bestCost) {
+                    bestCost = cost;
+                    bestA = a;
+                    bestB = b;
+                }
+            }
+        }
+        IRect joined = m_dirtyRects[bestA];
+        joined.unite(m_dirtyRects[bestB]);
+        m_dirtyRects.erase(m_dirtyRects.begin() + static_cast<std::ptrdiff_t>(bestB));
+        m_dirtyRects.erase(m_dirtyRects.begin() + static_cast<std::ptrdiff_t>(bestA));
+        addRegion(m_dirtyRects, joined, kDirtyJoin);
+    }
 }
