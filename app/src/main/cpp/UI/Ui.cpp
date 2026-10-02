@@ -45,15 +45,6 @@ std::string prefsPath() {
     return path;
 }
 
-bool sameColor(const float a[3], const float b[3]) {
-    for (int i = 0; i < 3; ++i) {
-        if (std::fabs(a[i] - b[i]) > 1.0f / 512.0f) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Cómo hacer perfecta la forma rápida con lo que se está dibujando ("" si ya lo es o si no
 // cambiaría).
 std::string shapeHint(const quickshape::Shape& shape, StrokePointer pointer) {
@@ -132,6 +123,27 @@ void Ui::loadPrefs() {
             m_prefs.pressure = PressureCurve::fromText(points);
             continue;
         }
+        // Tarjeta de lienzo nuevo: el último tamaño y el último fondo que se usaron.
+        if (key == "lienzo-tamano") {
+            std::string line;
+            std::getline(fields, line);
+            canvasspec::SavedSize size;
+            if (canvasspec::fromLine(line, &size)) {
+                m_canvasForm.choose(size.width, size.height, size.unit, size.ppi);
+            }
+            continue;
+        }
+        if (key == "lienzo-fondo") {
+            int kind = 0;
+            float rgb[3] = {0.0f, 0.0f, 0.0f};
+            if (fields >> kind >> rgb[0] >> rgb[1] >> rgb[2] && kind >= 0 && kind <= 2) {
+                m_canvasForm.background = static_cast<CanvasForm::Background>(kind);
+                for (int i = 0; i < 3; ++i) {
+                    m_canvasForm.color[i] = std::isfinite(rgb[i]) ? std::clamp(rgb[i], 0.0f, 1.0f) : 1.0f;
+                }
+            }
+            continue;
+        }
         float value = 0.0f;
         if (!(fields >> value) || !std::isfinite(value)) {
             continue;
@@ -148,6 +160,10 @@ void Ui::loadPrefs() {
             m_prefs.quickShape = value != 0.0f;
         } else if (key == "suavizado") {
             m_prefs.smoothing = std::clamp(value, 0.0f, 1.0f);
+        } else if (key == "lienzo-candado") {
+            m_canvasForm.setLocked(value != 0.0f);
+        } else if (key == "lienzo-categoria") {
+            m_canvasForm.category = static_cast<int>(std::clamp(value, 0.0f, canvasspec::kPresetCategoryCount - 1.0f));
         }
     }
 }
@@ -164,7 +180,12 @@ void Ui::savePrefs() const {
         << "girar " << (m_prefs.rotateWithFingers ? 1 : 0) << '\n'
         << "forma " << (m_prefs.quickShape ? 1 : 0) << '\n'
         << "suavizado " << m_prefs.smoothing << '\n'
-        << "curva-presion " << m_prefs.pressure.toText() << '\n';
+        << "curva-presion " << m_prefs.pressure.toText() << '\n'
+        << "lienzo-tamano " << canvasspec::toLine(m_canvasForm.size()) << '\n'
+        << "lienzo-fondo " << static_cast<int>(m_canvasForm.background) << ' ' << m_canvasForm.color[0] << ' '
+        << m_canvasForm.color[1] << ' ' << m_canvasForm.color[2] << '\n'
+        << "lienzo-candado " << (m_canvasForm.locked() ? 1 : 0) << '\n'
+        << "lienzo-categoria " << m_canvasForm.category << '\n';
 }
 
 void Ui::beginFrame(const UiStatus& status) {
@@ -373,7 +394,7 @@ void Ui::setColor(Canvas& canvas, const float rgb[3]) {
 void Ui::pushRecent(const float rgb[3]) {
     int found = -1;
     for (int i = 0; i < m_recentCount; ++i) {
-        if (sameColor(m_recent[i], rgb)) {
+        if (ui::sameColor(m_recent[i], rgb)) {
             found = i;
             break;
         }
@@ -420,6 +441,10 @@ void Ui::closePanels() {
 }
 
 bool Ui::closeTopmost(Canvas* canvas) {
+    // En la tarjeta de lienzo nuevo, primero se deja de escribir.
+    if (m_dialog == Dialog::NewCanvas && cancelCanvasEdit()) {
+        return true;
+    }
     if (m_dialog != Dialog::None) {
         m_dialog = Dialog::None;
         return true;
@@ -428,8 +453,9 @@ bool Ui::closeTopmost(Canvas* canvas) {
         m_layerMenu = false;
         return true;
     }
-    if (m_blendPage && m_panel == Panel::Layers) {
+    if ((m_blendPage || m_backgroundPage) && m_panel == Panel::Layers) {
         m_blendPage = false;   // vuelve a la lista de capas
+        m_backgroundPage = false;
         return true;
     }
     if (m_brushPage && m_panel == Panel::Brushes) {

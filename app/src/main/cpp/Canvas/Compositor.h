@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Canvas/CanvasSpec.h"
 #include "Canvas/LayerStack.h"
 #include "Canvas/Rect.h"
 #include "Gfx/GLObjects.h"
@@ -40,10 +41,11 @@ public:
     bool init(int width, int height);
     void destroy();
 
-    // Recompone `rect` del compuesto con las capas visibles, de abajo arriba, cada una con
-    // su opacidad, su modo de fusión y su máscara de recorte. `preview`: trazo en curso de
-    // la capa activa.
-    void compose(const LayerStack& layers, const IRect& rect, const StrokePreview* preview);
+    // Recompone `rect` del compuesto: el color de fondo (si se ve) y encima las capas
+    // visibles, de abajo arriba, cada una con su opacidad, su modo de fusión y su máscara
+    // de recorte. `preview`: trazo en curso de la capa activa.
+    void compose(const LayerStack& layers, const CanvasBackground& background, const IRect& rect,
+                 const StrokePreview* preview);
 
     enum class Blend {
         Over,    // fuente encima con `opacity`

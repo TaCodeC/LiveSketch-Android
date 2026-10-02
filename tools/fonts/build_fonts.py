@@ -156,6 +156,18 @@ ICONS = {
     "kCenter": "locate-fixed",
     "kCurve": "chart-spline",
     "kPen": "pen-line",
+    # Lienzo nuevo: categorías de tamaños, candado de proporción, teclado y avisos.
+    "kVideo": "monitor-play",
+    "kDevices": "tablet-smartphone",
+    "kHeart": "heart",
+    "kFileText": "file-text",
+    "kBookOpen": "book-open",
+    "kStar": "star",
+    "kLink": "link-2",
+    "kUnlink": "link-2-off",
+    "kBookmarkPlus": "bookmark-plus",
+    "kBackspace": "delete",
+    "kTriangleAlert": "triangle-alert",
 }
 
 

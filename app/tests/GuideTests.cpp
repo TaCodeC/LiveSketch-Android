@@ -25,7 +25,7 @@ constexpr Pixel kClear{0, 0, 0, 0};
 constexpr Pixel kRed{255, 0, 0, 255};
 constexpr Pixel kWhite{255, 255, 255, 255};
 
-std::vector<uint8_t> layerPixels(Canvas& canvas, int layer = 1) {
+std::vector<uint8_t> layerPixels(Canvas& canvas, int layer = 0) {
     return test::readTarget(canvas.layers().at(layer).target);
 }
 
@@ -376,7 +376,7 @@ TEST_CASE(symmetry_works_with_wet_brushes) {
     wet.wetCharge = 0.7f;
     wet.taperEnd = 0.5f;
     auto prepare = [&](Canvas& canvas) {
-        test::fillRect(canvas.layers().at(1).target, IRect::ofSize(200, 80), 0.0f, 0.0f, 1.0f, 1.0f);
+        test::fillRect(canvas.layers().at(0).target, IRect::ofSize(200, 80), 0.0f, 0.0f, 1.0f, 1.0f);
         canvas.layers().markDirty(IRect::ofSize(200, 80));
         usePaint(canvas, wet, 6.0f);
     };
@@ -476,7 +476,7 @@ TEST_CASE(quick_shape_with_symmetry_and_wet_brushes) {
     for (const bool wet : {false, true}) {
         Canvas canvas;
         REQUIRE(canvas.init(240, 120));
-        test::fillRect(canvas.layers().at(1).target, IRect::ofSize(240, 120), 0.0f, 0.0f, 1.0f, 1.0f);
+        test::fillRect(canvas.layers().at(0).target, IRect::ofSize(240, 120), 0.0f, 0.0f, 1.0f, 1.0f);
         canvas.layers().markDirty(IRect::ofSize(240, 120));
         const std::vector<uint8_t> before = layerPixels(canvas);
         BrushParams params = hardBrush();

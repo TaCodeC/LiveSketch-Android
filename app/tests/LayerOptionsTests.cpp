@@ -301,9 +301,10 @@ TEST_CASE(blend_modes_match_reference) {
 
     Canvas canvas;
     REQUIRE(canvas.init(kWidth, kHeight));
+    test::hideBackground(canvas);   // la capa de abajo, con sus alfas, es todo el fondo
+    REQUIRE(canvas.addLayer());
     for (int x = 0; x < kWidth; ++x) {
         const Color& c = colors[x / 4];
-        test::fillRect(canvas.layers().at(0).target, {x, 0, x + 1, kHeight}, 0.0f, 0.0f, 0.0f, 0.0f);
         fillLayer(canvas, 0, {x, 0, x + 1, kHeight}, static_cast<float>(c[0]), static_cast<float>(c[1]),
                   static_cast<float>(c[2]), backdropAlphas[x % 4]);
     }
@@ -356,6 +357,7 @@ TEST_CASE(blend_modes_stack_and_partial_updates) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 48));
     LayerStack& layers = canvas.layers();
+    REQUIRE(canvas.addLayer());
     fillLayer(canvas, 0, IRect::ofSize(64, 48), 0.85f, 0.8f, 0.7f, 1.0f);
     fillLayer(canvas, 1, {0, 0, 40, 48}, 0.9f, 0.3f, 0.2f, 0.9f);
     layers.setBlend(1, BlendMode::Multiply);
@@ -419,14 +421,14 @@ TEST_CASE(blend_mode_edit_is_one_undo_step) {
     Canvas canvas;
     REQUIRE(canvas.init(16, 16));
     LayerStack& layers = canvas.layers();
-    fillLayer(canvas, 1, IRect::ofSize(16, 16), 0.5f, 0.2f, 0.9f, 1.0f);
+    fillLayer(canvas, 0, IRect::ofSize(16, 16), 0.5f, 0.2f, 0.9f, 1.0f);
     const std::vector<uint8_t> normal = composite(canvas);
 
     // Probar modos uno tras otro deja un solo paso, desde el modo de antes de empezar.
-    canvas.setLayerBlend(1, BlendMode::Multiply, false);
+    canvas.setLayerBlend(0, BlendMode::Multiply, false);
     CHECK(canvas.canUndo());   // aunque el paso aún no se ha guardado
-    canvas.setLayerBlend(1, BlendMode::Screen, false);
-    canvas.setLayerBlend(1, BlendMode::Difference, false);
+    canvas.setLayerBlend(0, BlendMode::Screen, false);
+    canvas.setLayerBlend(0, BlendMode::Difference, false);
     CHECK_EQ(canvas.history().undoCount(), 0);
     const std::vector<uint8_t> difference = composite(canvas);
     CHECK(test::maxDifference(difference, normal) > 0);
@@ -434,26 +436,26 @@ TEST_CASE(blend_mode_edit_is_one_undo_step) {
     CHECK_EQ(canvas.history().undoCount(), 1);
 
     REQUIRE(canvas.undo());
-    CHECK(layers.at(1).blend == BlendMode::Normal);
+    CHECK(layers.at(0).blend == BlendMode::Normal);
     CHECK_EQ(test::maxDifference(composite(canvas), normal), 0);
     REQUIRE(canvas.redo());
-    CHECK(layers.at(1).blend == BlendMode::Difference);
+    CHECK(layers.at(0).blend == BlendMode::Difference);
     CHECK_EQ(test::maxDifference(composite(canvas), difference), 0);
 
     // Volver al modo del principio no deja paso; otro cambio cierra el anterior.
-    canvas.setLayerBlend(1, BlendMode::Overlay, false);
-    canvas.setLayerBlend(1, BlendMode::Difference, false);
+    canvas.setLayerBlend(0, BlendMode::Overlay, false);
+    canvas.setLayerBlend(0, BlendMode::Difference, false);
     canvas.finishLayerEdit();
     CHECK_EQ(canvas.history().undoCount(), 1);
-    canvas.setLayerBlend(1, BlendMode::Overlay, false);
-    canvas.setLayerOpacity(1, 0.5f, false);   // misma capa: sigue el mismo cambio
-    canvas.setLayerVisible(1, false);         // otro tipo de cambio: cierra el anterior
+    canvas.setLayerBlend(0, BlendMode::Overlay, false);
+    canvas.setLayerOpacity(0, 0.5f, false);   // misma capa: sigue el mismo cambio
+    canvas.setLayerVisible(0, false);         // otro tipo de cambio: cierra el anterior
     CHECK_EQ(canvas.history().undoCount(), 3);
     REQUIRE(canvas.undo());
-    CHECK(layers.at(1).visible);
+    CHECK(layers.at(0).visible);
     REQUIRE(canvas.undo());
-    CHECK(layers.at(1).blend == BlendMode::Difference);
-    CHECK_EQ(layers.at(1).opacity, 1.0f);
+    CHECK(layers.at(0).blend == BlendMode::Difference);
+    CHECK_EQ(layers.at(0).opacity, 1.0f);
 }
 
 // -----------------------------------------------------------------------------
@@ -464,14 +466,14 @@ TEST_CASE(clipping_mask_uses_base_alpha) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     LayerStack& layers = canvas.layers();
-    fillLayer(canvas, 1, {4, 4, 20, 20}, 0.0f, 0.0f, 1.0f, 1.0f);    // base: azul
-    fillLayer(canvas, 1, {20, 4, 28, 20}, 0.0f, 0.0f, 1.0f, 0.5f);   // y azul a medias
+    fillLayer(canvas, 0, {4, 4, 20, 20}, 0.0f, 0.0f, 1.0f, 1.0f);    // base: azul
+    fillLayer(canvas, 0, {20, 4, 28, 20}, 0.0f, 0.0f, 1.0f, 0.5f);   // y azul a medias
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 2, IRect::ofSize(32, 32), 1.0f, 0.0f, 0.0f, 1.0f);
-    CHECK(canvas.canClip(2));
-    canvas.setLayerClipping(2, true);
-    CHECK(layers.at(2).clipping);
-    CHECK_EQ(layers.clipBase(2), 1);
+    fillLayer(canvas, 1, IRect::ofSize(32, 32), 1.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(canvas.canClip(1));
+    canvas.setLayerClipping(1, true);
+    CHECK(layers.at(1).clipping);
+    CHECK_EQ(layers.clipBase(1), 0);
 
     CHECK_PIXEL(compositeAt(canvas, 10, 10), (Pixel{255, 0, 0, 255}), 0);
     CHECK_PIXEL(compositeAt(canvas, 24, 10), (Pixel{191, 64, 128, 255}), 1);
@@ -479,47 +481,47 @@ TEST_CASE(clipping_mask_uses_base_alpha) {
 
     // Una segunda capa recortada recorta con la misma base.
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 3, IRect::ofSize(32, 32), 0.0f, 1.0f, 0.0f, 0.5f);
-    canvas.setLayerClipping(3, true);
-    CHECK_EQ(layers.clipBase(3), 1);
+    fillLayer(canvas, 2, IRect::ofSize(32, 32), 0.0f, 1.0f, 0.0f, 0.5f);
+    canvas.setLayerClipping(2, true);
+    CHECK_EQ(layers.clipBase(2), 0);
     CHECK_PIXEL(compositeAt(canvas, 10, 10), (Pixel{128, 128, 0, 255}), 1);
     CHECK_PIXEL(compositeAt(canvas, 2, 2), kWhite, 0);
 
     // La opacidad de la base no cambia el recorte; ocultarla oculta las recortadas.
-    layers.setOpacity(1, 0.3f);
+    layers.setOpacity(0, 0.3f);
     CHECK_PIXEL(compositeAt(canvas, 10, 10), (Pixel{128, 128, 0, 255}), 1);
-    canvas.setLayerVisible(1, false);
+    canvas.setLayerVisible(0, false);
     CHECK_PIXEL(compositeAt(canvas, 10, 10), kWhite, 0);
-    CHECK(!canvas.layerShown(2));
+    CHECK(!canvas.layerShown(1));
     CHECK(canvas.strokeBlock() == Canvas::StrokeBlock::ClipBaseHidden);
     CHECK(!canvas.beginStroke(10.0f, 10.0f, 1.0f));
-    canvas.setLayerVisible(1, true);
-    layers.setOpacity(1, 1.0f);
+    canvas.setLayerVisible(0, true);
+    layers.setOpacity(0, 1.0f);
 
     // Sin recorte, la capa se ve entera.
-    canvas.setLayerClipping(3, false);
+    canvas.setLayerClipping(2, false);
     CHECK_PIXEL(compositeAt(canvas, 2, 2), (Pixel{128, 255, 128, 255}), 1);
 
     // La capa de abajo del todo no puede recortar; si llega abajo recortando, se ve entera.
     CHECK(!canvas.canClip(0));
     canvas.setLayerClipping(0, true);
     CHECK(!layers.at(0).clipping);
-    REQUIRE(canvas.moveLayer(2, 0));
+    REQUIRE(canvas.moveLayer(1, 0));
     CHECK(layers.at(0).clipping);
     CHECK_EQ(layers.clipBase(0), -1);
     CHECK(canvas.layerShown(0));
 }
 
 TEST_CASE(clipping_stroke_preview_matches_commit) {
-    for (const int target : {1, 2}) {
+    for (const int target : {0, 1}) {
         for (const bool erase : {false, true}) {
             Canvas canvas;
             REQUIRE(canvas.init(64, 64));
-            fillLayer(canvas, 1, {8, 8, 40, 56}, 0.2f, 0.3f, 0.9f, 0.9f);
+            fillLayer(canvas, 0, {8, 8, 40, 56}, 0.2f, 0.3f, 0.9f, 0.9f);
             REQUIRE(canvas.addLayer());
-            fillLayer(canvas, 2, {0, 20, 64, 44}, 0.9f, 0.6f, 0.1f, 1.0f);
-            canvas.setLayerClipping(2, true);
-            canvas.layers().setBlend(2, BlendMode::Multiply);
+            fillLayer(canvas, 1, {0, 20, 64, 44}, 0.9f, 0.6f, 0.1f, 1.0f);
+            canvas.setLayerClipping(1, true);
+            canvas.layers().setBlend(1, BlendMode::Multiply);
             canvas.selectLayer(target);
             canvas.update();
 
@@ -541,12 +543,12 @@ TEST_CASE(clipping_stroke_preview_matches_commit) {
 TEST_CASE(alpha_lock_paints_only_where_there_is_paint) {
     Canvas canvas;
     REQUIRE(canvas.init(40, 32));
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 0.0f, 0.0f, 1.0f, 1.0f);
-    fillLayer(canvas, 1, {24, 8, 32, 24}, 0.0f, 0.0f, 1.0f, 0.5f);
-    canvas.setLayerAlphaLock(1, true);
-    CHECK(canvas.layers().at(1).alphaLock);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 0.0f, 0.0f, 1.0f, 1.0f);
+    fillLayer(canvas, 0, {24, 8, 32, 24}, 0.0f, 0.0f, 1.0f, 0.5f);
+    canvas.setLayerAlphaLock(0, true);
+    CHECK(canvas.layers().at(0).alphaLock);
     CHECK_EQ(canvas.history().undoCount(), 1);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     setBrush(canvas, 1.0f, 0.0f, 0.0f, 1.0f, 6.0f);
     REQUIRE(canvas.beginStroke(2.0f, 16.0f, 1.0f));
@@ -555,7 +557,7 @@ TEST_CASE(alpha_lock_paints_only_where_there_is_paint) {
     canvas.endStroke();
     CHECK(test::maxDifference(composite(canvas), preview) <= 2);
 
-    const std::vector<uint8_t> after = layerPixels(canvas, 1);
+    const std::vector<uint8_t> after = layerPixels(canvas, 0);
     for (int y = 0; y < 32; ++y) {
         for (int x = 0; x < 40; ++x) {
             if (test::pixelAt(after, 40, x, y)[3] != test::pixelAt(before, 40, x, y)[3]) {
@@ -564,10 +566,10 @@ TEST_CASE(alpha_lock_paints_only_where_there_is_paint) {
             }
         }
     }
-    CHECK_PIXEL(layerAt(canvas, 1, 4, 16), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), (Pixel{255, 0, 0, 255}), 6);
-    CHECK_PIXEL(layerAt(canvas, 1, 28, 16), (Pixel{128, 0, 0, 128}), 6);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 9), (Pixel{0, 0, 255, 255}), 0);   // fuera del trazo
+    CHECK_PIXEL(layerAt(canvas, 0, 4, 16), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), (Pixel{255, 0, 0, 255}), 6);
+    CHECK_PIXEL(layerAt(canvas, 0, 28, 16), (Pixel{128, 0, 0, 128}), 6);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 9), (Pixel{0, 0, 255, 255}), 0);   // fuera del trazo
 
     // Con el alfa bloqueado no se borra (ni con la goma del lápiz).
     setBrush(canvas, 0.0f, 0.0f, 0.0f, 1.0f, 6.0f, true);
@@ -579,48 +581,48 @@ TEST_CASE(alpha_lock_paints_only_where_there_is_paint) {
     CHECK(!canvas.beginStroke(16.0f, 16.0f, 1.0f, true));
     CHECK(!canvas.stroking());
 
-    canvas.setLayerAlphaLock(1, false);
+    canvas.setLayerAlphaLock(0, false);
     setBrush(canvas, 0.0f, 0.0f, 0.0f, 1.0f, 6.0f, true);
     drawLine(canvas, {16.0f, 12.0f}, {16.0f, 20.0f});
-    CHECK(layerAt(canvas, 1, 16, 16)[3] <= 5);
+    CHECK(layerAt(canvas, 0, 16, 16)[3] <= 5);
     REQUIRE(canvas.undo());   // el borrado
     REQUIRE(canvas.undo());   // quitar el bloqueo
-    CHECK(canvas.layers().at(1).alphaLock);
+    CHECK(canvas.layers().at(0).alphaLock);
 }
 
 TEST_CASE(fill_and_invert_layer) {
     Canvas canvas;
     REQUIRE(canvas.init(16, 16));
-    fillLayer(canvas, 1, {4, 4, 12, 12}, 0.2f, 0.4f, 0.6f, 0.8f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {4, 4, 12, 12}, 0.2f, 0.4f, 0.6f, 0.8f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     const float orange[3] = {1.0f, 0.5f, 0.0f};
 
-    canvas.fillLayer(1, orange);
-    CHECK_PIXEL(layerAt(canvas, 1, 1, 1), (Pixel{255, 128, 0, 255}), 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), (Pixel{255, 128, 0, 255}), 1);
+    canvas.fillLayer(0, orange);
+    CHECK_PIXEL(layerAt(canvas, 0, 1, 1), (Pixel{255, 128, 0, 255}), 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{255, 128, 0, 255}), 1);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
 
     // Con el alfa bloqueado, solo donde hay pintura y con su alfa.
-    canvas.setLayerAlphaLock(1, true);
-    canvas.fillLayer(1, orange);
-    CHECK_PIXEL(layerAt(canvas, 1, 1, 1), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), (Pixel{204, 102, 0, 204}), 1);
+    canvas.setLayerAlphaLock(0, true);
+    canvas.fillLayer(0, orange);
+    CHECK_PIXEL(layerAt(canvas, 0, 1, 1), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{204, 102, 0, 204}), 1);
 
     // Invertir: el color pasa a 1 − c y el alfa se queda.
-    canvas.invertLayer(1);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), (Pixel{0, 102, 204, 204}), 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 1, 1), kClear, 0);
-    canvas.invertLayer(1);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), (Pixel{204, 102, 0, 204}), 0);
+    canvas.invertLayer(0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{0, 102, 204, 204}), 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 1, 1), kClear, 0);
+    canvas.invertLayer(0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{204, 102, 0, 204}), 0);
 
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
-    // El fondo blanco invertido es negro.
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
+    // El fondo no es una capa: invertir la capa no lo toca, y donde está vacía sigue blanco.
     canvas.invertLayer(0);
-    CHECK_PIXEL(compositeAt(canvas, 1, 1), (Pixel{0, 0, 0, 255}), 0);
+    CHECK_PIXEL(compositeAt(canvas, 1, 1), kWhite, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -634,36 +636,36 @@ TEST_CASE(reference_layer_is_unique_and_undoable) {
     REQUIRE(canvas.addLayer());
     CHECK_EQ(layers.referenceIndex(), -1);
 
+    canvas.setReferenceLayer(0);
+    CHECK_EQ(layers.referenceIndex(), 0);
     canvas.setReferenceLayer(1);
     CHECK_EQ(layers.referenceIndex(), 1);
-    canvas.setReferenceLayer(2);
-    CHECK_EQ(layers.referenceIndex(), 2);
-    CHECK(!layers.at(1).reference);
-    canvas.setReferenceLayer(2);   // sin cambio: no hay paso
+    CHECK(!layers.at(0).reference);
+    canvas.setReferenceLayer(1);   // sin cambio: no hay paso
     CHECK_EQ(canvas.history().undoCount(), 3);
 
     // Duplicar no copia la referencia.
-    REQUIRE(canvas.duplicateLayer(2));
-    CHECK_EQ(layers.referenceIndex(), 2);
-    CHECK(!layers.at(3).reference);
+    REQUIRE(canvas.duplicateLayer(1));
+    CHECK_EQ(layers.referenceIndex(), 1);
+    CHECK(!layers.at(2).reference);
     REQUIRE(canvas.undo());
 
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.referenceIndex(), 1);
+    CHECK_EQ(layers.referenceIndex(), 0);
     REQUIRE(canvas.undo());
     CHECK_EQ(layers.referenceIndex(), -1);
     REQUIRE(canvas.redo());
     REQUIRE(canvas.redo());
-    CHECK_EQ(layers.referenceIndex(), 2);
+    CHECK_EQ(layers.referenceIndex(), 1);
 
     canvas.setReferenceLayer(-1);
     CHECK_EQ(layers.referenceIndex(), -1);
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.referenceIndex(), 2);
+    CHECK_EQ(layers.referenceIndex(), 1);
 
     // Borrar la referencia la quita; deshacer la devuelve.
-    const uint32_t reference = layers.at(2).id;
-    REQUIRE(canvas.removeLayer(2));
+    const uint32_t reference = layers.at(1).id;
+    REQUIRE(canvas.removeLayer(1));
     CHECK_EQ(layers.referenceIndex(), -1);
     REQUIRE(canvas.undo());
     CHECK_EQ(layers.referenceIndex(), layers.indexOf(reference));
@@ -678,33 +680,34 @@ TEST_CASE(merge_down_applies_blend_mode) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     LayerStack& layers = canvas.layers();
-    fillLayer(canvas, 1, IRect::ofSize(32, 32), 0.9f, 0.7f, 0.4f, 1.0f);
+    fillLayer(canvas, 0, IRect::ofSize(32, 32), 0.9f, 0.7f, 0.4f, 1.0f);
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 2, {8, 8, 24, 24}, 0.2f, 0.5f, 0.9f, 0.8f);
-    layers.setBlend(2, BlendMode::Multiply);
-    layers.setOpacity(2, 0.6f);
-    layers.setBlend(1, BlendMode::Screen);   // la fundida conserva el modo de la de abajo
-    fillLayer(canvas, 0, IRect::ofSize(32, 32), 0.0f, 0.0f, 0.0f, 1.0f);
+    fillLayer(canvas, 1, {8, 8, 24, 24}, 0.2f, 0.5f, 0.9f, 0.8f);
+    layers.setBlend(1, BlendMode::Multiply);
+    layers.setOpacity(1, 0.6f);
+    layers.setBlend(0, BlendMode::Screen);   // la fundida conserva el modo de la de abajo
+    // Sobre el fondo negro, en Trama la capa de abajo se ve tal cual.
+    canvas.setBackground(CanvasBackground{{0.0f, 0.0f, 0.0f}, true});
     const std::vector<uint8_t> look = composite(canvas);
 
-    REQUIRE(canvas.mergeDown(2));
-    CHECK(layers.at(1).blend == BlendMode::Screen);
+    REQUIRE(canvas.mergeDown(1));
+    CHECK(layers.at(0).blend == BlendMode::Screen);
     CHECK(test::maxDifference(composite(canvas), look) <= 2);
 }
 
 TEST_CASE(merge_down_with_clipping) {
     const auto build = [](Canvas& canvas) {
         LayerStack& layers = canvas.layers();
-        // 1: base con zona opaca y zona transparente; 2 y 3 recortan con ella; 4 normal.
-        fillLayer(canvas, 1, {0, 0, 20, 32}, 0.2f, 0.3f, 0.9f, 1.0f);
+        // 0: base con zona opaca y zona transparente; 1 y 2 recortan con ella; 3 normal.
+        fillLayer(canvas, 0, {0, 0, 20, 32}, 0.2f, 0.3f, 0.9f, 1.0f);
         canvas.addLayer();
-        fillLayer(canvas, 2, {10, 0, 32, 32}, 0.9f, 0.2f, 0.1f, 0.7f);
+        fillLayer(canvas, 1, {10, 0, 32, 32}, 0.9f, 0.2f, 0.1f, 0.7f);
+        layers.setClipping(1, true);
+        canvas.addLayer();
+        fillLayer(canvas, 2, {0, 10, 32, 22}, 0.1f, 0.8f, 0.2f, 0.9f);
         layers.setClipping(2, true);
         canvas.addLayer();
-        fillLayer(canvas, 3, {0, 10, 32, 22}, 0.1f, 0.8f, 0.2f, 0.9f);
-        layers.setClipping(3, true);
-        canvas.addLayer();
-        fillLayer(canvas, 4, {0, 0, 32, 6}, 0.9f, 0.9f, 0.1f, 0.8f);
+        fillLayer(canvas, 3, {0, 0, 32, 6}, 0.9f, 0.9f, 0.1f, 0.8f);
     };
 
     // Las dos recortan con la misma base: la fundida sigue recortando.
@@ -713,8 +716,8 @@ TEST_CASE(merge_down_with_clipping) {
         REQUIRE(canvas.init(32, 32));
         build(canvas);
         const std::vector<uint8_t> look = composite(canvas);
-        REQUIRE(canvas.mergeDown(3));
-        CHECK(canvas.layers().at(2).clipping);
+        REQUIRE(canvas.mergeDown(2));
+        CHECK(canvas.layers().at(1).clipping);
         CHECK(test::maxDifference(composite(canvas), look) <= 2);
     }
     // La de arriba recorta con la de abajo (con opacidad): el recorte se aplica al fundir.
@@ -722,16 +725,16 @@ TEST_CASE(merge_down_with_clipping) {
         Canvas canvas;
         REQUIRE(canvas.init(32, 32));
         build(canvas);
-        canvas.layers().setOpacity(1, 0.5f);
-        fillLayer(canvas, 1, {0, 0, 20, 32}, 0.2f, 0.3f, 0.9f, 0.6f);
-        // La 3 pasará a recortar con la fundida, que tiene otro alfa (lleva la opacidad
+        canvas.layers().setOpacity(0, 0.5f);
+        fillLayer(canvas, 0, {0, 0, 20, 32}, 0.2f, 0.3f, 0.9f, 0.6f);
+        // La 2 pasará a recortar con la fundida, que tiene otro alfa (lleva la opacidad
         // horneada): esa sí cambia, así que no cuenta para comparar.
-        canvas.layers().setVisible(3, false);
+        canvas.layers().setVisible(2, false);
         const std::vector<uint8_t> look = composite(canvas);
-        REQUIRE(canvas.mergeDown(2));
-        CHECK(!canvas.layers().at(1).clipping);
-        CHECK_EQ(canvas.layers().at(1).opacity, 1.0f);
-        CHECK_EQ(canvas.layers().clipBase(2), 1);   // la otra recortada sigue con la fundida
+        REQUIRE(canvas.mergeDown(1));
+        CHECK(!canvas.layers().at(0).clipping);
+        CHECK_EQ(canvas.layers().at(0).opacity, 1.0f);
+        CHECK_EQ(canvas.layers().clipBase(1), 0);   // la otra recortada sigue con la fundida
         CHECK(test::maxDifference(composite(canvas), look) <= 2);
     }
     // Solo recorta la de abajo: su recorte se hornea y la fundida deja de recortar.
@@ -740,18 +743,18 @@ TEST_CASE(merge_down_with_clipping) {
         REQUIRE(canvas.init(32, 32));
         build(canvas);
         const std::vector<uint8_t> look = composite(canvas);
-        const LayerProperties before{canvas.layers().at(3).name, true, 1.0f, BlendMode::Normal, false, true};
-        REQUIRE(canvas.mergeDown(4));
-        CHECK(!canvas.layers().at(3).clipping);
+        const LayerProperties before{canvas.layers().at(2).name, true, 1.0f, BlendMode::Normal, false, true};
+        REQUIRE(canvas.mergeDown(3));
+        CHECK(!canvas.layers().at(2).clipping);
         CHECK(test::maxDifference(composite(canvas), look) <= 2);
 
         REQUIRE(canvas.undo());
-        CHECK_EQ(canvas.layers().count(), 5);
-        CHECK(canvas.layers().at(3).clipping);
-        CHECK_EQ(canvas.layers().at(3).name, before.name);
+        CHECK_EQ(canvas.layers().count(), 4);
+        CHECK(canvas.layers().at(2).clipping);
+        CHECK_EQ(canvas.layers().at(2).name, before.name);
         CHECK_EQ(test::maxDifference(composite(canvas), look), 0);
         REQUIRE(canvas.redo());
-        CHECK(!canvas.layers().at(3).clipping);
+        CHECK(!canvas.layers().at(2).clipping);
         CHECK(test::maxDifference(composite(canvas), look) <= 2);
     }
     // No se funde con una capa que no se ve (ni con una recortada cuya base está oculta).
@@ -759,10 +762,10 @@ TEST_CASE(merge_down_with_clipping) {
         Canvas canvas;
         REQUIRE(canvas.init(32, 32));
         build(canvas);
-        canvas.setLayerVisible(1, false);
+        canvas.setLayerVisible(0, false);
+        CHECK(!canvas.canMergeDown(2));
         CHECK(!canvas.canMergeDown(3));
-        CHECK(!canvas.canMergeDown(4));
-        CHECK(!canvas.mergeDown(4));
+        CHECK(!canvas.mergeDown(3));
     }
 }
 
@@ -775,51 +778,51 @@ TEST_CASE(layer_options_undo_and_duplicate) {
     REQUIRE(canvas.init(16, 16));
     LayerStack& layers = canvas.layers();
     REQUIRE(canvas.addLayer());
-    canvas.setLayerBlend(2, BlendMode::Overlay);
-    canvas.setLayerAlphaLock(2, true);
-    canvas.setLayerClipping(2, true);
-    canvas.setLayerClipping(2, true);   // sin cambio: no hay paso
+    canvas.setLayerBlend(1, BlendMode::Overlay);
+    canvas.setLayerAlphaLock(1, true);
+    canvas.setLayerClipping(1, true);
+    canvas.setLayerClipping(1, true);   // sin cambio: no hay paso
     CHECK_EQ(canvas.history().undoCount(), 4);
 
-    REQUIRE(canvas.duplicateLayer(2));
-    const Layer& copy = layers.at(3);
+    REQUIRE(canvas.duplicateLayer(1));
+    const Layer& copy = layers.at(2);
     CHECK(copy.blend == BlendMode::Overlay);
     CHECK(copy.alphaLock);
     CHECK(copy.clipping);
-    CHECK_EQ(layers.clipBase(3), 1);
+    CHECK_EQ(layers.clipBase(2), 0);
     REQUIRE(canvas.undo());
 
     REQUIRE(canvas.undo());
-    CHECK(!layers.at(2).clipping);
+    CHECK(!layers.at(1).clipping);
     REQUIRE(canvas.undo());
-    CHECK(!layers.at(2).alphaLock);
+    CHECK(!layers.at(1).alphaLock);
     REQUIRE(canvas.undo());
-    CHECK(layers.at(2).blend == BlendMode::Normal);
+    CHECK(layers.at(1).blend == BlendMode::Normal);
     REQUIRE(canvas.redo());
     REQUIRE(canvas.redo());
     REQUIRE(canvas.redo());
-    CHECK(layers.at(2).blend == BlendMode::Overlay);
-    CHECK(layers.at(2).alphaLock);
-    CHECK(layers.at(2).clipping);
+    CHECK(layers.at(1).blend == BlendMode::Overlay);
+    CHECK(layers.at(1).alphaLock);
+    CHECK(layers.at(1).clipping);
 }
 
 TEST_CASE(layer_options_survive_context_loss) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     LayerStack& layers = canvas.layers();
-    fillLayer(canvas, 1, {4, 4, 28, 28}, 0.3f, 0.6f, 0.9f, 0.9f);
+    fillLayer(canvas, 0, {4, 4, 28, 28}, 0.3f, 0.6f, 0.9f, 0.9f);
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 2, {0, 12, 32, 20}, 0.9f, 0.4f, 0.2f, 1.0f);
-    canvas.setLayerBlend(2, BlendMode::HardLight);
-    canvas.setLayerClipping(2, true);
-    canvas.setReferenceLayer(1);
+    fillLayer(canvas, 1, {0, 12, 32, 20}, 0.9f, 0.4f, 0.2f, 1.0f);
+    canvas.setLayerBlend(1, BlendMode::HardLight);
+    canvas.setLayerClipping(1, true);
+    canvas.setReferenceLayer(0);
     const std::vector<uint8_t> before = composite(canvas);
 
     REQUIRE(canvas.takeSnapshot(size_t{1} << 30));
     REQUIRE(test::recreateGLContext());
     REQUIRE(canvas.recreateGpu(nullptr));
-    CHECK(layers.at(2).blend == BlendMode::HardLight);
-    CHECK(layers.at(2).clipping);
-    CHECK_EQ(layers.referenceIndex(), 1);
+    CHECK(layers.at(1).blend == BlendMode::HardLight);
+    CHECK(layers.at(1).clipping);
+    CHECK_EQ(layers.referenceIndex(), 0);
     CHECK_EQ(test::maxDifference(composite(canvas), before), 0);
 }

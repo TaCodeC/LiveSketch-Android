@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Canvas/CanvasSpec.h"
 #include "Canvas/Layer.h"
 #include "Canvas/Rect.h"
 #include "Canvas/Selection.h"
@@ -36,6 +37,7 @@ struct HistoryStep {
         MergeDown,
         Properties,   // nombre, visibilidad, opacidad, fusión, bloqueo alfa o recorte
         Reference,    // cambia la capa de referencia
+        Background,   // el color de fondo o si se ve
         Selection,    // la selección: una zona de la máscara (puede no haber) y su estado
         Group,        // varios pasos que se deshacen juntos (p. ej. transformar)
     };
@@ -52,6 +54,8 @@ struct HistoryStep {
     LayerProperties after;
     SelectionState selectionBefore;   // Selection
     SelectionState selectionAfter;
+    CanvasBackground backgroundBefore;   // Background
+    CanvasBackground backgroundAfter;
     std::vector<HistoryStep> children;   // Group, en el orden en que se hicieron
     size_t bytes = 0;              // memoria de GPU que puede ocupar el paso
 };

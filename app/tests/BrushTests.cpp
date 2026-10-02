@@ -500,14 +500,14 @@ TEST_CASE(brush_uniform_does_not_build_up) {
     for (const BrushBuildUp mode : {BrushBuildUp::Uniform, BrushBuildUp::Glaze}) {
         Canvas canvas;
         REQUIRE(canvas.init(96, 48));
-        canvas.layers().setVisible(0, false);
+        test::hideBackground(canvas);
         BrushParams p = roundBrush(0.1f);
         p.flow = 0.5f;
         p.buildUp = mode;
         useBrush(canvas, p, 6.0f);
         // Ida y vuelta por la misma línea en un solo trazo.
         stroke(canvas, {{10.0f, 24.0f, 1.0f}, {86.0f, 24.0f, 1.0f}, {10.0f, 24.5f, 1.0f}});
-        const int alpha = alphaAt(canvas, 1, 48, 24);
+        const int alpha = alphaAt(canvas, 0, 48, 24);
         if (mode == BrushBuildUp::Uniform) {
             CHECK_NEAR(alpha, 128, 3);   // lo que da un solo sello
         } else {
@@ -520,13 +520,13 @@ TEST_CASE(brush_hardness_shapes_the_round_tip) {
     for (const float hardness : {1.0f, 0.0f}) {
         Canvas canvas;
         REQUIRE(canvas.init(64, 64));
-        canvas.layers().setVisible(0, false);
+        test::hideBackground(canvas);
         BrushParams p = roundBrush(0.1f);
         p.hardness = hardness;
         p.buildUp = BrushBuildUp::Uniform;
         useBrush(canvas, p, 20.0f);
         stroke(canvas, {{32.0f, 32.0f, 1.0f}});   // un toque: un sello
-        const std::vector<uint8_t> pixels = layerPixels(canvas, 1);
+        const std::vector<uint8_t> pixels = layerPixels(canvas, 0);
         const int center = test::pixelAt(pixels, 64, 32, 32)[3];
         const int inner = test::pixelAt(pixels, 64, 32 + 15, 32)[3];   // a 0,75 del radio
         const int outside = test::pixelAt(pixels, 64, 32 + 22, 32)[3];
@@ -545,7 +545,7 @@ TEST_CASE(brush_hardness_shapes_the_round_tip) {
 TEST_CASE(brush_grain_is_fixed_to_the_canvas) {
     Canvas canvas;
     REQUIRE(canvas.init(96, 96));
-    canvas.layers().setVisible(0, false);
+    test::hideBackground(canvas);
     BrushParams p = roundBrush(0.05f);
     p.buildUp = BrushBuildUp::Uniform;
     p.grain = BrushGrain::Rough;
@@ -555,8 +555,8 @@ TEST_CASE(brush_grain_is_fixed_to_the_canvas) {
     stroke(canvas, {{10.0f, 48.0f, 1.0f}, {86.0f, 48.0f, 1.0f}});
     REQUIRE(canvas.addLayer());
     stroke(canvas, {{48.0f, 10.0f, 1.0f}, {48.0f, 86.0f, 1.0f}});
-    const std::vector<uint8_t> first = layerPixels(canvas, 1);
-    const std::vector<uint8_t> second = layerPixels(canvas, 2);
+    const std::vector<uint8_t> first = layerPixels(canvas, 0);
+    const std::vector<uint8_t> second = layerPixels(canvas, 1);
     int lo = 255;
     int hi = 0;
     int worst = 0;
@@ -578,7 +578,7 @@ TEST_CASE(brush_taper_preview_matches_commit) {
         Canvas canvas;
         REQUIRE(canvas.init(128, 64));
         if (erase) {
-            test::fillRect(canvas.layers().at(1).target, IRect::ofSize(128, 64), 0.2f, 0.1f, 0.6f, 1.0f);
+            test::fillRect(canvas.layers().at(0).target, IRect::ofSize(128, 64), 0.2f, 0.1f, 0.6f, 1.0f);
             canvas.layers().markDirty(IRect::ofSize(128, 64));
         }
         BrushParams p = roundBrush(0.05f);
@@ -608,14 +608,14 @@ TEST_CASE(brush_taper_preview_matches_commit) {
 TEST_CASE(brush_every_preset_paints_and_erases) {
     Canvas canvas;
     REQUIRE(canvas.init(160, 64));
-    canvas.layers().setVisible(0, false);
+    test::hideBackground(canvas);
     const auto library = brushes::library();
     for (const BrushPreset& preset : library) {
-        canvas.clearLayer(1);
+        canvas.clearLayer(0);
         const float radius = brushes::radiusFor(preset.params, preset.params.size);
         useBrush(canvas, preset.params, std::min(radius, 20.0f));
         stroke(canvas, {{20.0f, 32.0f, 0.7f}, {80.0f, 28.0f, 1.0f}, {140.0f, 36.0f, 0.8f}});
-        const std::vector<uint8_t> painted = layerPixels(canvas, 1);
+        const std::vector<uint8_t> painted = layerPixels(canvas, 0);
         long sum = 0;
         for (size_t i = 3; i < painted.size(); i += 4) {
             sum += painted[i];
@@ -624,11 +624,11 @@ TEST_CASE(brush_every_preset_paints_and_erases) {
             test::fail(__FILE__, __LINE__, std::string("apenas pinta: ") + preset.id);
         }
 
-        test::fillRect(canvas.layers().at(1).target, IRect::ofSize(160, 64), 0.0f, 0.0f, 0.0f, 1.0f);
+        test::fillRect(canvas.layers().at(0).target, IRect::ofSize(160, 64), 0.0f, 0.0f, 0.0f, 1.0f);
         canvas.layers().markDirty(IRect::ofSize(160, 64));
         useBrush(canvas, preset.params, std::min(radius, 20.0f), 1.0f, true);
         stroke(canvas, {{20.0f, 32.0f, 0.7f}, {80.0f, 28.0f, 1.0f}, {140.0f, 36.0f, 0.8f}});
-        const std::vector<uint8_t> erased = layerPixels(canvas, 1);
+        const std::vector<uint8_t> erased = layerPixels(canvas, 0);
         long removed = 0;
         for (size_t i = 3; i < erased.size(); i += 4) {
             removed += 255 - erased[i];

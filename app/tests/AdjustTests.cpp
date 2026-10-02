@@ -277,19 +277,19 @@ int maxDifferenceIn(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b
 
 // Capa 1 con varios colores, opacos y semitransparentes, y zonas vacías.
 void paintSwatches(Canvas& canvas) {
-    fillLayer(canvas, 1, {0, 0, 8, 8}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {8, 0, 16, 8}, 0.2f, 0.6f, 0.9f);
-    fillLayer(canvas, 1, {16, 0, 24, 8}, 0.5f, 0.5f, 0.5f);
-    fillLayer(canvas, 1, {24, 0, 32, 8}, 0.9f, 0.8f, 0.1f, 0.5f);
-    fillLayer(canvas, 1, {0, 8, 8, 16}, 0.05f, 0.1f, 0.2f);
-    fillLayer(canvas, 1, {8, 8, 16, 16}, 0.95f, 0.9f, 0.85f);
-    fillLayer(canvas, 1, {16, 8, 24, 16}, 0.3f, 0.7f, 0.2f, 0.25f);
-    fillLayer(canvas, 1, {24, 8, 32, 16}, 0.6f, 0.1f, 0.7f);
+    fillLayer(canvas, 0, {0, 0, 8, 8}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {8, 0, 16, 8}, 0.2f, 0.6f, 0.9f);
+    fillLayer(canvas, 0, {16, 0, 24, 8}, 0.5f, 0.5f, 0.5f);
+    fillLayer(canvas, 0, {24, 0, 32, 8}, 0.9f, 0.8f, 0.1f, 0.5f);
+    fillLayer(canvas, 0, {0, 8, 8, 16}, 0.05f, 0.1f, 0.2f);
+    fillLayer(canvas, 0, {8, 8, 16, 16}, 0.95f, 0.9f, 0.85f);
+    fillLayer(canvas, 0, {16, 8, 24, 16}, 0.3f, 0.7f, 0.2f, 0.25f);
+    fillLayer(canvas, 0, {24, 8, 32, 16}, 0.6f, 0.1f, 0.7f);
     // Un degradado en la mitad de abajo (todas las luminosidades).
     for (int x = 0; x < 32; ++x) {
         const float t = static_cast<float>(x) / 31.0f;
-        fillLayer(canvas, 1, {x, 16, x + 1, 24}, t, t * 0.8f, 1.0f - t);
-        fillLayer(canvas, 1, {x, 24, x + 1, 28}, t, t, t);
+        fillLayer(canvas, 0, {x, 16, x + 1, 24}, t, t * 0.8f, 1.0f - t);
+        fillLayer(canvas, 0, {x, 24, x + 1, 28}, t, t, t);
     }
 }
 
@@ -299,7 +299,7 @@ std::vector<uint8_t> adjusted(Canvas& canvas, Adjustment kind, const AdjustParam
         return {};
     }
     canvas.endAdjust(true);
-    return layerPixels(canvas, 1);
+    return layerPixels(canvas, 0);
 }
 
 } // namespace
@@ -308,7 +308,7 @@ TEST_CASE(adjust_hue_saturation_matches_reference) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     struct Case {
         float hue, saturation, brightness;
@@ -352,7 +352,7 @@ TEST_CASE(adjust_color_balance_matches_reference) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     AdjustParams params;
     params.balance[0][2] = 0.6f;    // sombras hacia el azul
@@ -375,7 +375,7 @@ TEST_CASE(adjust_noise_matches_reference_and_keeps_alpha) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     for (float size : {1.0f, 3.5f}) {
         AdjustParams params;
@@ -384,7 +384,7 @@ TEST_CASE(adjust_noise_matches_reference_and_keeps_alpha) {
         REQUIRE(canvas.beginAdjust(Adjustment::Noise, params) == Canvas::Edit::Done);
         const uint32_t seed = canvas.adjustParams().seed;
         canvas.endAdjust(true);
-        const std::vector<uint8_t> result = layerPixels(canvas, 1);
+        const std::vector<uint8_t> result = layerPixels(canvas, 0);
         const std::vector<uint8_t> expected = perPixel(before, 32, [&](Rgb color, int x, int y) {
             const double g = grain(x, y, size, seed) * 0.6;
             return Rgb{std::clamp(color.r + g, 0.0, 1.0), std::clamp(color.g + g, 0.0, 1.0),
@@ -413,10 +413,10 @@ TEST_CASE(adjust_noise_matches_reference_and_keeps_alpha) {
 TEST_CASE(adjust_blur_matches_gaussian_at_full_size) {
     Canvas canvas;
     REQUIRE(canvas.init(48, 40));
-    fillLayer(canvas, 1, {12, 10, 30, 26}, 1.0f, 0.1f, 0.1f);
-    fillLayer(canvas, 1, {24, 18, 40, 34}, 0.1f, 0.2f, 1.0f, 0.6f);
-    fillLayer(canvas, 1, {0, 0, 6, 40}, 0.2f, 0.9f, 0.3f);   // junto al borde del lienzo
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {12, 10, 30, 26}, 1.0f, 0.1f, 0.1f);
+    fillLayer(canvas, 0, {24, 18, 40, 34}, 0.1f, 0.2f, 1.0f, 0.6f);
+    fillLayer(canvas, 0, {0, 0, 6, 40}, 0.2f, 0.9f, 0.3f);   // junto al borde del lienzo
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     // Hasta 6,1 no se reduce.
     for (float sigma : {0.8f, 2.0f, 6.1f}) {
@@ -434,10 +434,10 @@ TEST_CASE(adjust_blur_matches_gaussian_at_full_size) {
 TEST_CASE(adjust_blur_matches_gaussian_when_reduced) {
     Canvas canvas;
     REQUIRE(canvas.init(128, 112));
-    fillLayer(canvas, 1, {40, 36, 88, 76}, 1.0f, 1.0f, 1.0f);
-    fillLayer(canvas, 1, {60, 20, 70, 100}, 0.9f, 0.2f, 0.1f);
-    fillLayer(canvas, 1, {20, 60, 110, 66}, 0.1f, 0.3f, 0.9f, 0.5f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {40, 36, 88, 76}, 1.0f, 1.0f, 1.0f);
+    fillLayer(canvas, 0, {60, 20, 70, 100}, 0.9f, 0.2f, 0.1f);
+    fillLayer(canvas, 0, {20, 60, 110, 66}, 0.1f, 0.3f, 0.9f, 0.5f);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     // 6,2: justo al empezar a reducir; luego una, dos y tres reducciones. También junto al
     // borde del lienzo, que se repite hacia fuera.
@@ -456,10 +456,10 @@ TEST_CASE(adjust_blur_matches_gaussian_when_reduced) {
 TEST_CASE(adjust_blur_inside_a_selection_reads_around_it) {
     Canvas canvas;
     REQUIRE(canvas.init(128, 112));
-    fillLayer(canvas, 1, {0, 0, 64, 112}, 0.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {64, 0, 128, 112}, 1.0f, 1.0f, 1.0f);
-    fillLayer(canvas, 1, {80, 70, 100, 90}, 0.9f, 0.1f, 0.2f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {0, 0, 64, 112}, 0.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {64, 0, 128, 112}, 1.0f, 1.0f, 1.0f);
+    fillLayer(canvas, 0, {80, 70, 100, 90}, 0.9f, 0.1f, 0.2f);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     // En medio, y contra el borde del lienzo; a tamaño completo y reduciendo.
     for (const IRect& selected : {IRect{64, 30, 90, 60}, IRect{96, 80, 128, 112}}) {
@@ -495,7 +495,7 @@ TEST_CASE(adjust_blur_inside_a_selection_reads_around_it) {
 TEST_CASE(adjust_blur_stays_clean_on_transparent_edges) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));
-    fillLayer(canvas, 1, {20, 20, 44, 44}, 1.0f, 1.0f, 1.0f);
+    fillLayer(canvas, 0, {20, 20, 44, 44}, 1.0f, 1.0f, 1.0f);
     for (float sigma : {1.5f, 8.0f}) {
         AdjustParams params;
         params.blur = sigma;
@@ -517,11 +517,11 @@ TEST_CASE(adjust_blur_stays_clean_on_transparent_edges) {
 TEST_CASE(adjust_blur_with_alpha_lock_keeps_alpha) {
     Canvas canvas;
     REQUIRE(canvas.init(40, 40));
-    fillLayer(canvas, 1, {8, 8, 20, 32}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {20, 8, 32, 32}, 0.0f, 0.0f, 1.0f);
-    fillLayer(canvas, 1, {8, 32, 32, 34}, 0.0f, 1.0f, 0.0f, 0.5f);
-    canvas.setLayerAlphaLock(1, true);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {8, 8, 20, 32}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {20, 8, 32, 32}, 0.0f, 0.0f, 1.0f);
+    fillLayer(canvas, 0, {8, 32, 32, 34}, 0.0f, 1.0f, 0.0f, 0.5f);
+    canvas.setLayerAlphaLock(0, true);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     for (float sigma : {2.0f, 6.0f}) {
         AdjustParams params;
@@ -545,9 +545,9 @@ TEST_CASE(adjust_blur_with_alpha_lock_keeps_alpha) {
 TEST_CASE(adjust_sharpen_overshoots_edges) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 24));
-    fillLayer(canvas, 1, {0, 0, 16, 24}, 0.25f, 0.25f, 0.25f);
-    fillLayer(canvas, 1, {16, 0, 32, 24}, 0.75f, 0.75f, 0.75f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {0, 0, 16, 24}, 0.25f, 0.25f, 0.25f);
+    fillLayer(canvas, 0, {16, 0, 32, 24}, 0.75f, 0.75f, 0.75f);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     AdjustParams params;
     params.sharpen = 0.5f;
@@ -574,7 +574,7 @@ TEST_CASE(adjust_sharpen_overshoots_edges) {
 TEST_CASE(adjust_selection_limits_color_changes) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    fillLayer(canvas, 1, IRect::ofSize(32, 32), 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, IRect::ofSize(32, 32), 1.0f, 0.0f, 0.0f);
     REQUIRE(selectRect(canvas, {8, 8, 24, 24}));
     AdjustParams params;
     params.hue = 2.0f / 3.0f;   // 120°: verde
@@ -591,7 +591,7 @@ TEST_CASE(adjust_preview_compare_cancel_and_apply) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> layerBefore = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layerBefore = layerPixels(canvas, 0);
     const std::vector<uint8_t> seenBefore = composite(canvas);
 
     AdjustParams params;
@@ -601,7 +601,7 @@ TEST_CASE(adjust_preview_compare_cancel_and_apply) {
     CHECK(canvas.adjustKind() == Adjustment::HueSaturation);
     CHECK(canvas.canUndo());
     // La capa no cambia hasta aplicar; se ve el resultado.
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), layerBefore), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), layerBefore), 0);
     const std::vector<uint8_t> seenFirst = composite(canvas);
     CHECK(test::maxDifference(seenFirst, seenBefore) > 50);
     params.hue = -0.25f;
@@ -619,7 +619,7 @@ TEST_CASE(adjust_preview_compare_cancel_and_apply) {
     CHECK(!canvas.endAdjust(false));
     CHECK(!canvas.adjusting());
     CHECK_EQ(canvas.history().undoCount(), 0);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), layerBefore), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), layerBefore), 0);
     CHECK_EQ(test::maxDifference(composite(canvas), seenBefore), 0);
 
     // Aplicar: la capa queda como se veía, en un paso.
@@ -628,18 +628,18 @@ TEST_CASE(adjust_preview_compare_cancel_and_apply) {
     CHECK(canvas.endAdjust(true));
     CHECK_EQ(canvas.history().undoCount(), 1);
     CHECK_EQ(test::maxDifference(composite(canvas), seen), 0);
-    const std::vector<uint8_t> layerAfter = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layerAfter = layerPixels(canvas, 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), layerBefore), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), layerBefore), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), layerAfter), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), layerAfter), 0);
 }
 
 TEST_CASE(adjust_undo_while_adjusting_and_settle) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     // Deshacer a medias lo quita (y se puede rehacer).
     AdjustParams params;
@@ -647,9 +647,9 @@ TEST_CASE(adjust_undo_while_adjusting_and_settle) {
     REQUIRE(canvas.beginAdjust(Adjustment::Blur, params) == Canvas::Edit::Done);
     REQUIRE(canvas.undo());
     CHECK(!canvas.adjusting());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
     REQUIRE(canvas.redo());
-    const std::vector<uint8_t> blurred = layerPixels(canvas, 1);
+    const std::vector<uint8_t> blurred = layerPixels(canvas, 0);
     CHECK(test::maxDifference(blurred, before) > 50);
     REQUIRE(canvas.undo());
 
@@ -658,20 +658,20 @@ TEST_CASE(adjust_undo_while_adjusting_and_settle) {
     REQUIRE(canvas.addLayer());
     CHECK(!canvas.adjusting());
     CHECK_EQ(canvas.history().undoCount(), 2);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), blurred), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), blurred), 0);
 }
 
 TEST_CASE(adjust_refuses_hidden_layer_and_skips_neutral_values) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     paintSwatches(canvas);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     const int steps = canvas.history().undoCount();
-    canvas.setLayerVisible(1, false);
+    canvas.setLayerVisible(0, false);
     CHECK(canvas.beginAdjust(Adjustment::Noise, AdjustParams{}) == Canvas::Edit::Hidden);
     CHECK(!canvas.adjusting());
-    canvas.setLayerVisible(1, true);
+    canvas.setLayerVisible(0, true);
 
     // Sin cambiar nada (o volviendo a cero), aplicar no guarda nada.
     for (Adjustment kind : {Adjustment::HueSaturation, Adjustment::ColorBalance, Adjustment::Blur,
@@ -691,5 +691,5 @@ TEST_CASE(adjust_refuses_hidden_layer_and_skips_neutral_values) {
     REQUIRE(canvas.beginAdjust(Adjustment::Blur, params) == Canvas::Edit::Done);
     CHECK(!canvas.endAdjust(true));
     CHECK_EQ(canvas.history().undoCount(), steps + 2);   // mostrar y ocultar la capa
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
 }

@@ -2,6 +2,7 @@
 
 #include "Canvas/Bounds.h"
 #include "Canvas/Brush.h"
+#include "Canvas/CanvasSpec.h"
 #include "Canvas/ColorFill.h"
 #include "Canvas/Compositor.h"
 #include "Canvas/DrawingGuide.h"
@@ -46,14 +47,37 @@
 // Con la simetría de la guía de dibujo, cada sello del trazo se pinta también en sus copias
 // (reflejadas o giradas alrededor del centro de la guía), y con la forma rápida el trazo se
 // vuelve a pintar entero como la forma perfecta que se le parece.
+//
+// El fondo no es una capa: es un color que va debajo de todas (o nada, si está oculto).
+
+// Datos del documento que no son píxeles ni capas.
+struct CanvasInfo {
+    std::string name;
+    float ppi = 72.0f;                          // resolución de impresión
+    LengthUnit unit = LengthUnit::Pixels;       // en qué se midió al crearlo
+    ColorProfile profile = ColorProfile::Srgb;
+};
+
 class Canvas {
 public:
-    // Crea el lienzo con una capa "Fondo" blanca y una "Capa 1" transparente encima.
+    // Crea el lienzo con una "Capa 1" transparente sobre el color de fondo.
+    bool init(const CanvasSpec& spec);
+    // Con fondo blanco, 72 ppp y sRGB.
     bool init(int width, int height);
     void destroy();
     bool ready() const { return m_ready; }
     int width() const { return m_layers.width(); }
     int height() const { return m_layers.height(); }
+
+    const CanvasInfo& info() const { return m_info; }
+
+    // Color de fondo, debajo de todas las capas. Como la opacidad de una capa, se puede
+    // cambiar de forma continua (`final` = false, mientras se elige el color): el paso de
+    // deshacer lo guarda la llamada con `final` = true, o finishBackgroundEdit(), desde el
+    // fondo que había antes de empezar.
+    const CanvasBackground& background() const { return m_background; }
+    void setBackground(const CanvasBackground& background, bool final = true);
+    void finishBackgroundEdit();
 
     // Para leer la pila. Lo que se puede deshacer (estructura, píxeles y propiedades de
     // las capas) va por los métodos de abajo; cambiar la pila directamente no se guarda.
@@ -275,7 +299,7 @@ public:
 
     // Pérdida del contexto GL. takeSnapshot copia todas las capas a RAM si ocupan como
     // mucho `maxBytes`; recreateGpu crea de nuevo todos los objetos GL y restaura las
-    // capas desde esa copia. Sin copia, las capas quedan vacías (el fondo, blanco).
+    // capas desde esa copia. Sin copia, las capas quedan vacías.
     bool takeSnapshot(size_t maxBytes);
     void dropSnapshot();
     bool hasSnapshot() const { return !m_snapshot.empty(); }
@@ -340,12 +364,13 @@ private:
     void changePixels(int index, Change change);
 
     // Deshacer.
+    // Hay cambios de propiedades de capa o del fondo sin guardar en el historial.
+    bool editPending() const;
     LayerProperties properties(int index) const;
     void applyProperties(int index, const LayerProperties& properties);
     // Guarda un paso si las propiedades de la capa ya no son `before`.
     void recordProperties(int index, const LayerProperties& before);
     void beginLayerEdit(int index);
-    bool editPending() const;
     // Selección automática, difuminado, transformación, relleno o ajuste a medias.
     bool livePending() const {
         return m_auto.active || m_feather.active || m_transform.active || m_fill.active || m_adjust.active;
@@ -388,6 +413,8 @@ private:
 
     bool m_ready = false;
     int m_maxTextureSize = 0;          // lado máximo de una textura en esta GPU
+    CanvasInfo m_info;
+    CanvasBackground m_background;
     LayerStack m_layers;
     Compositor m_compositor;
     Brush m_brush;
@@ -447,6 +474,10 @@ private:
         uint32_t layerId = 0;
         LayerProperties before;
     } m_layerEdit;
+    struct BackgroundEdit {
+        bool active = false;
+        CanvasBackground before;
+    } m_backgroundEdit;
 
     // Selección.
     Selection m_selection;

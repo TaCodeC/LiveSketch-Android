@@ -12,11 +12,8 @@
 #include <SDL3/SDL_platform_defines.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 namespace th = ui::theme;
 using ui::Align;
@@ -144,47 +141,6 @@ constexpr float kKeyColumn = 72.0f;
 constexpr float kHelpHeight = 8.0f + kHelpSection + kGestureRow * kGestureCount + 6.0f + kHelpSection +
                               kShortcutRow * kShortcutCount + 12.0f + 16.0f + 12.0f;
 
-void toFloat(ImU32 color, float rgb[3]) {
-    rgb[0] = static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
-    rgb[1] = static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
-    rgb[2] = static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
-}
-
-bool sameColor(const float a[3], const float b[3]) {
-    for (int i = 0; i < 3; ++i) {
-        if (std::fabs(a[i] - b[i]) > 1.0f / 512.0f) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// "#RGB", "#RRGGBB" o sin "#".
-bool parseHex(const char* text, float rgb[3]) {
-    char digits[7] = {};
-    int count = 0;
-    for (const char* p = text; *p; ++p) {
-        if (*p == '#' || *p == ' ') {
-            continue;
-        }
-        if (!std::isxdigit(static_cast<unsigned char>(*p)) || count == 6) {
-            return false;
-        }
-        digits[count++] = *p;
-    }
-    if (count == 3) {
-        const char full[7] = {digits[0], digits[0], digits[1], digits[1], digits[2], digits[2], '\0'};
-        std::memcpy(digits, full, sizeof(full));
-    } else if (count != 6) {
-        return false;
-    }
-    const unsigned long value = std::strtoul(digits, nullptr, 16);
-    rgb[0] = static_cast<float>((value >> 16) & 0xFF) / 255.0f;
-    rgb[1] = static_cast<float>((value >> 8) & 0xFF) / 255.0f;
-    rgb[2] = static_cast<float>(value & 0xFF) / 255.0f;
-    return true;
-}
-
 // Fila de menú: icono atenuado, título y, a la derecha, un valor. `filled`: con fondo
 // suave (la acción principal de su grupo). Sin `id` es solo información.
 bool menuRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyph, const char* title,
@@ -229,6 +185,58 @@ void keycap(ImDrawList* dl, float x, float cy, float width, const char* text) {
     const float textWidth = ui::trackedWidth(Weight::Bold, th::kMicro, text, kTracking);
     ui::tracked(dl, Weight::Bold, th::kMicro, ImVec2(r.GetCenter().x - textWidth * 0.5f, cy), IM_COL32(235, 235, 245, 204),
                 text, kTracking);
+}
+
+// Medidas del selector de color (pt).
+constexpr float kPickerPadTop = 14.0f;
+constexpr float kPickerWheel = 236.0f;
+constexpr float kPickerHex = 32.0f;
+constexpr float kPickerSection = 14.0f + 10.0f;   // rótulo y hueco
+constexpr float kPickerSwatch = 32.0f;
+constexpr float kPickerSwatchGap = 8.0f;
+// Lo que va debajo de la rueda (o a su derecha): hexadecimal, recientes y paleta.
+constexpr float kPickerSwatches = kPickerHex + 14.0f + kPickerSection + kPickerSwatch + 14.0f + kPickerSection +
+                                  kPickerSwatch * 2.0f + kPickerSwatchGap;
+constexpr float kPickerSwatchColumn = 244.0f;
+constexpr float kPickerColumnGap = 24.0f;
+constexpr float kPickerPadX = 16.0f;
+constexpr float kPickerPadBottom = 16.0f;
+// Alto del selector con la rueda encima de lo demás.
+constexpr float kPickerTall = kPickerPadTop + kPickerWheel + 14.0f + kPickerSwatches + kPickerPadBottom;
+
+// Color actual | el anterior en una píldora a la derecha de una cabecera. Devuelve si se
+// tocó el anterior.
+bool colorPill(ImDrawList* dl, float right, float cy, const float current[3], const float previous[3]) {
+    const ImRect pill(ImVec2(right - pt(56.0f), cy - pt(13.0f)), ImVec2(right, cy + pt(13.0f)));
+    const float mid = pill.GetCenter().x;
+    const float radius = pt(8.0f);
+    dl->AddRectFilled(pill.Min, ImVec2(mid, pill.Max.y), ui::fromFloat(current), radius, ImDrawFlags_RoundCornersLeft);
+    dl->AddRectFilled(ImVec2(mid, pill.Min.y), pill.Max, ui::fromFloat(previous), radius, ImDrawFlags_RoundCornersRight);
+    ui::outline(dl, pill, radius, IM_COL32(255, 255, 255, 46), ui::hairline());
+    return ui::pressable("##previous", ImRect(ImVec2(mid, pill.Min.y), pill.Max)).clicked;
+}
+
+
+// Casilla de ver u ocultar de una fila de capa. `onAccent`: la fila está elegida (fondo de
+// acento), así que la casilla va en blanco.
+void visibilityBox(ImDrawList* dl, ImGuiID animId, const ImRect& area, bool checked, bool onAccent, const Press& press) {
+    const ImVec2 center = area.GetCenter();
+    const ImRect box(ImVec2(center.x - pt(11.0f), center.y - pt(11.0f)), ImVec2(center.x + pt(11.0f), center.y + pt(11.0f)));
+    const float visible = ui::anim::follow(animId, checked ? 1.0f : 0.0f, 22.0f);
+    const ImU32 fill = onAccent ? IM_COL32_WHITE : th::kAccent;
+    const float radius = pt(6.0f);
+    if (visible < 0.999f) {
+        ui::outline(dl, box, radius,
+                    ui::withAlpha(onAccent ? IM_COL32(255, 255, 255, 204) : IM_COL32(255, 255, 255, 102), 1.0f - visible),
+                    pt(1.5f));
+    }
+    if (visible > 0.001f) {
+        dl->AddRectFilled(box.Min, box.Max, ui::withAlpha(fill, visible), radius);
+        ui::icon(dl, icon::kCheck, center, 14.0f, ui::withAlpha(onAccent ? th::kAccent : IM_COL32_WHITE, visible));
+    }
+    if (press.held) {
+        dl->AddRectFilled(box.Min, box.Max, IM_COL32(255, 255, 255, 40), radius);
+    }
 }
 
 } // namespace
@@ -325,12 +333,14 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     constexpr float kStrip = 8.0f + 54.0f + 8.0f;   // pestañas con su margen
 
 #ifdef SDL_PLATFORM_EMSCRIPTEN
-    const char* shareNote = "Se descarga con el navegador, a tamaño completo. Si ocultas el fondo, queda transparente.";
-#elif defined(SDL_PLATFORM_ANDROID)
-    const char* shareNote = "Se guarda en Descargas, a tamaño completo. Si ocultas el fondo, queda transparente.";
-#else
     const char* shareNote =
-        "Se guarda en la carpeta de descargas, a tamaño completo. Si ocultas el fondo, queda transparente.";
+        "Se descarga con el navegador, a tamaño completo. Si ocultas el color de fondo (en Capas), queda transparente.";
+#elif defined(SDL_PLATFORM_ANDROID)
+    const char* shareNote =
+        "Se guarda en Descargas, a tamaño completo. Si ocultas el color de fondo (en Capas), queda transparente.";
+#else
+    const char* shareNote = "Se guarda en la carpeta de descargas, a tamaño completo. Si ocultas el color de fondo "
+                            "(en Capas), queda transparente.";
 #endif
     const float noteWidth = panelWidth - pt(8.0f + 10.0f) * 2.0f;
 
@@ -554,7 +564,8 @@ void Ui::ndiPanel(Canvas& canvas, UiRequests& requests) {
     const char* note = available ? "Los receptores ven el lienzo completo, sin el zoom ni la interfaz."
                                  : "Un navegador no puede emitir NDI. Para emitir, usa la app de Android.";
 #else
-    const char* note = available ? "Los receptores ven el lienzo completo, sin el zoom ni la interfaz."
+    const char* note = available ? "Los receptores ven el lienzo completo, sin el zoom ni la interfaz. Si ocultas el "
+                                   "color de fondo (en Capas), les llega con transparencia."
                                  : "Esta compilación no incluye el SDK de NDI.";
 #endif
     const float noteHeight = ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f), textWidth,
@@ -682,10 +693,16 @@ void Ui::layersPanel(Canvas& canvas) {
     // guarda al salir de ella (volver, cerrar el panel o el botón atrás).
     if (m_panel != Panel::Layers) {
         m_blendPage = false;
+        m_backgroundPage = false;
     }
     if (m_blendEditing && !m_blendPage) {
         canvas.finishLayerEdit();
         m_blendEditing = false;
+    }
+    // Lo mismo con los colores de fondo que se prueban en su página.
+    if (m_backgroundEditing && !m_backgroundPage) {
+        canvas.finishBackgroundEdit();
+        m_backgroundEditing = false;
     }
 
     // Miniatura con la proporción del lienzo, en una columna de 64 pt.
@@ -696,11 +713,17 @@ void Ui::layersPanel(Canvas& canvas) {
     constexpr float kRowGap = 4.0f;
     constexpr float kListPad = 8.0f;
     constexpr float kFooter = 10.0f + 34.0f + 12.0f;   // opacidad y fusión con su margen
-    const float listHeight = rowHeight * static_cast<float>(count) + kRowGap * static_cast<float>(count - 1);
+    // Las capas y, al final, el color de fondo.
+    const float listHeight = rowHeight * static_cast<float>(count + 1) + kRowGap * static_cast<float>(count);
     const float listContent = th::kHeaderHeight + kListPad + listHeight + kListPad + kFooter;
-    // La lista de modos pide más alto que unas pocas capas (y se desplaza si no cabe). El
-    // panel cambia de alto con una animación.
-    const float target = m_blendPage ? std::max(listContent, th::kHeaderHeight + 400.0f + kFooter) : listContent;
+    // La lista de modos pide más alto que unas pocas capas y el color de fondo, el del
+    // selector (y se desplazan si no caben). El panel cambia de alto con una animación.
+    float target = listContent;
+    if (m_blendPage) {
+        target = std::max(listContent, th::kHeaderHeight + 400.0f + kFooter);
+    } else if (m_backgroundPage) {
+        target = th::kHeaderHeight + kPickerTall + kFooter;
+    }
     const float content = ui::anim::follow(ImHashStr("##layers-height"), target, 20.0f, 0.2f);
     const float width = pt(340.0f);
     const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * 2.5f;
@@ -735,6 +758,16 @@ void Ui::layersPanel(Canvas& canvas) {
         if (backPress.clicked) {
             m_blendPage = false;
         }
+    } else if (m_backgroundPage) {
+        // Cabecera del color de fondo: volver y el color actual | el de antes de abrirla.
+        bool back = false;
+        const float cy = ui::parts::backHeader(dl, f.content, y, "##background-back", "Color de fondo", &back);
+        if (colorPill(dl, f.content.Max.x - pt(12.0f), cy, canvas.background().color, m_previousBackground)) {
+            setTargetColor(canvas, ColorTarget::Background, m_previousBackground);
+        }
+        if (back) {
+            m_backgroundPage = false;
+        }
     } else {
         // Cabecera: cuántas hay y añadir.
         const float cy = panelHeader(dl, f.content, y, "Capas");
@@ -767,13 +800,22 @@ void Ui::layersPanel(Canvas& canvas) {
     const ImRect view(ImVec2(f.content.Min.x, y), ImVec2(f.content.Max.x, listBottom));
     if (m_blendPage) {
         blendList(canvas, dl, view);
+    } else if (m_backgroundPage) {
+        const float body = pt(kPickerTall);
+        const bool scrolls = body > view.GetHeight() + 0.5f;
+        const float scroll = scrolls ? ui::beginScroll("##background-body", view, body) : 0.0f;
+        colorPicker(canvas, dl, ColorTarget::Background, view.Min.x + pt(kPickerPadX), view.Max.x - pt(kPickerPadX),
+                    view.Min.y - scroll, kPickerWheel, false);
+        if (scrolls) {
+            ui::endScroll();
+        }
     } else {
-        // Lista, de la capa de arriba a la de abajo.
+        // Lista, de la capa de arriba a la de abajo, y el color de fondo.
         const float left = f.content.Min.x + pt(8.0f);
         const float right = f.content.Max.x - pt(8.0f);
         const int rows = layers.count();
-        const float rowsHeight = pt(kListPad * 2.0f + rowHeight * static_cast<float>(rows) +
-                                    kRowGap * static_cast<float>(rows - 1));
+        const float rowsHeight = pt(kListPad * 2.0f + rowHeight * static_cast<float>(rows + 1) +
+                                    kRowGap * static_cast<float>(rows));
         if (m_scrollToLayer >= 0) {
             const int index = layers.indexOf(static_cast<uint32_t>(m_scrollToLayer));
             if (index >= 0) {
@@ -891,25 +933,7 @@ void Ui::layersPanel(Canvas& canvas) {
             }
 
             // Casilla de visibilidad.
-            const ImVec2 boxCenter = visibility.GetCenter();
-            const ImRect box(ImVec2(boxCenter.x - pt(11.0f), boxCenter.y - pt(11.0f)),
-                             ImVec2(boxCenter.x + pt(11.0f), boxCenter.y + pt(11.0f)));
-            const float visible = ui::anim::follow(ImGui::GetID("##visible") + 5u, layer.visible ? 1.0f : 0.0f, 22.0f);
-            const ImU32 fill = active ? IM_COL32_WHITE : th::kAccent;
-            const float boxRadius = pt(6.0f);
-            if (visible < 0.999f) {
-                ui::outline(dl, box, boxRadius,
-                            ui::withAlpha(active ? IM_COL32(255, 255, 255, 204) : IM_COL32(255, 255, 255, 102),
-                                          1.0f - visible),
-                            pt(1.5f));
-            }
-            if (visible > 0.001f) {
-                dl->AddRectFilled(box.Min, box.Max, ui::withAlpha(fill, visible), boxRadius);
-                ui::icon(dl, icon::kCheck, boxCenter, 14.0f, ui::withAlpha(active ? th::kAccent : IM_COL32_WHITE, visible));
-            }
-            if (visibilityPress.held) {
-                dl->AddRectFilled(box.Min, box.Max, IM_COL32(255, 255, 255, 40), boxRadius);
-            }
+            visibilityBox(dl, ImGui::GetID("##visible") + 5u, visibility, layer.visible, active, visibilityPress);
 
             if (visibilityPress.clicked) {
                 canvas.setLayerVisible(index, !layer.visible);
@@ -925,12 +949,32 @@ void Ui::layersPanel(Canvas& canvas) {
             }
             ImGui::PopID();
         }
+        const float backgroundTop = y + pt(kListPad) - scroll + pt((rowHeight + kRowGap) * static_cast<float>(rows));
+        const ImRect backgroundRect(ImVec2(left, backgroundTop), ImVec2(right, backgroundTop + pt(rowHeight)));
+        if (backgroundRect.Max.y >= view.Min.y && backgroundRect.Min.y <= view.Max.y) {
+            backgroundRow(canvas, dl, backgroundRect, thumbWidth, thumbHeight);
+        }
         ui::endScroll();
+    }
+
+    // Pie del color de fondo: dejarlo transparente.
+    ui::separator(dl, f.content.Min.x, f.content.Max.x, listBottom, th::kRule);
+    if (m_backgroundPage) {
+        const ImRect row(ImVec2(f.content.Min.x + pt(8.0f), listBottom + pt(6.0f)),
+                         ImVec2(f.content.Max.x - pt(8.0f), listBottom + pt(6.0f + 44.0f)));
+        bool transparent = !canvas.background().visible;
+        if (toggleRow(dl, "##transparent", row, icon::kEyeOff, "Fondo transparente", &transparent)) {
+            CanvasBackground background = canvas.background();
+            background.visible = !transparent;
+            canvas.setBackground(background, false);
+            m_backgroundEditing = true;
+        }
+        endPanel(f);
+        return;
     }
 
     // Pie: opacidad de la capa activa (barra de relleno) y su modo de fusión, que abre la
     // lista de modos.
-    ui::separator(dl, f.content.Min.x, f.content.Max.x, listBottom, th::kRule);
     const int activeIndex = layers.activeIndex();
     const float footerTop = listBottom + pt(10.0f);
     const float chipWidth = pt(124.0f);
@@ -961,6 +1005,58 @@ void Ui::layersPanel(Canvas& canvas) {
         m_layerMenu = false;
     }
     endPanel(f);
+}
+
+void Ui::backgroundRow(Canvas& canvas, ImDrawList* dl, const ImRect& row, float thumbWidth, float thumbHeight) {
+    const CanvasBackground& background = canvas.background();
+    ImGui::PushID("##background-row");
+    const float rowCy = row.GetCenter().y;
+    const ImRect visibility(ImVec2(row.Max.x - pt(4.0f + 40.0f), rowCy - pt(20.0f)),
+                            ImVec2(row.Max.x - pt(4.0f), rowCy + pt(20.0f)));
+    const Press visibilityPress = ui::pressable("##visible", visibility);
+    const ImGuiID rowId = ImGui::GetID("##row");
+    const Press rowPress = ui::pressable(rowId, row);
+    pressFeedback(dl, rowId, row, rowPress, pt(th::kRowRadius));
+
+    // La muestra con la forma del lienzo, como las miniaturas de las capas; oculto, el
+    // damero de lo transparente.
+    const ImVec2 thumbMin(row.Min.x + pt(6.0f) + pt(64.0f - thumbWidth) * 0.5f, rowCy - pt(thumbHeight) * 0.5f);
+    const ImRect thumb(thumbMin, ImVec2(thumbMin.x + pt(thumbWidth), thumbMin.y + pt(thumbHeight)));
+    const float thumbRadius = pt(6.0f);
+    if (background.visible) {
+        dl->AddRectFilled(thumb.Min, thumb.Max, ui::fromFloat(background.color), thumbRadius);
+    } else {
+        ui::checkerboard(dl, thumb, thumbRadius, std::max(pt(4.0f), ui::hairline()));
+    }
+    dl->AddRect(thumb.Min, thumb.Max, IM_COL32(255, 255, 255, 36), thumbRadius, 0, ui::hairline());
+
+    const float dim = background.visible ? 1.0f : 0.5f;
+    const float textX = row.Min.x + pt(6.0f + 64.0f + 12.0f);
+    const float textRight = visibility.Min.x - pt(6.0f);
+    ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(textX, rowCy - pt(8.0f)), Align::Left,
+              ui::withAlpha(th::kLabel, dim), "Color de fondo", textRight - textX);
+    char detail[32];
+    if (background.visible) {
+        ui::formatHex(background.color, detail, sizeof(detail));
+    } else {
+        std::snprintf(detail, sizeof(detail), "Transparente");
+    }
+    ui::label(dl, Weight::Regular, th::kCaption, ImVec2(textX, rowCy + pt(10.0f)), Align::Left,
+              IM_COL32(235, 235, 245, 153), detail, textRight - textX);
+    visibilityBox(dl, ImGui::GetID("##visible") + 5u, visibility, background.visible, false, visibilityPress);
+
+    if (visibilityPress.clicked) {
+        CanvasBackground next = background;
+        next.visible = !next.visible;
+        canvas.setBackground(next);
+    } else if (rowPress.clicked) {
+        // Su página: el selector de color (cada color que se prueba se ve en el lienzo).
+        m_backgroundPage = true;
+        m_layerMenu = false;
+        m_hexEditing = false;
+        std::copy(background.color, background.color + 3, m_previousBackground);
+    }
+    ImGui::PopID();
 }
 
 void Ui::blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view) {
@@ -1247,8 +1343,27 @@ void Ui::layerMenu(Canvas& canvas) {
 // Color
 // -----------------------------------------------------------------------------
 
+void Ui::targetColor(const Canvas& canvas, ColorTarget target, float rgb[3]) const {
+    const float* color = target == ColorTarget::Background ? canvas.background().color : canvas.brushSettings().color;
+    std::copy(color, color + 3, rgb);
+}
+
+void Ui::setTargetColor(Canvas& canvas, ColorTarget target, const float rgb[3]) {
+    if (target == ColorTarget::Brush) {
+        setColor(canvas, rgb);
+        return;
+    }
+    // Elegir un color de fondo lo muestra. Todo lo que se pruebe en la página es un solo
+    // paso de deshacer: se guarda al salir de ella.
+    CanvasBackground background = canvas.background();
+    std::copy(rgb, rgb + 3, background.color);
+    background.visible = true;
+    canvas.setBackground(background, false);
+    m_backgroundEditing = true;
+}
+
 void Ui::syncHsv(const float rgb[3]) {
-    if (sameColor(rgb, m_hsvSource)) {
+    if (ui::sameColor(rgb, m_hsvSource)) {
         return;
     }
     float h = 0.0f;
@@ -1269,67 +1384,26 @@ void Ui::syncHsv(const float rgb[3]) {
     std::copy(rgb, rgb + 3, m_hsvSource);
 }
 
-void Ui::applyHsv(Canvas& canvas) {
+void Ui::applyHsv(Canvas& canvas, ColorTarget target) {
     float rgb[3];
     ImGui::ColorConvertHSVtoRGB(m_hsv[0], m_hsv[1], m_hsv[2], rgb[0], rgb[1], rgb[2]);
-    setColor(canvas, rgb);
+    setTargetColor(canvas, target, rgb);
     std::copy(rgb, rgb + 3, m_hsvSource);
 }
 
-void Ui::colorPanel(Canvas& canvas) {
-    const Layout& L = m_layout;
-    constexpr float kPadTop = 14.0f;
-    constexpr float kWheel = 236.0f;
-    constexpr float kHex = 32.0f;
-    constexpr float kSection = 14.0f + 10.0f;   // rótulo y hueco
-    constexpr float kSwatch = 32.0f;
-    constexpr float kSwatchGap = 8.0f;
-    constexpr float kSwatches = kHex + 14.0f + kSection + kSwatch + 14.0f + kSection + kSwatch * 2.0f + kSwatchGap;
-    constexpr float kSwatchColumn = 244.0f;
-    constexpr float kColumnGap = 24.0f;
-    constexpr float kPadX = 16.0f;
-    constexpr float kPadBottom = 16.0f;
-    // Si no cabe de alto (un teléfono en horizontal), la rueda va a la izquierda y el
-    // resto a su derecha, y la rueda encoge un poco si hace falta.
-    const float available = (L.bottom - L.popoverTop) / ui::scale();
-    const float tall = th::kHeaderHeight + kPadTop + kWheel + 14.0f + kSwatches + kPadBottom;
-    const bool wide = !L.narrow && tall > available &&
-                      L.right - L.left >= pt(kPadX * 2.0f + kWheel + kColumnGap + kSwatchColumn);
-    const float wheel =
-        wide ? std::clamp(available - th::kHeaderHeight - kPadTop - kPadBottom, 180.0f, kWheel) : kWheel;
-    const float content = wide ? th::kHeaderHeight + kPadTop + std::max(wheel, kSwatches) + kPadBottom : tall;
-    const float width = pt(wide ? kPadX * 2.0f + wheel + kColumnGap + kSwatchColumn : 300.0f);
-    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * 3.5f;
-    PanelFrame f;
-    if (!beginPanel(f, Panel::Color, "##panel-color", L.rightBar.Max.x - width, width, pt(content), anchorX, true)) {
-        return;
-    }
-    ImDrawList* dl = f.dl;
-    const ImGuiIO& io = ImGui::GetIO();
-    float* color = canvas.brushSettings().color;
-    syncHsv(color);
-    float y = f.content.Min.y - f.scroll;
 
-    // Cabecera con el color actual | el anterior (tocar el anterior lo recupera).
-    const float cy = panelHeader(dl, f.content, y, "Color");
-    {
-        const ImRect pill(ImVec2(f.content.Max.x - pt(12.0f + 56.0f), cy - pt(13.0f)),
-                          ImVec2(f.content.Max.x - pt(12.0f), cy + pt(13.0f)));
-        const float mid = pill.GetCenter().x;
-        const float radius = pt(8.0f);
-        dl->AddRectFilled(pill.Min, ImVec2(mid, pill.Max.y), ui::fromFloat(color), radius, ImDrawFlags_RoundCornersLeft);
-        dl->AddRectFilled(ImVec2(mid, pill.Min.y), pill.Max, ui::fromFloat(m_previousColor), radius,
-                          ImDrawFlags_RoundCornersRight);
-        ui::outline(dl, pill, radius, IM_COL32(255, 255, 255, 46), ui::hairline());
-        const Press previous = ui::pressable("##previous", ImRect(ImVec2(mid, pill.Min.y), pill.Max));
-        if (previous.clicked) {
-            setColor(canvas, m_previousColor);
-            syncHsv(color);
-        }
-    }
-    y += pt(th::kHeaderHeight + kPadTop);
-    float left = f.content.Min.x + pt(kPadX);
-    const float right = f.content.Max.x - pt(kPadX);
+void Ui::colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float left, float right, float y, float wheel,
+                     bool wide) {
+    const ImGuiIO& io = ImGui::GetIO();
+    float color[3];
+    targetColor(canvas, target, color);
+    syncHsv(color);
+    auto choose = [&](const float rgb[3]) {
+        setTargetColor(canvas, target, rgb);
+        targetColor(canvas, target, color);
+        syncHsv(color);
+    };
+    y += pt(kPickerPadTop);
 
     // Rueda de tono con el cuadro de saturación (horizontal) y brillo (vertical).
     const ImVec2 center(wide ? left + pt(wheel * 0.5f) : (left + right) * 0.5f, y + pt(wheel * 0.5f));
@@ -1343,9 +1417,11 @@ void Ui::colorPanel(Canvas& canvas) {
     ImGui::ItemAdd(square, squareId);
     ImGui::ButtonBehavior(square, squareId, &hovered, &held, ImGuiButtonFlags_PressedOnClick | ImGuiButtonFlags_NoNavFocus);
     if (held) {
+        ui::claimDrag();   // si el panel se desplaza, arrastrar aquí cambia el color
         m_hsv[1] = std::clamp((io.MousePos.x - square.Min.x) / square.GetWidth(), 0.0f, 1.0f);
         m_hsv[2] = 1.0f - std::clamp((io.MousePos.y - square.Min.y) / square.GetHeight(), 0.0f, 1.0f);
-        applyHsv(canvas);
+        applyHsv(canvas, target);
+        targetColor(canvas, target, color);
     }
     const ImGuiID ringId = ImGui::GetID("##hue");
     const ImRect ringBox(ImVec2(center.x - outer, center.y - outer), ImVec2(center.x + outer, center.y + outer));
@@ -1360,12 +1436,14 @@ void Ui::colorPanel(Canvas& canvas) {
                               ImGuiButtonFlags_PressedOnClick | ImGuiButtonFlags_NoNavFocus);
     }
     if (ringHeld && distance > 1.0f) {
+        ui::claimDrag();
         float hue = std::atan2(dx, -dy) / (2.0f * IM_PI);
         if (hue < 0.0f) {
             hue += 1.0f;
         }
         m_hsv[0] = hue;
-        applyHsv(canvas);
+        applyHsv(canvas, target);
+        targetColor(canvas, target, color);
     }
 
     ui::hueRing(dl, center, inner, outer);
@@ -1390,17 +1468,16 @@ void Ui::colorPanel(Canvas& canvas) {
     knob(ImVec2(square.Min.x + m_hsv[1] * square.GetWidth(), square.Min.y + (1.0f - m_hsv[2]) * square.GetHeight()),
          pt(11.0f), ui::fromFloat(color));
     if (wide) {
-        left += pt(wheel + kColumnGap);
+        left += pt(wheel + kPickerColumnGap);
     } else {
         y += pt(wheel + 14.0f);
     }
 
     // Hexadecimal (se puede escribir).
     {
-        const ImRect row(ImVec2(left, y), ImVec2(right, y + pt(kHex)));
+        const ImRect row(ImVec2(left, y), ImVec2(right, y + pt(kPickerHex)));
         char hex[16];
-        std::snprintf(hex, sizeof(hex), "#%02X%02X%02X", static_cast<int>(std::lround(color[0] * 255.0f)),
-                      static_cast<int>(std::lround(color[1] * 255.0f)), static_cast<int>(std::lround(color[2] * 255.0f)));
+        ui::formatHex(color, hex, sizeof(hex));
         const float fieldWidth = pt(112.0f);
         const ImRect field(ImVec2(right - fieldWidth, row.Min.y), row.Max);
         ui::sectionLabel(dl, left, field.Min.x - pt(10.0f), row.GetCenter().y, "HEX");
@@ -1413,9 +1490,8 @@ void Ui::colorPanel(Canvas& canvas) {
             }
             if (enter || (!active && m_hexFocusFrames == 0)) {
                 float rgb[3];
-                if (parseHex(m_hexBuffer, rgb)) {
-                    setColor(canvas, rgb);
-                    syncHsv(color);
+                if (ui::parseHex(m_hexBuffer, rgb)) {
+                    choose(rgb);
                 } else if (enter) {
                     notify("Escribe el color como #RRGGBB", Notice::Warning, 2500);
                 }
@@ -1437,42 +1513,72 @@ void Ui::colorPanel(Canvas& canvas) {
             }
         }
     }
-    y += pt(kHex + 14.0f);
+    y += pt(kPickerHex + 14.0f);
 
     // Recientes y paleta: muestras cuadradas en seis columnas.
-    const float gap = pt(kSwatchGap);
+    const float gap = pt(kPickerSwatchGap);
     const float cell = (right - left - gap * 5.0f) / 6.0f;
     auto cellRect = [&](int column, float top) {
         const float x0 = left + (cell + gap) * static_cast<float>(column);
-        return ImRect(ImVec2(x0, top), ImVec2(x0 + cell, top + pt(kSwatch)));
+        return ImRect(ImVec2(x0, top), ImVec2(x0 + cell, top + pt(kPickerSwatch)));
     };
     ui::sectionLabel(dl, left, right, y + pt(7.0f), "RECIENTES");
-    y += pt(kSection);
+    y += pt(kPickerSection);
     if (m_recentCount == 0) {
-        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left, y + pt(kSwatch * 0.5f)), Align::Left,
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left, y + pt(kPickerSwatch * 0.5f)), Align::Left,
                   th::kTertiaryLabel, "Aparecerán los colores que uses", right - left);
     }
     for (int i = 0; i < m_recentCount; ++i) {
         ImGui::PushID(i);
-        if (ui::swatch("##recent", cellRect(i, y), ui::fromFloat(m_recent[i]), sameColor(m_recent[i], color))) {
-            setColor(canvas, m_recent[i]);
-            syncHsv(color);
+        if (ui::swatch("##recent", cellRect(i, y), ui::fromFloat(m_recent[i]), ui::sameColor(m_recent[i], color))) {
+            choose(m_recent[i]);
         }
         ImGui::PopID();
     }
-    y += pt(kSwatch + 14.0f);
+    y += pt(kPickerSwatch + 14.0f);
     ui::sectionLabel(dl, left, right, y + pt(7.0f), "PALETA");
-    y += pt(kSection);
+    y += pt(kPickerSection);
     for (int i = 0; i < 12; ++i) {
         float rgb[3];
-        toFloat(kPalette[i], rgb);
+        ui::toFloat(kPalette[i], rgb);
         ImGui::PushID(100 + i);
-        if (ui::swatch("##palette", cellRect(i % 6, y + (pt(kSwatch) + gap) * static_cast<float>(i / 6)), kPalette[i],
-                       sameColor(rgb, color))) {
-            setColor(canvas, rgb);
-            syncHsv(color);
+        if (ui::swatch("##palette", cellRect(i % 6, y + (pt(kPickerSwatch) + gap) * static_cast<float>(i / 6)),
+                       kPalette[i], ui::sameColor(rgb, color))) {
+            choose(rgb);
         }
         ImGui::PopID();
     }
+}
+
+void Ui::colorPanel(Canvas& canvas) {
+    const Layout& L = m_layout;
+    // Si no cabe de alto (un teléfono en horizontal), la rueda va a la izquierda y el
+    // resto a su derecha, y la rueda encoge un poco si hace falta.
+    const float available = (L.bottom - L.popoverTop) / ui::scale();
+    const float tall = th::kHeaderHeight + kPickerTall;
+    const bool wide = !L.narrow && tall > available &&
+                      L.right - L.left >= pt(kPickerPadX * 2.0f + kPickerWheel + kPickerColumnGap + kPickerSwatchColumn);
+    const float wheel = wide ? std::clamp(available - th::kHeaderHeight - kPickerPadTop - kPickerPadBottom, 180.0f,
+                                          kPickerWheel)
+                             : kPickerWheel;
+    const float content =
+        wide ? th::kHeaderHeight + kPickerPadTop + std::max(wheel, kPickerSwatches) + kPickerPadBottom : tall;
+    const float width = pt(wide ? kPickerPadX * 2.0f + wheel + kPickerColumnGap + kPickerSwatchColumn : 300.0f);
+    const float anchorX = L.rightBar.Min.x + pt(th::kBarPadding) + L.barButton * 3.5f;
+    PanelFrame f;
+    if (!beginPanel(f, Panel::Color, "##panel-color", L.rightBar.Max.x - width, width, pt(content), anchorX, true)) {
+        return;
+    }
+    ImDrawList* dl = f.dl;
+    float y = f.content.Min.y - f.scroll;
+
+    // Cabecera con el color actual | el anterior (tocar el anterior lo recupera).
+    const float cy = panelHeader(dl, f.content, y, "Color");
+    if (colorPill(dl, f.content.Max.x - pt(12.0f), cy, canvas.brushSettings().color, m_previousColor)) {
+        setColor(canvas, m_previousColor);
+    }
+    y += pt(th::kHeaderHeight);
+    colorPicker(canvas, dl, ColorTarget::Brush, f.content.Min.x + pt(kPickerPadX), f.content.Max.x - pt(kPickerPadX),
+                y, wheel, wide);
     endPanel(f);
 }

@@ -90,8 +90,8 @@ bool selectRect(Canvas& canvas, const IRect& rect) {
 TEST_CASE(color_drop_fills_inside_the_lines_without_a_halo) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    drawFrame(canvas, 1, {4, 4, 28, 28});
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    drawFrame(canvas, 0, {4, 4, 28, 28});
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
     setColor(canvas, 1.0f, 0.0f, 0.0f);
 
     REQUIRE(canvas.beginFill(16.0f, 16.0f, 0.3f) == Canvas::Edit::Done);
@@ -100,7 +100,7 @@ TEST_CASE(color_drop_fills_inside_the_lines_without_a_halo) {
     CHECK(!canvas.filling());
     CHECK_EQ(canvas.history().undoCount(), 1);
 
-    const std::vector<uint8_t> layer = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layer = layerPixels(canvas, 0);
     CHECK_PIXEL(at(layer, canvas, 16, 16), kRed, 0);
     CHECK_PIXEL(at(layer, canvas, 7, 7), kRed, 0);         // la esquina de dentro
     // El borde suavizado queda encima del relleno: rojo oscuro, sin blanco por detrás.
@@ -115,9 +115,9 @@ TEST_CASE(color_drop_fills_inside_the_lines_without_a_halo) {
 
     // Un paso de deshacer, exacto.
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), layer), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), layer), 0);
 }
 
 TEST_CASE(color_drop_does_not_cross_a_diagonal_line) {
@@ -126,12 +126,12 @@ TEST_CASE(color_drop_does_not_cross_a_diagonal_line) {
     // Línea de un píxel en diagonal: por arriba a la derecha y por abajo a la izquierda
     // solo se tocan por las esquinas.
     for (int i = 0; i < 16; ++i) {
-        fillLayer(canvas, 1, {i, i, i + 1, i + 1}, 0.0f, 0.0f, 0.0f);
+        fillLayer(canvas, 0, {i, i, i + 1, i + 1}, 0.0f, 0.0f, 0.0f);
     }
     setColor(canvas, 0.0f, 0.0f, 1.0f);
     REQUIRE(canvas.beginFill(12.5f, 2.5f, 0.3f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    const std::vector<uint8_t> layer = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layer = layerPixels(canvas, 0);
     for (int i = 0; i < 15; ++i) {
         CHECK_PIXEL(at(layer, canvas, i + 1, i), kBlue, 0);    // encima de la línea
         CHECK_PIXEL(at(layer, canvas, i, i), kBlack, 0);       // la línea
@@ -143,9 +143,9 @@ TEST_CASE(color_drop_threshold_changes_live_and_cancel_restores) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     // Rojo a la izquierda y rojo algo más claro a la derecha (60 niveles de diferencia).
-    fillLayer(canvas, 1, {0, 0, 16, 32}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {16, 0, 32, 32}, 1.0f, 60.0f / 255.0f, 60.0f / 255.0f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {0, 0, 16, 32}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {16, 0, 32, 32}, 1.0f, 60.0f / 255.0f, 60.0f / 255.0f);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
     const std::vector<uint8_t> seenBefore = composite(canvas);
     setColor(canvas, 0.0f, 0.0f, 1.0f);
 
@@ -157,7 +157,7 @@ TEST_CASE(color_drop_threshold_changes_live_and_cancel_restores) {
     CHECK_PIXEL(at(seen, canvas, 15, 20), kBlue, 0);
     CHECK_PIXEL(at(seen, canvas, 16, 20), (Pixel{255, 60, 60, 255}), 0);
     // Mientras se ajusta, la capa no cambia.
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
 
     canvas.setFillThreshold(0.5f);
     seen = composite(canvas);
@@ -172,22 +172,22 @@ TEST_CASE(color_drop_threshold_changes_live_and_cancel_restores) {
     CHECK(!canvas.endFill(false));
     CHECK(!canvas.filling());
     CHECK_EQ(test::maxDifference(composite(canvas), seenBefore), 0);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
     CHECK_EQ(canvas.history().undoCount(), 0);
 
     // Con el umbral alto se aplica en todo.
     REQUIRE(canvas.beginFill(4.0f, 4.0f, 0.5f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    CHECK_PIXEL(at(layerPixels(canvas, 1), canvas, 30, 30), kBlue, 0);
+    CHECK_PIXEL(at(layerPixels(canvas, 0), canvas, 30, 30), kBlue, 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
 }
 
 TEST_CASE(color_drop_preview_matches_commit) {
     Canvas canvas;
     REQUIRE(canvas.init(40, 40));
-    drawFrame(canvas, 1, {6, 6, 34, 34});
-    fillLayer(canvas, 1, {10, 18, 30, 22}, 0.2f, 0.6f, 0.3f, 0.7f);
+    drawFrame(canvas, 0, {6, 6, 34, 34});
+    fillLayer(canvas, 0, {10, 18, 30, 22}, 0.2f, 0.6f, 0.3f, 0.7f);
     setColor(canvas, 0.9f, 0.5f, 0.1f);
     REQUIRE(canvas.beginFill(12.0f, 12.0f, 0.4f) == Canvas::Edit::Done);
     const std::vector<uint8_t> preview = composite(canvas);
@@ -200,18 +200,18 @@ TEST_CASE(color_drop_uses_the_reference_layer) {
     REQUIRE(canvas.init(32, 32));
     // Capa 1: el marco (el dibujo de líneas). Capa 2: una franja roja que lo cruza. Se
     // rellena en una capa nueva encima.
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 0.0f, 0.0f, 0.0f);
-    test::fillRect(canvas.layers().at(1).target, {10, 10, 22, 22}, 0.0f, 0.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 0.0f, 0.0f, 0.0f);
+    test::fillRect(canvas.layers().at(0).target, {10, 10, 22, 22}, 0.0f, 0.0f, 0.0f, 0.0f);
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 2, {0, 0, 32, 16}, 1.0f, 0.0f, 0.0f);
-    canvas.setReferenceLayer(1);
+    fillLayer(canvas, 1, {0, 0, 32, 16}, 1.0f, 0.0f, 0.0f);
+    canvas.setReferenceLayer(0);
     REQUIRE(canvas.addLayer());
-    REQUIRE(canvas.layers().activeIndex() == 3);
+    REQUIRE(canvas.layers().activeIndex() == 2);
     setColor(canvas, 0.0f, 0.0f, 1.0f);
 
     REQUIRE(canvas.beginFill(16.0f, 16.0f, 0.1f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    const std::vector<uint8_t> layer = layerPixels(canvas, 3);
+    const std::vector<uint8_t> layer = layerPixels(canvas, 2);
     CHECK_PIXEL(at(layer, canvas, 12, 12), kBlue, 0);   // dentro del marco, bajo el rojo
     CHECK_PIXEL(at(layer, canvas, 12, 20), kBlue, 0);   // dentro, sin rojo
     CHECK_PIXEL(at(layer, canvas, 9, 16), kBlue, 0);    // bajo el borde de la línea
@@ -222,10 +222,10 @@ TEST_CASE(color_drop_uses_the_reference_layer) {
     // Sin referencia cuenta lo que se ve: la franja roja corta la zona.
     REQUIRE(canvas.undo());
     canvas.setReferenceLayer(-1);
-    canvas.selectLayer(3);
+    canvas.selectLayer(2);
     REQUIRE(canvas.beginFill(16.0f, 20.0f, 0.1f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    const std::vector<uint8_t> seen = layerPixels(canvas, 3);
+    const std::vector<uint8_t> seen = layerPixels(canvas, 2);
     CHECK_PIXEL(at(seen, canvas, 12, 20), kBlue, 0);
     CHECK_PIXEL(at(seen, canvas, 12, 12), kClear, 0);
 }
@@ -240,7 +240,7 @@ TEST_CASE(color_drop_respects_selection) {
     // Todo el lienzo es la misma zona blanca: solo cambia lo seleccionado.
     REQUIRE(canvas.beginFill(4.0f, 4.0f, 0.3f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    const std::vector<uint8_t> layer = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layer = layerPixels(canvas, 0);
     CHECK_PIXEL(at(layer, canvas, 4, 4), kBlue, 0);
     CHECK_PIXEL(at(layer, canvas, 15, 30), kBlue, 0);
     CHECK_PIXEL(at(layer, canvas, 16, 4), kClear, 0);
@@ -249,24 +249,24 @@ TEST_CASE(color_drop_respects_selection) {
     CHECK(canvas.hasSelection());
 
     // Una zona que cae entera fuera de la selección no cambia nada ni guarda un paso.
-    fillLayer(canvas, 1, {24, 0, 32, 8}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {24, 0, 32, 8}, 1.0f, 0.0f, 0.0f);
     REQUIRE(canvas.beginFill(28.0f, 4.0f, 0.1f) == Canvas::Edit::Done);
     CHECK(!canvas.endFill(true));
     CHECK_EQ(canvas.history().undoCount(), steps + 1);
-    CHECK_PIXEL(at(layerPixels(canvas, 1), canvas, 28, 4), kRed, 0);
+    CHECK_PIXEL(at(layerPixels(canvas, 0), canvas, 28, 4), kRed, 0);
 }
 
 TEST_CASE(color_drop_with_alpha_lock_recolors_the_paint) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     // Rojo al 50 % sobre el fondo blanco; alrededor la capa está vacía.
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f, 0.5f);
-    canvas.setLayerAlphaLock(1, true);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f, 0.5f);
+    canvas.setLayerAlphaLock(0, true);
     setColor(canvas, 0.0f, 0.0f, 1.0f);
 
     REQUIRE(canvas.beginFill(16.0f, 16.0f, 0.3f) == Canvas::Edit::Done);
     CHECK(canvas.endFill(true));
-    const std::vector<uint8_t> layer = layerPixels(canvas, 1);
+    const std::vector<uint8_t> layer = layerPixels(canvas, 0);
     CHECK_PIXEL(at(layer, canvas, 16, 16), (Pixel{0, 0, 128, 128}), 1);   // azul, con su alfa
     CHECK_PIXEL(at(layer, canvas, 8, 8), (Pixel{0, 0, 128, 128}), 1);
     CHECK_PIXEL(at(layer, canvas, 7, 16), kClear, 0);   // sin el píxel por detrás
@@ -278,15 +278,15 @@ TEST_CASE(color_drop_refuses_hidden_layers_and_points_outside) {
     REQUIRE(canvas.init(16, 16));
     CHECK(canvas.beginFill(-1.0f, 4.0f, 0.3f) == Canvas::Edit::Nothing);
     CHECK(canvas.beginFill(4.0f, 16.0f, 0.3f) == Canvas::Edit::Nothing);
-    canvas.setLayerVisible(1, false);
+    canvas.setLayerVisible(0, false);
     CHECK(canvas.beginFill(4.0f, 4.0f, 0.3f) == Canvas::Edit::Hidden);
     CHECK(!canvas.filling());
     // Una capa que recorta con una base oculta tampoco se ve.
-    canvas.setLayerVisible(1, true);
+    canvas.setLayerVisible(0, true);
     REQUIRE(canvas.addLayer());
-    canvas.setLayerClipping(2, true);
-    canvas.setLayerVisible(1, false);
-    canvas.selectLayer(2);
+    canvas.setLayerClipping(1, true);
+    canvas.setLayerVisible(0, false);
+    canvas.selectLayer(1);
     CHECK(canvas.beginFill(4.0f, 4.0f, 0.3f) == Canvas::Edit::Hidden);
     CHECK(!canvas.filling());
 }
@@ -295,13 +295,13 @@ TEST_CASE(color_drop_ends_before_other_edits_and_undo_removes_it) {
     Canvas canvas;
     REQUIRE(canvas.init(16, 16));
     setColor(canvas, 1.0f, 0.0f, 0.0f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     // Deshacer en medio lo quita (y se puede rehacer, como la selección automática).
     REQUIRE(canvas.beginFill(4.0f, 4.0f, 0.3f) == Canvas::Edit::Done);
     REQUIRE(canvas.undo());
     CHECK(!canvas.filling());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
     CHECK_PIXEL(at(composite(canvas), canvas, 4, 4), kWhite, 0);
     CHECK_EQ(canvas.history().undoCount(), 0);
 
@@ -309,11 +309,11 @@ TEST_CASE(color_drop_ends_before_other_edits_and_undo_removes_it) {
     REQUIRE(canvas.beginFill(4.0f, 4.0f, 0.3f) == Canvas::Edit::Done);
     REQUIRE(canvas.addLayer());
     CHECK(!canvas.filling());
-    CHECK_PIXEL(at(layerPixels(canvas, 1), canvas, 4, 4), kRed, 0);
+    CHECK_PIXEL(at(layerPixels(canvas, 0), canvas, 4, 4), kRed, 0);
     CHECK_EQ(canvas.history().undoCount(), 2);
     // El buffer de trazo vuelve a quedar transparente: mientras se borra en otro sitio,
     // la vista previa del trazo no se lleva el relleno.
-    canvas.selectLayer(1);
+    canvas.selectLayer(0);
     BrushSettings& brush = canvas.brushSettings();
     brush.eraser = true;
     brush.radius = 1.5f;
@@ -324,5 +324,5 @@ TEST_CASE(color_drop_ends_before_other_edits_and_undo_removes_it) {
     canvas.cancelStroke();
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
 }

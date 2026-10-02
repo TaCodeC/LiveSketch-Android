@@ -5,6 +5,8 @@
 
 #include "Test.h"
 
+#include "Canvas/Canvas.h"
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -121,6 +123,13 @@ std::string tempFolder(const char* name) {
     std::filesystem::remove_all(folder);
     std::filesystem::create_directories(folder);
     return folder.string() + "/";
+}
+
+void hideBackground(Canvas& canvas) {
+    CanvasBackground background = canvas.background();
+    background.visible = false;
+    canvas.setBackground(background);
+    canvas.update();
 }
 
 std::ostream& operator<<(std::ostream& out, const Pixel& pixel) {

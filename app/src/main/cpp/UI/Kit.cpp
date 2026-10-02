@@ -6,9 +6,11 @@
 #include <SDL3/SDL_log.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -422,6 +424,51 @@ ImU32 fromFloat(const float rgb[3], float alpha) {
     return IM_COL32(channel(rgb[0]), channel(rgb[1]), channel(rgb[2]), channel(alpha));
 }
 
+void toFloat(ImU32 color, float rgb[3]) {
+    rgb[0] = static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+    rgb[1] = static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+    rgb[2] = static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+}
+
+bool sameColor(const float a[3], const float b[3]) {
+    for (int i = 0; i < 3; ++i) {
+        if (std::fabs(a[i] - b[i]) > 1.0f / 512.0f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseHex(const char* text, float rgb[3]) {
+    char digits[7] = {};
+    int count = 0;
+    for (const char* p = text; *p; ++p) {
+        if (*p == '#' || *p == ' ') {
+            continue;
+        }
+        if (!std::isxdigit(static_cast<unsigned char>(*p)) || count == 6) {
+            return false;
+        }
+        digits[count++] = *p;
+    }
+    if (count == 3) {
+        const char full[7] = {digits[0], digits[0], digits[1], digits[1], digits[2], digits[2], '\0'};
+        std::memcpy(digits, full, sizeof(full));
+    } else if (count != 6) {
+        return false;
+    }
+    const unsigned long value = std::strtoul(digits, nullptr, 16);
+    rgb[0] = static_cast<float>((value >> 16) & 0xFF) / 255.0f;
+    rgb[1] = static_cast<float>((value >> 8) & 0xFF) / 255.0f;
+    rgb[2] = static_cast<float>(value & 0xFF) / 255.0f;
+    return true;
+}
+
+void formatHex(const float rgb[3], char* out, size_t size) {
+    auto channel = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    std::snprintf(out, size, "#%02X%02X%02X", channel(rgb[0]), channel(rgb[1]), channel(rgb[2]));
+}
+
 float luminance(const float rgb[3]) { return 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2]; }
 
 // -----------------------------------------------------------------------------
@@ -481,6 +528,23 @@ void pushUnclipped(ImDrawList* dl) {
 }
 
 void popUnclipped(ImDrawList* dl) { dl->PopClipRect(); }
+
+void checkerboard(ImDrawList* dl, const ImRect& rect, float radius, float cell) {
+    dl->AddRectFilled(rect.Min, rect.Max, IM_COL32(204, 204, 204, 255), radius);
+    const int columns = static_cast<int>(std::ceil(rect.GetWidth() / cell));
+    const int rows = static_cast<int>(std::ceil(rect.GetHeight() / cell));
+    for (int row = 0; row < rows; ++row) {
+        for (int column = (row & 1); column < columns; column += 2) {
+            const ImVec2 a(rect.Min.x + cell * static_cast<float>(column), rect.Min.y + cell * static_cast<float>(row));
+            const ImVec2 b(std::min(a.x + cell, rect.Max.x), std::min(a.y + cell, rect.Max.y));
+            const bool corner = (a.x < rect.Min.x + radius || b.x > rect.Max.x - radius) &&
+                                (a.y < rect.Min.y + radius || b.y > rect.Max.y - radius);
+            if (!corner) {
+                dl->AddRectFilled(a, b, IM_COL32_WHITE);
+            }
+        }
+    }
+}
 
 void separator(ImDrawList* dl, float x0, float x1, float y, ImU32 color) {
     const float top = snap(y);
@@ -1027,6 +1091,16 @@ bool textField(const char* id, const ImRect& rect, char* buffer, size_t size, bo
     ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, withAlpha(theme::kAccent, 0.45f));
     ImGui::PushStyleColor(ImGuiCol_InputTextCursor, theme::kAccent);
     ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));
+    // Dentro de una lista que se desplaza, el campo se abre al soltar un toque y no al pulsar:
+    // así arrastrar para desplazar no lo activa (ni saca el teclado del móvil).
+    const ImGuiID inputId = ImGui::GetID(id);
+    if (!focus && !g_scrollStack.empty() && ImGui::GetActiveID() != inputId) {
+        const Press press = pressable(inputId + 1u, rect);
+        if (press.hovered) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
+        }
+        focus = press.clicked;
+    }
     ImGui::SetCursorScreenPos(rect.Min);
     ImGui::SetNextItemWidth(rect.GetWidth());
     if (focus) {

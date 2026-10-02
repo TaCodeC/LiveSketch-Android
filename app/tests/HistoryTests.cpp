@@ -73,11 +73,11 @@ TEST_CASE(history_stroke_undo_redo) {
     setBrush(canvas, 0.9f, 0.1f, 0.1f, 8.0f);
     drawLine(canvas, {5.0f, 40.0f}, {58.0f, 5.0f});
     const std::vector<uint8_t> second = composite(canvas);
-    const uint64_t revision = canvas.layers().at(1).revision;
+    const uint64_t revision = canvas.layers().at(0).revision;
 
     REQUIRE(canvas.undo());
     CHECK_EQ(test::maxDifference(composite(canvas), first), 0);
-    CHECK(canvas.layers().at(1).revision > revision);   // la miniatura se rehace
+    CHECK(canvas.layers().at(0).revision > revision);   // la miniatura se rehace
     REQUIRE(canvas.undo());
     CHECK_EQ(test::maxDifference(composite(canvas), empty), 0);
     CHECK(!canvas.canUndo());
@@ -101,20 +101,20 @@ TEST_CASE(history_eraser_and_clear) {
     REQUIRE(canvas.init(40, 40));
     setBrush(canvas, 0.0f, 0.0f, 0.0f, 10.0f);
     drawLine(canvas, {5.0f, 20.0f}, {35.0f, 20.0f});
-    const std::vector<uint8_t> painted = layerPixels(canvas, 1);
+    const std::vector<uint8_t> painted = layerPixels(canvas, 0);
 
     setBrush(canvas, 0.0f, 0.0f, 0.0f, 6.0f, true);
     drawLine(canvas, {20.0f, 5.0f}, {20.0f, 35.0f});
-    CHECK(test::maxDifference(layerPixels(canvas, 1), painted) > 0);
+    CHECK(test::maxDifference(layerPixels(canvas, 0), painted) > 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), painted), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), painted), 0);
 
-    canvas.clearLayer(1);
-    CHECK_EQ(test::pixelAt(layerPixels(canvas, 1), 40, 10, 20)[3], 0);
+    canvas.clearLayer(0);
+    CHECK_EQ(test::pixelAt(layerPixels(canvas, 0), 40, 10, 20)[3], 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), painted), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), painted), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::pixelAt(layerPixels(canvas, 1), 40, 10, 20)[3], 0);
+    CHECK_EQ(test::pixelAt(layerPixels(canvas, 0), 40, 10, 20)[3], 0);
 }
 
 TEST_CASE(history_layer_structure) {
@@ -123,46 +123,46 @@ TEST_CASE(history_layer_structure) {
     LayerStack& layers = canvas.layers();
     setBrush(canvas, 1.0f, 0.0f, 0.0f, 20.0f);
     drawLine(canvas, {16.0f, 16.0f}, {17.0f, 16.0f});   // "Capa 1" roja
-    const uint32_t red = layers.at(1).id;
+    const uint32_t red = layers.at(0).id;
 
     // Añadir y deshacer.
     REQUIRE(canvas.addLayer());
     const uint32_t added = layers.active().id;
-    CHECK_EQ(layers.count(), 3);
-    REQUIRE(canvas.undo());
     CHECK_EQ(layers.count(), 2);
+    REQUIRE(canvas.undo());
+    CHECK_EQ(layers.count(), 1);
     CHECK_EQ(layers.indexOf(added), -1);
     REQUIRE(canvas.redo());
-    CHECK_EQ(layers.count(), 3);
-    CHECK_EQ(layers.indexOf(added), 2);
+    CHECK_EQ(layers.count(), 2);
+    CHECK_EQ(layers.indexOf(added), 1);
     CHECK_EQ(layers.active().id, added);
 
     // Borrar la roja y recuperarla en su sitio, con su contenido.
     const std::vector<uint8_t> withRed = composite(canvas);
     CHECK(test::pixelAt(withRed, 32, 16, 16)[1] < 128);
-    REQUIRE(canvas.removeLayer(1));
+    REQUIRE(canvas.removeLayer(0));
     CHECK_EQ(layers.indexOf(red), -1);
     CHECK_PIXEL(test::pixelAt(composite(canvas), 32, 16, 16), kWhite, 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.indexOf(red), 1);
+    CHECK_EQ(layers.indexOf(red), 0);
     CHECK_EQ(layers.active().id, red);
     CHECK_EQ(test::maxDifference(composite(canvas), withRed), 0);
 
     // Mover.
-    REQUIRE(canvas.moveLayer(1, 2));
-    CHECK_EQ(layers.indexOf(red), 2);
-    REQUIRE(canvas.undo());
+    REQUIRE(canvas.moveLayer(0, 1));
     CHECK_EQ(layers.indexOf(red), 1);
+    REQUIRE(canvas.undo());
+    CHECK_EQ(layers.indexOf(red), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(layers.indexOf(red), 2);
+    CHECK_EQ(layers.indexOf(red), 1);
     REQUIRE(canvas.undo());
 
     // Duplicar.
-    REQUIRE(canvas.duplicateLayer(1));
-    CHECK_EQ(layers.count(), 4);
-    REQUIRE(canvas.undo());
+    REQUIRE(canvas.duplicateLayer(0));
     CHECK_EQ(layers.count(), 3);
-    CHECK_EQ(layers.at(1).id, red);
+    REQUIRE(canvas.undo());
+    CHECK_EQ(layers.count(), 2);
+    CHECK_EQ(layers.at(0).id, red);
 }
 
 TEST_CASE(history_merge_down) {
@@ -171,36 +171,36 @@ TEST_CASE(history_merge_down) {
     LayerStack& layers = canvas.layers();
     setBrush(canvas, 0.0f, 0.0f, 1.0f, 12.0f);
     drawLine(canvas, {10.0f, 16.0f}, {11.0f, 16.0f});
-    canvas.setLayerOpacity(1, 0.5f);
+    canvas.setLayerOpacity(0, 0.5f);
     REQUIRE(canvas.addLayer());
     setBrush(canvas, 1.0f, 0.0f, 0.0f, 12.0f);
     drawLine(canvas, {22.0f, 16.0f}, {23.0f, 16.0f});
-    const uint32_t lower = layers.at(1).id;
-    const uint32_t upper = layers.at(2).id;
-    const std::vector<uint8_t> lowerBefore = layerPixels(canvas, 1);
-    const std::vector<uint8_t> upperBefore = layerPixels(canvas, 2);
+    const uint32_t lower = layers.at(0).id;
+    const uint32_t upper = layers.at(1).id;
+    const std::vector<uint8_t> lowerBefore = layerPixels(canvas, 0);
+    const std::vector<uint8_t> upperBefore = layerPixels(canvas, 1);
     const std::vector<uint8_t> look = composite(canvas);
 
-    REQUIRE(canvas.mergeDown(2));
-    CHECK_EQ(layers.count(), 2);
-    CHECK_EQ(layers.at(1).opacity, 1.0f);
-    const std::vector<uint8_t> merged = layerPixels(canvas, 1);
+    REQUIRE(canvas.mergeDown(1));
+    CHECK_EQ(layers.count(), 1);
+    CHECK_EQ(layers.at(0).opacity, 1.0f);
+    const std::vector<uint8_t> merged = layerPixels(canvas, 0);
 
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.count(), 3);
-    CHECK_EQ(layers.at(1).id, lower);
-    CHECK_EQ(layers.at(2).id, upper);
-    CHECK_EQ(layers.at(1).opacity, 0.5f);
+    CHECK_EQ(layers.count(), 2);
+    CHECK_EQ(layers.at(0).id, lower);
+    CHECK_EQ(layers.at(1).id, upper);
+    CHECK_EQ(layers.at(0).opacity, 0.5f);
     CHECK_EQ(layers.active().id, upper);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), lowerBefore), 0);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), upperBefore), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), lowerBefore), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), upperBefore), 0);
     CHECK_EQ(test::maxDifference(composite(canvas), look), 0);
 
     REQUIRE(canvas.redo());
-    CHECK_EQ(layers.count(), 2);
-    CHECK_EQ(layers.at(1).opacity, 1.0f);
+    CHECK_EQ(layers.count(), 1);
+    CHECK_EQ(layers.at(0).opacity, 1.0f);
     CHECK_EQ(layers.active().id, lower);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), merged), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), merged), 0);
 }
 
 TEST_CASE(history_layer_properties) {
@@ -208,31 +208,31 @@ TEST_CASE(history_layer_properties) {
     REQUIRE(canvas.init(16, 16));
     LayerStack& layers = canvas.layers();
 
-    canvas.setLayerVisible(1, false);
-    CHECK(!layers.at(1).visible);
-    canvas.renameLayer(1, "Tinta");
+    canvas.setLayerVisible(0, false);
+    CHECK(!layers.at(0).visible);
+    canvas.renameLayer(0, "Tinta");
     // Arrastrar la opacidad deja un solo paso, desde el valor de antes de empezar.
-    canvas.setLayerOpacity(1, 0.8f, false);
-    canvas.setLayerOpacity(1, 0.5f, false);
-    canvas.setLayerOpacity(1, 0.3f, true);
+    canvas.setLayerOpacity(0, 0.8f, false);
+    canvas.setLayerOpacity(0, 0.5f, false);
+    canvas.setLayerOpacity(0, 0.3f, true);
     CHECK_EQ(canvas.history().undoCount(), 3);
 
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.at(1).opacity, 1.0f);
+    CHECK_EQ(layers.at(0).opacity, 1.0f);
     REQUIRE(canvas.undo());
-    CHECK_EQ(layers.at(1).name, std::string("Capa 1"));
+    CHECK_EQ(layers.at(0).name, std::string("Capa 1"));
     REQUIRE(canvas.undo());
-    CHECK(layers.at(1).visible);
+    CHECK(layers.at(0).visible);
     REQUIRE(canvas.redo());
     REQUIRE(canvas.redo());
     REQUIRE(canvas.redo());
-    CHECK(!layers.at(1).visible);
-    CHECK_EQ(layers.at(1).name, std::string("Tinta"));
-    CHECK_EQ(layers.at(1).opacity, 0.3f);
+    CHECK(!layers.at(0).visible);
+    CHECK_EQ(layers.at(0).name, std::string("Tinta"));
+    CHECK_EQ(layers.at(0).opacity, 0.3f);
 
     // Sin cambio real no hay paso.
-    canvas.setLayerOpacity(1, 0.3f, true);
-    canvas.renameLayer(1, "Tinta");
+    canvas.setLayerOpacity(0, 0.3f, true);
+    canvas.renameLayer(0, "Tinta");
     CHECK_EQ(canvas.history().undoCount(), 3);
 }
 
@@ -273,7 +273,7 @@ TEST_CASE(history_cleared_by_new_canvas_and_context_loss) {
 TEST_CASE(canvas_pick_color) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    test::fillRect(canvas.layers().at(1).target, {0, 0, 16, 32}, 0.25f, 0.0f, 0.0f, 0.5f);   // rojo al 50 %
+    test::fillRect(canvas.layers().at(0).target, {0, 0, 16, 32}, 0.25f, 0.0f, 0.0f, 0.5f);   // rojo al 50 %
     canvas.layers().markAllDirty();
 
     float rgb[3] = {0.0f, 0.0f, 0.0f};
@@ -284,7 +284,7 @@ TEST_CASE(canvas_pick_color) {
     CHECK_NEAR(rgb[0], 0.75f, 0.01f);
     CHECK_NEAR(rgb[1], 0.5f, 0.01f);
 
-    canvas.layers().setVisible(0, false);
+    test::hideBackground(canvas);
     REQUIRE(canvas.pickColor(4.0f, 10.0f, rgb));    // sin fondo: el color de la capa sin premultiplicar
     CHECK_NEAR(rgb[0], 0.5f, 0.01f);
     CHECK_NEAR(rgb[1], 0.0f, 0.01f);

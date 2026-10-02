@@ -105,6 +105,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/CanvasAdjust.cpp
         ${SRC_DIR}/Canvas/CanvasFill.cpp
         ${SRC_DIR}/Canvas/CanvasSelection.cpp
+        ${SRC_DIR}/Canvas/CanvasSpec.cpp
         ${SRC_DIR}/Canvas/CanvasView.cpp
         ${SRC_DIR}/Canvas/ColorFill.cpp
         ${SRC_DIR}/Canvas/Compositor.cpp
@@ -129,12 +130,14 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Tools/TransformTool.cpp
         ${SRC_DIR}/UI/Anim.cpp
         ${SRC_DIR}/UI/Backdrop.cpp
+        ${SRC_DIR}/UI/CanvasForm.cpp
         ${SRC_DIR}/UI/Kit.cpp
         ${SRC_DIR}/UI/PanelParts.cpp
         ${SRC_DIR}/UI/Previews.cpp
         ${SRC_DIR}/UI/Ui.cpp
         ${SRC_DIR}/UI/UiAdjust.cpp
         ${SRC_DIR}/UI/UiBrushes.cpp
+        ${SRC_DIR}/UI/UiCanvas.cpp
         ${SRC_DIR}/UI/UiDialogs.cpp
         ${SRC_DIR}/UI/UiFill.cpp
         ${SRC_DIR}/UI/UiGuide.cpp
@@ -213,7 +216,9 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/AdjustTests.cpp
             ${TESTS_DIR}/BrushTests.cpp
             ${TESTS_DIR}/CameraTests.cpp
+            ${TESTS_DIR}/CanvasFormTests.cpp
             ${TESTS_DIR}/CanvasTests.cpp
+            ${TESTS_DIR}/CanvasSpecTests.cpp
             ${TESTS_DIR}/ExportTests.cpp
             ${TESTS_DIR}/FillTests.cpp
             ${TESTS_DIR}/GuideTests.cpp

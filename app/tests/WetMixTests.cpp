@@ -35,9 +35,9 @@ Pixel at(const std::vector<uint8_t>& pixels, const Canvas& canvas, int x, int y)
     return test::pixelAt(pixels, canvas.width(), x, y);
 }
 
-// Color sin premultiplicar y alfa, de 0 a 1, en la capa 1.
+// Color sin premultiplicar y alfa, de 0 a 1, en la capa de dibujo.
 void fill(Canvas& canvas, const IRect& rect, float r, float g, float b, float a = 1.0f) {
-    test::fillRect(canvas.layers().at(1).target, rect, r * a, g * a, b * a, a);
+    test::fillRect(canvas.layers().at(0).target, rect, r * a, g * a, b * a, a);
     canvas.layers().markDirty(rect);
 }
 
@@ -197,10 +197,10 @@ TEST_CASE(wet_smudge_drags_paint_along_the_stroke) {
     Canvas canvas;
     REQUIRE(canvas.init(128, 64));
     fill(canvas, {8, 16, 40, 48}, 1.0f, 0.0f, 0.0f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
     useSmudge(canvas, roundBrush(0.5f), 8.0f, 0.8f);
     stroke(canvas, {24.0f, 32.0f}, {100.0f, 32.0f});
-    const std::vector<uint8_t> after = layerPixels(canvas, 1);
+    const std::vector<uint8_t> after = layerPixels(canvas, 0);
 
     // El rojo sigue al trazo más allá del bloque, cada vez menos y sin oscurecerse.
     const Pixel close = at(after, canvas, 46, 32);
@@ -225,9 +225,9 @@ TEST_CASE(wet_smudge_drags_paint_along_the_stroke) {
     // Un solo paso de deshacer.
     CHECK_EQ(canvas.history().undoCount(), 1);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), after), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), after), 0);
     CHECK(gfx::checkErrors("wet_smudge_drags_paint_along_the_stroke"));
 }
 
@@ -236,13 +236,13 @@ TEST_CASE(wet_smudge_leaves_flat_color_alone) {
     Canvas canvas;
     REQUIRE(canvas.init(96, 48));
     fill(canvas, {0, 0, 48, 48}, 0.3f, 0.6f, 0.9f, 0.8f);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
     for (const float hardness : {1.0f, 0.0f}) {
         useSmudge(canvas, roundBrush(hardness), 10.0f, 1.0f);
         stroke(canvas, {12.0f, 14.0f}, {36.0f, 34.0f});
         stroke(canvas, {62.0f, 12.0f}, {86.0f, 36.0f});
     }
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), before), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), before), 0);
 }
 
 TEST_CASE(wet_smudge_strength_sets_how_far_it_drags) {
@@ -254,7 +254,7 @@ TEST_CASE(wet_smudge_strength_sets_how_far_it_drags) {
         fill(canvas, {8, 16, 40, 48}, 1.0f, 0.0f, 0.0f);
         useSmudge(canvas, roundBrush(0.5f), 8.0f, strengths[i]);
         stroke(canvas, {24.0f, 32.0f}, {100.0f, 32.0f});
-        carried[i] = alphaIn(layerPixels(canvas, 1), canvas, {41, 16, 128, 48});
+        carried[i] = alphaIn(layerPixels(canvas, 0), canvas, {41, 16, 128, 48});
     }
     CHECK(carried[0] > 0);
     CHECK(carried[1] > 3 * carried[0]);
@@ -275,7 +275,7 @@ TEST_CASE(wet_eraser_erases_instead_of_mixing) {
     wet.wetCharge = 0.2f;
     usePaint(canvas, wet, 6.0f, 1.0f, 0.0f, 0.0f, true);
     stroke(canvas, {10.0f, 34.0f}, {86.0f, 34.0f});
-    const std::vector<uint8_t> pixels = layerPixels(canvas, 1);
+    const std::vector<uint8_t> pixels = layerPixels(canvas, 0);
     CHECK(at(pixels, canvas, 48, 16)[3] <= 1);
     CHECK(at(pixels, canvas, 80, 34)[3] <= 1);   // la carga no se acaba al borrar
     CHECK(at(pixels, canvas, 48, 25) == (Pixel{51, 102, 153, 255}));
@@ -296,7 +296,7 @@ TEST_CASE(wet_brush_mixes_with_the_paint_underneath) {
         p.wetCharge = 0.999f;   // húmedo aunque no arrastre
         usePaint(canvas, p, 8.0f, 0.0f, 0.0f, 1.0f);
         stroke(canvas, {8.0f, 32.0f}, {120.0f, 32.0f});
-        return layerPixels(canvas, 1);
+        return layerPixels(canvas, 0);
     };
     const std::vector<uint8_t> dry = paint(0.0f);
     const std::vector<uint8_t> wet = paint(0.6f);
@@ -324,7 +324,7 @@ TEST_CASE(wet_dilution_and_charge_lighten_the_stroke) {
         canvas.init(160, 48);
         usePaint(canvas, p, 8.0f, 0.1f, 0.2f, 0.8f);
         stroke(canvas, {fromX, 24.0f}, {toX, 24.0f});
-        return layerPixels(canvas, 1);
+        return layerPixels(canvas, 0);
     };
     auto alpha = [](const std::vector<uint8_t>& pixels, int x) { return test::pixelAt(pixels, 160, x, 24)[3]; };
 
@@ -370,7 +370,7 @@ TEST_CASE(wet_mix_respects_selection) {
     REQUIRE(canvas.init(128, 64));
     fill(canvas, {8, 16, 40, 48}, 1.0f, 0.0f, 0.0f);
     REQUIRE(selectRect(canvas, {0, 0, 128, 32}));   // solo la mitad de arriba
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
     useSmudge(canvas, roundBrush(0.5f), 8.0f, 0.9f);
     stroke(canvas, {24.0f, 32.0f}, {100.0f, 32.0f});
     BrushParams wet = roundBrush(0.7f);
@@ -378,7 +378,7 @@ TEST_CASE(wet_mix_respects_selection) {
     wet.wetDilution = 0.2f;
     usePaint(canvas, wet, 6.0f, 0.0f, 0.8f, 0.2f);
     stroke(canvas, {10.0f, 44.0f}, {120.0f, 20.0f});
-    const std::vector<uint8_t> after = layerPixels(canvas, 1);
+    const std::vector<uint8_t> after = layerPixels(canvas, 0);
 
     CHECK_EQ(changedIn(before, after, canvas, {0, 32, 128, 64}), 0);
     CHECK(changedIn(before, after, canvas, {0, 0, 128, 32}) > 100);
@@ -390,8 +390,8 @@ TEST_CASE(wet_mix_respects_alpha_lock) {
     REQUIRE(canvas.init(96, 48));
     fill(canvas, {16, 8, 48, 40}, 1.0f, 0.0f, 0.0f, 0.5f);   // rojo a medias
     fill(canvas, {48, 8, 64, 40}, 0.0f, 1.0f, 0.0f);         // verde opaco
-    canvas.setLayerAlphaLock(1, true);
-    const std::vector<uint8_t> before = layerPixels(canvas, 1);
+    canvas.setLayerAlphaLock(0, true);
+    const std::vector<uint8_t> before = layerPixels(canvas, 0);
 
     BrushParams wet = roundBrush(0.8f);
     wet.wetPull = 0.5f;
@@ -399,7 +399,7 @@ TEST_CASE(wet_mix_respects_alpha_lock) {
     stroke(canvas, {4.0f, 24.0f}, {92.0f, 24.0f});
     useSmudge(canvas, roundBrush(0.5f), 8.0f, 1.0f);
     stroke(canvas, {60.0f, 30.0f}, {20.0f, 30.0f});
-    const std::vector<uint8_t> after = layerPixels(canvas, 1);
+    const std::vector<uint8_t> after = layerPixels(canvas, 0);
 
     // El alfa no cambia en ningún píxel; el color sí, donde había pintura.
     int alphaChanges = 0;
@@ -476,12 +476,12 @@ TEST_CASE(wet_cancel_leaves_everything_as_it_was) {
     Canvas fresh;
     REQUIRE(fresh.init(128, 64));
     normalStroke(fresh);
-    const std::vector<uint8_t> expected = layerPixels(fresh, 1);
+    const std::vector<uint8_t> expected = layerPixels(fresh, 0);
 
     Canvas canvas;
     REQUIRE(canvas.init(128, 64));
     fill(canvas, {0, 0, 64, 64}, 1.0f, 0.0f, 0.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     const std::vector<uint8_t> shown = composite(canvas);
     BrushParams wet = roundBrush(0.6f);
     wet.wetPull = 0.5f;
@@ -495,7 +495,7 @@ TEST_CASE(wet_cancel_leaves_everything_as_it_was) {
     }
     CHECK(test::maxDifference(composite(canvas), shown) > 30);   // se ve mientras se pinta
     canvas.cancelStroke();
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
     CHECK_EQ(test::maxDifference(composite(canvas), shown), 0);
     CHECK_EQ(canvas.history().undoCount(), 0);
 
@@ -505,6 +505,6 @@ TEST_CASE(wet_cancel_leaves_everything_as_it_was) {
     CHECK_EQ(canvas.history().undoCount(), 1);
     REQUIRE(canvas.addLayer());
     normalStroke(canvas);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), expected), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), expected), 0);
     CHECK(gfx::checkErrors("wet_cancel_leaves_everything_as_it_was"));
 }

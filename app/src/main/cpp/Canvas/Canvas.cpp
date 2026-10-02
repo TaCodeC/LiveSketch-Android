@@ -12,12 +12,6 @@
 
 namespace {
 
-// Memoria de GPU que pueden ocupar las capas. En un móvil la GPU usa la RAM del sistema:
-// pasarse no da un error limpio, el sistema mata la app y se pierde el dibujo.
-constexpr size_t kLayerMemoryBudget = size_t{768} * 1024 * 1024;
-constexpr int kMinLayerLimit = 4;
-constexpr int kMaxLayerLimit = 64;
-
 // Deshacer: hasta 100 pasos y, de memoria de GPU, lo que ocupan 6 capas enteras (entre
 // 48 y 192 MB). Un trazo guarda solo la zona que tocó.
 constexpr int kMaxUndoSteps = 100;
@@ -61,13 +55,28 @@ void clearTarget(const gfx::RenderTarget& target, const IRect& rect) {
 } // namespace
 
 bool Canvas::init(int width, int height) {
+    CanvasSpec spec;
+    spec.width = width;
+    spec.height = height;
+    return init(spec);
+}
+
+bool Canvas::init(const CanvasSpec& spec) {
     // El portapapeles pasa al lienzo nuevo.
     Clipboard clipboard = std::move(m_clipboard);
     destroy();
     m_clipboard = std::move(clipboard);
+    const int width = spec.width;
+    const int height = spec.height;
     if (width <= 0 || height <= 0) {
         return false;
     }
+    m_info = {};
+    m_info.name = spec.name;
+    m_info.ppi = std::clamp(spec.ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi);
+    m_info.unit = spec.unit;
+    m_info.profile = spec.profile;
+    m_background = spec.background;
     m_layers.reset(width, height);
     m_guide = guide::defaults({static_cast<float>(width), static_cast<float>(height)});
     if (!createGpuObjects()) {
@@ -75,14 +84,11 @@ bool Canvas::init(int width, int height) {
         return false;
     }
 
-    Layer* background = m_layers.insert(0, "Fondo");
-    Layer* first = background ? m_layers.insert(1, "") : nullptr;
-    if (!first) {
+    if (!m_layers.insert(0, "")) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron crear las capas de %dx%d", width, height);
         destroy();
         return false;
     }
-    fill(*background, 1.0f, 1.0f, 1.0f, 1.0f);
 
     const size_t undoBytes = std::clamp(layerBytes() * kUndoLayers, kMinUndoBytes, kMaxUndoBytes);
     m_history.setLimits(undoBytes, kMaxUndoSteps);
@@ -97,6 +103,7 @@ void Canvas::destroy() {
     m_ready = false;
     resetStroke();
     m_layerEdit = {};
+    m_backgroundEdit = {};
     m_history.clear();
     m_layers.clearAll();
     destroyGpuObjects();
@@ -143,6 +150,7 @@ IRect Canvas::operationRect() const {
 void Canvas::settle() {
     endStroke();
     finishLayerEdit();
+    finishBackgroundEdit();
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
@@ -800,12 +808,7 @@ void Canvas::setGuide(const DrawingGuide& guide) {
 // Capas
 // -----------------------------------------------------------------------------
 
-int Canvas::maxLayers() const {
-    const size_t bytes = layerBytes();
-    const size_t byBudget = bytes > 0 ? kLayerMemoryBudget / bytes : static_cast<size_t>(kMaxLayerLimit);
-    const int limit = static_cast<int>(std::min(byBudget, static_cast<size_t>(kMaxLayerLimit)));
-    return std::max(limit, kMinLayerLimit);
-}
+int Canvas::maxLayers() const { return canvasspec::layerLimit(width(), height()); }
 
 void Canvas::selectLayer(int index) {
     if (!m_layers.validIndex(index) || index == m_layers.activeIndex()) {
@@ -1091,6 +1094,9 @@ void Canvas::beginLayerEdit(int index) {
 }
 
 bool Canvas::editPending() const {
+    if (m_backgroundEdit.active && !(m_background == m_backgroundEdit.before)) {
+        return true;
+    }
     if (!m_layerEdit.active) {
         return false;
     }
@@ -1167,6 +1173,47 @@ void Canvas::setReferenceLayer(int index) {
     step.otherId = previous >= 0 ? m_layers.at(previous).id : 0;
     step.bytes = kSmallStepBytes;
     m_layers.setReference(index);
+    record(std::move(step));
+}
+
+void Canvas::setBackground(const CanvasBackground& background, bool final) {
+    if (!m_ready) {
+        return;
+    }
+    CanvasBackground next = background;
+    for (float& channel : next.color) {
+        channel = std::isfinite(channel) ? std::clamp(channel, 0.0f, 1.0f) : 0.0f;
+    }
+    if (!m_backgroundEdit.active) {
+        if (next == m_background && final) {
+            return;
+        }
+        endStroke();
+        finishLayerEdit();
+        m_backgroundEdit = {true, m_background};
+    }
+    if (!(next == m_background)) {
+        m_background = next;
+        m_layers.markAllDirty();
+    }
+    if (final) {
+        finishBackgroundEdit();
+    }
+}
+
+void Canvas::finishBackgroundEdit() {
+    if (!m_backgroundEdit.active) {
+        return;
+    }
+    m_backgroundEdit.active = false;
+    if (m_background == m_backgroundEdit.before) {
+        return;
+    }
+    HistoryStep step;
+    step.kind = HistoryStep::Kind::Background;
+    step.backgroundBefore = m_backgroundEdit.before;
+    step.backgroundAfter = m_background;
+    step.bytes = kSmallStepBytes;
     record(std::move(step));
 }
 
@@ -1267,6 +1314,11 @@ void Canvas::applyStep(HistoryStep& step, bool undo) {
         m_layers.setReference(m_layers.indexOf(undo ? step.otherId : step.layerId));
         break;
 
+    case Kind::Background:
+        m_background = undo ? step.backgroundBefore : step.backgroundAfter;
+        m_layers.markAllDirty();
+        break;
+
     case Kind::Selection:
         if (!step.rect.empty() && step.pixels) {
             swapSelection(step.rect, step.pixels);
@@ -1294,6 +1346,7 @@ bool Canvas::undo() {
     }
     endStroke();
     finishLayerEdit();
+    finishBackgroundEdit();
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
@@ -1319,6 +1372,7 @@ bool Canvas::redo() {
     }
     endStroke();
     finishLayerEdit();
+    finishBackgroundEdit();
     endAutoSelect(true);
     endFeather(true);
     endFill(true);
@@ -1379,7 +1433,7 @@ bool Canvas::update() {
     }
     // Cada zona por su lado: con simetría pueden quedar lejos unas de otras.
     for (const IRect& rect : m_layers.dirtyRects()) {
-        m_compositor.compose(m_layers, rect, shown);
+        m_compositor.compose(m_layers, m_background, rect, shown);
     }
 
     m_layers.clearDirty();
@@ -1495,6 +1549,7 @@ bool Canvas::recreateGpu(bool* restored) {
     m_ready = false;
     resetStroke();
     m_layerEdit = {};
+    m_backgroundEdit = {};
     m_history.clear();
     m_clipboard = {};   // la selección también se pierde: vive en la GPU
     destroyGpuObjects();
@@ -1510,9 +1565,6 @@ bool Canvas::recreateGpu(bool* restored) {
             return false;
         }
         ++layer.revision;
-        if (!fromSnapshot && i == 0) {
-            fill(layer, 1.0f, 1.0f, 1.0f, 1.0f);
-        }
     }
     dropSnapshot();
 

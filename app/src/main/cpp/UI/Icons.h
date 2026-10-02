@@ -111,5 +111,16 @@ inline constexpr const char* kRotational         = "\xee\x85\x85"; // refresh-cw
 inline constexpr const char* kCenter             = "\xee\x87\x9b"; // locate-fixed U+E1DB
 inline constexpr const char* kCurve              = "\xee\x98\x8d"; // chart-spline U+E60D
 inline constexpr const char* kPen                = "\xee\x84\xb0"; // pen-line U+E130
+inline constexpr const char* kVideo              = "\xee\x92\x85"; // monitor-play U+E485
+inline constexpr const char* kDevices            = "\xee\x94\x8a"; // tablet-smartphone U+E50A
+inline constexpr const char* kHeart              = "\xee\x83\xb2"; // heart U+E0F2
+inline constexpr const char* kFileText           = "\xee\x83\x8c"; // file-text U+E0CC
+inline constexpr const char* kBookOpen           = "\xee\x81\x9f"; // book-open U+E05F
+inline constexpr const char* kStar               = "\xee\x85\xb6"; // star U+E176
+inline constexpr const char* kLink               = "\xee\x84\x83"; // link-2 U+E103
+inline constexpr const char* kUnlink             = "\xee\x84\x84"; // link-2-off U+E104
+inline constexpr const char* kBookmarkPlus       = "\xee\x88\xbd"; // bookmark-plus U+E23D
+inline constexpr const char* kBackspace          = "\xee\x82\xae"; // delete U+E0AE
+inline constexpr const char* kTriangleAlert      = "\xee\x86\x93"; // triangle-alert U+E193
 
 } // namespace icon

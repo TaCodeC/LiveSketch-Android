@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+class Canvas;
+
 namespace test {
 
 struct Case {
@@ -77,6 +79,9 @@ void fillRect(const gfx::RenderTarget& target, const IRect& rect, float r, float
 int maxDifference(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b);
 // Carpeta temporal vacía para la prueba, terminada en '/'.
 std::string tempFolder(const char* name);
+// Oculta el color de fondo del lienzo (el compuesto queda transparente donde no hay
+// pintura). Como en la app, es un paso de deshacer.
+void hideBackground(Canvas& canvas);
 
 } // namespace test
 

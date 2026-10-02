@@ -456,7 +456,8 @@ void Compositor::finishPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void Compositor::compose(const LayerStack& layers, const IRect& rect, const StrokePreview* preview) {
+void Compositor::compose(const LayerStack& layers, const CanvasBackground& background, const IRect& rect,
+                         const StrokePreview* preview) {
     const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
     if (area.empty() || !m_program) {
         return;
@@ -469,7 +470,11 @@ void Compositor::compose(const LayerStack& layers, const IRect& rect, const Stro
     // papeles se intercambian.
     const gfx::RenderTarget* current = &m_composite;
     bindCanvasPass(current->fbo.id(), area);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    if (background.visible) {
+        glClearColor(background.color[0], background.color[1], background.color[2], 1.0f);
+    } else {
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT);
 
     for (int i = 0; i < layers.count(); ++i) {

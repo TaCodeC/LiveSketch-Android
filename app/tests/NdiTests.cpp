@@ -95,7 +95,7 @@ void drawLine(Canvas& canvas, float x0, float y0, float x1, float y1) {
 TEST_CASE(ndi_sends_full_canvas_unpremultiplied) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 48));
-    canvas.layers().setVisible(0, false);   // con transparencia se nota si falta quitar el premultiplicado
+    test::hideBackground(canvas);   // con transparencia se nota si falta quitar el premultiplicado
     BrushSettings& brush = canvas.brushSettings();
     brush.color[0] = 1.0f;
     brush.color[1] = 0.5f;

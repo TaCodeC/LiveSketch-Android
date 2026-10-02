@@ -313,12 +313,12 @@ TEST_CASE(selection_replace_clears_what_was_left) {
 TEST_CASE(selection_of_layer_content) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    CHECK(canvas.selectLayerContent(1) == Canvas::Edit::Nothing);
+    CHECK(canvas.selectLayerContent(0) == Canvas::Edit::Nothing);
     CHECK(!canvas.hasSelection());
 
-    fillLayer(canvas, 1, {4, 6, 10, 12}, 1.0f, 0.0f, 0.0f, 0.5f);
-    fillLayer(canvas, 1, {20, 20, 22, 30}, 0.0f, 0.0f, 1.0f, 1.0f);
-    CHECK(canvas.selectLayerContent(1) == Canvas::Edit::Done);
+    fillLayer(canvas, 0, {4, 6, 10, 12}, 1.0f, 0.0f, 0.0f, 0.5f);
+    fillLayer(canvas, 0, {20, 20, 22, 30}, 0.0f, 0.0f, 1.0f, 1.0f);
+    CHECK(canvas.selectLayerContent(0) == Canvas::Edit::Done);
     CHECK_RECT(canvas.selectionBounds(), (IRect{4, 6, 22, 30}));
     CHECK_NEAR(maskAt(canvas, 5, 7), 128, 1);   // con el alfa de la capa
     CHECK_EQ(maskAt(canvas, 21, 25), 255);
@@ -331,7 +331,7 @@ TEST_CASE(selection_auto_select_threshold_and_undo) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
     // Rojo a la izquierda; a la derecha se ve el fondo blanco.
-    fillLayer(canvas, 1, {0, 0, 16, 32}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {0, 0, 16, 32}, 1.0f, 0.0f, 0.0f);
     canvas.update();
 
     REQUIRE(canvas.beginAutoSelect(4.0f, 4.0f, SelectOp::Replace, 0.1f));
@@ -388,11 +388,11 @@ TEST_CASE(selection_auto_select_uses_reference_layer) {
     REQUIRE(canvas.init(32, 32));
     // Capa 1: un marco negro (el dibujo de líneas). Capa 2: rojo por arriba, que cruza
     // el marco.
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 0.0f, 0.0f, 0.0f);
-    test::fillRect(canvas.layers().at(1).target, {10, 10, 22, 22}, 0.0f, 0.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 0.0f, 0.0f, 0.0f);
+    test::fillRect(canvas.layers().at(0).target, {10, 10, 22, 22}, 0.0f, 0.0f, 0.0f, 0.0f);
     REQUIRE(canvas.addLayer());
-    fillLayer(canvas, 2, {0, 0, 32, 16}, 1.0f, 0.0f, 0.0f);
-    canvas.setReferenceLayer(1);
+    fillLayer(canvas, 1, {0, 0, 32, 16}, 1.0f, 0.0f, 0.0f);
+    canvas.setReferenceLayer(0);
     canvas.update();
 
     REQUIRE(canvas.beginAutoSelect(16.0f, 16.0f, SelectOp::Replace, 0.1f));
@@ -473,27 +473,27 @@ TEST_CASE(selection_limits_strokes) {
     CHECK(compositeAt(canvas, 32, 32)[1] <= 5);
     canvas.endStroke();
     canvas.update();
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 32), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 56, 32), kClear, 0);
-    CHECK(layerAt(canvas, 1, 32, 32)[3] >= 250);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 32), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 56, 32), kClear, 0);
+    CHECK(layerAt(canvas, 0, 32, 32)[3] >= 250);
     CHECK_PIXEL(compositeAt(canvas, 56, 32), kWhite, 0);
     CHECK(canvas.undo());
-    CHECK_PIXEL(layerAt(canvas, 1, 32, 32), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 32, 32), kClear, 0);
     CHECK(canvas.hasSelection());   // deshacer el trazo no toca la selección
 
     // Borrar, también solo dentro.
-    fillLayer(canvas, 1, {0, 0, 64, 64}, 0.0f, 0.0f, 1.0f);
+    fillLayer(canvas, 0, {0, 0, 64, 64}, 0.0f, 0.0f, 1.0f);
     setBrush(canvas, 0.0f, 0.0f, 0.0f, 1.0f, 4.0f, true);
     drawLine(canvas, {4.0f, 32.0f}, {60.0f, 32.0f});
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 32), kBlue, 0);
-    CHECK(layerAt(canvas, 1, 32, 32)[3] <= 5);
-    CHECK_PIXEL(layerAt(canvas, 1, 56, 32), kBlue, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 32), kBlue, 0);
+    CHECK(layerAt(canvas, 0, 32, 32)[3] <= 5);
+    CHECK_PIXEL(layerAt(canvas, 0, 56, 32), kBlue, 0);
 }
 
 TEST_CASE(selection_stroke_preview_matches_commit) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));
-    fillLayer(canvas, 1, {0, 0, 64, 64}, 0.2f, 0.5f, 0.9f, 0.7f);
+    fillLayer(canvas, 0, {0, 0, 64, 64}, 0.2f, 0.5f, 0.9f, 0.7f);
     // Elipse con el borde suavizado.
     REQUIRE(canvas.selectPolygon(selection::ellipse({10.0f, 12.0f}, {54.0f, 50.0f}), SelectOp::Replace));
     setBrush(canvas, 0.9f, 0.3f, 0.1f, 0.6f, 9.0f);
@@ -508,37 +508,37 @@ TEST_CASE(selection_stroke_preview_matches_commit) {
 TEST_CASE(selection_limits_fill_clear_and_invert) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    fillLayer(canvas, 1, {0, 0, 32, 32}, 0.0f, 0.0f, 1.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {0, 0, 32, 32}, 0.0f, 0.0f, 1.0f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     // El borde izquierdo a medio píxel: esa columna, a medias.
     REQUIRE(canvas.selectPolygon(selection::rectangle({8.5f, 8.0f}, {24.0f, 24.0f}), SelectOp::Replace));
     const float red[3] = {1.0f, 0.0f, 0.0f};
 
-    canvas.fillLayer(1, red);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), kRed, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 4, 16), kBlue, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 16), (Pixel{128, 0, 127, 255}), 1);
+    canvas.fillLayer(0, red);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 4, 16), kBlue, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 16), (Pixel{128, 0, 127, 255}), 1);
 
-    canvas.invertLayer(1);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), (Pixel{0, 255, 255, 255}), 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 4, 16), kBlue, 0);
+    canvas.invertLayer(0);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), (Pixel{0, 255, 255, 255}), 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 4, 16), kBlue, 0);
 
-    canvas.clearLayer(1);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 4, 16), kBlue, 0);
-    CHECK_NEAR(layerAt(canvas, 1, 8, 16)[3], 127, 1);
+    canvas.clearLayer(0);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 4, 16), kBlue, 0);
+    CHECK_NEAR(layerAt(canvas, 0, 8, 16)[3], 127, 1);
 
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
 
     // Con el alfa bloqueado, rellenar solo llega a lo que tiene pintura dentro.
-    canvas.clearLayer(1);   // la selección
-    canvas.setLayerAlphaLock(1, true);
-    canvas.fillLayer(1, red);
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 4, 16), kBlue, 0);
+    canvas.clearLayer(0);   // la selección
+    canvas.setLayerAlphaLock(0, true);
+    canvas.fillLayer(0, red);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 4, 16), kBlue, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -548,9 +548,9 @@ TEST_CASE(selection_limits_fill_clear_and_invert) {
 TEST_CASE(selection_copy_cut_paste_duplicate) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    fillLayer(canvas, 1, {4, 4, 12, 12}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {20, 20, 28, 28}, 0.0f, 1.0f, 0.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {4, 4, 12, 12}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {20, 20, 28, 28}, 0.0f, 1.0f, 0.0f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     CHECK(!canvas.canPaste());
     CHECK(canvas.paste() == Canvas::Edit::Nothing);
 
@@ -559,22 +559,22 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     CHECK(canvas.copySelection() == Canvas::Edit::Done);
     CHECK(canvas.canPaste());
     CHECK(canvas.paste() == Canvas::Edit::Done);
-    REQUIRE(canvas.layers().count() == 3);
-    CHECK_EQ(canvas.layers().activeIndex(), 2);
-    CHECK_EQ(canvas.layers().at(2).name, std::string("Pegado"));
-    CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kRed, 0);
-    CHECK_PIXEL(layerAt(canvas, 2, 24, 24), kClear, 0);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    REQUIRE(canvas.layers().count() == 2);
+    CHECK_EQ(canvas.layers().activeIndex(), 1);
+    CHECK_EQ(canvas.layers().at(1).name, std::string("Pegado"));
+    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 1, 24, 24), kClear, 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
     // Pegar quita la selección en el mismo paso: deshacer quita la capa y la devuelve.
     CHECK(!canvas.hasSelection());
     REQUIRE(canvas.undo());
-    CHECK_EQ(canvas.layers().count(), 2);
+    CHECK_EQ(canvas.layers().count(), 1);
     CHECK(canvas.hasSelection());
     CHECK_RECT(canvas.selectionBounds(), (IRect{0, 0, 16, 16}));
     REQUIRE(canvas.redo());
-    CHECK_EQ(canvas.layers().count(), 3);
+    CHECK_EQ(canvas.layers().count(), 2);
     CHECK(!canvas.hasSelection());
-    CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), kRed, 0);
     // Otra vez: otro nombre.
     CHECK(canvas.paste() == Canvas::Edit::Done);
     CHECK_EQ(canvas.layers().active().name, std::string("Pegado 2"));
@@ -582,26 +582,26 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     REQUIRE(canvas.undo());
 
     // Cortar: se va de la capa.
-    canvas.selectLayer(1);
+    canvas.selectLayer(0);
     CHECK(canvas.cutSelection() == Canvas::Edit::Done);
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 24, 24), kGreen, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 24, 24), kGreen, 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
 
     // Duplicar lo seleccionado: a una capa nueva encima, con el nombre de la capa.
     REQUIRE(selectRect(canvas, {16, 16, 32, 32}));
     CHECK(canvas.duplicateSelection() == Canvas::Edit::Done);
-    REQUIRE(canvas.layers().count() == 3);
-    CHECK_EQ(canvas.layers().at(2).name, std::string("Capa 1 copia"));
-    CHECK_PIXEL(layerAt(canvas, 2, 24, 24), kGreen, 0);
-    CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kClear, 0);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    REQUIRE(canvas.layers().count() == 2);
+    CHECK_EQ(canvas.layers().at(1).name, std::string("Capa 1 copia"));
+    CHECK_PIXEL(layerAt(canvas, 1, 24, 24), kGreen, 0);
+    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), kClear, 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
     REQUIRE(canvas.undo());
-    CHECK_EQ(canvas.layers().count(), 2);
+    CHECK_EQ(canvas.layers().count(), 1);
 
     // Nada seleccionado en la capa: nada que copiar.
-    canvas.selectLayer(1);
+    canvas.selectLayer(0);
     REQUIRE(selectRect(canvas, {0, 20, 4, 24}));
     CHECK(canvas.copySelection() == Canvas::Edit::Nothing);
     CHECK(canvas.duplicateSelection() == Canvas::Edit::Nothing);
@@ -610,18 +610,18 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     canvas.deselect();
     CHECK(canvas.copySelection() == Canvas::Edit::Done);
     CHECK(canvas.paste() == Canvas::Edit::Done);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
     REQUIRE(canvas.undo());
-    canvas.selectLayer(1);
+    canvas.selectLayer(0);
     CHECK(canvas.duplicateSelection() == Canvas::Edit::Done);
-    CHECK_EQ(canvas.layers().count(), 3);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), original), 0);
+    CHECK_EQ(canvas.layers().count(), 2);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
 }
 
 TEST_CASE(selection_pasted_and_duplicated_layers_move_whole) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));
-    fillLayer(canvas, 1, {0, 0, 32, 32}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {0, 0, 32, 32}, 1.0f, 0.0f, 0.0f);
     // Elipse de bordes suaves: lo copiado ya lleva esos bordes.
     REQUIRE(canvas.selectPolygon(selection::ellipse({4.0f, 4.0f}, {28.0f, 28.0f}), SelectOp::Replace));
     CHECK(canvas.copySelection() == Canvas::Edit::Done);
@@ -629,13 +629,13 @@ TEST_CASE(selection_pasted_and_duplicated_layers_move_whole) {
     // Pegar y mover: se mueve toda la capa nueva, sin enmascararla otra vez (ni bordes
     // más tenues ni restos en su sitio).
     REQUIRE(canvas.paste() == Canvas::Edit::Done);
-    const std::vector<uint8_t> pasted = layerPixels(canvas, 2);
+    const std::vector<uint8_t> pasted = layerPixels(canvas, 1);
     REQUIRE(canvas.beginTransform(true) == Canvas::Edit::Done);
     glm::vec2 corners[4];
     moved(canvas.transformSource(), 32.0f, 32.0f, corners);
     REQUIRE(canvas.setTransform(corners, false));
     canvas.applyTransform();
-    const std::vector<uint8_t> after = layerPixels(canvas, 2);
+    const std::vector<uint8_t> after = layerPixels(canvas, 1);
     int ghost = 0;
     int worst = 0;
     for (int y = 0; y < 32; ++y) {
@@ -652,18 +652,18 @@ TEST_CASE(selection_pasted_and_duplicated_layers_move_whole) {
     CHECK(worst <= 1);
     REQUIRE(canvas.undo());
     REQUIRE(canvas.undo());
-    CHECK_EQ(canvas.layers().count(), 2);
+    CHECK_EQ(canvas.layers().count(), 1);
     REQUIRE(canvas.hasSelection());
 
     // Duplicar y mover: igual, y la selección se mueve con lo duplicado.
     REQUIRE(canvas.duplicateSelection() == Canvas::Edit::Done);
-    const std::vector<uint8_t> duplicated = layerPixels(canvas, 2);
+    const std::vector<uint8_t> duplicated = layerPixels(canvas, 1);
     const IRect selected = canvas.selectionBounds();
     REQUIRE(canvas.beginTransform(true) == Canvas::Edit::Done);
     moved(canvas.transformSource(), 32.0f, 0.0f, corners);
     REQUIRE(canvas.setTransform(corners, false));
     canvas.applyTransform();
-    const std::vector<uint8_t> shifted = layerPixels(canvas, 2);
+    const std::vector<uint8_t> shifted = layerPixels(canvas, 1);
     ghost = 0;
     worst = 0;
     for (int y = 0; y < 32; ++y) {
@@ -688,7 +688,7 @@ TEST_CASE(selection_redo_does_not_commit_live_edits) {
     REQUIRE(selectRect(canvas, {4, 4, 28, 28}));
     setBrush(canvas, 0.0f, 0.0f, 1.0f, 1.0f, 3.0f);
     drawLine(canvas, {8.0f, 16.0f}, {24.0f, 16.0f});
-    const std::vector<uint8_t> painted = layerPixels(canvas, 1);
+    const std::vector<uint8_t> painted = layerPixels(canvas, 0);
     REQUIRE(canvas.undo());
     REQUIRE(canvas.canRedo());
 
@@ -702,13 +702,13 @@ TEST_CASE(selection_redo_does_not_commit_live_edits) {
     canvas.endFeather(false);
     REQUIRE(canvas.canRedo());
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), painted), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), painted), 0);
 }
 
 TEST_CASE(selection_copy_keeps_soft_edges_and_survives_new_canvas) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    fillLayer(canvas, 1, {0, 0, 32, 32}, 0.0f, 0.0f, 1.0f);
+    fillLayer(canvas, 0, {0, 0, 32, 32}, 0.0f, 0.0f, 1.0f);
     REQUIRE(canvas.selectPolygon(selection::rectangle({8.5f, 8.0f}, {16.0f, 16.0f}), SelectOp::Replace));
     CHECK(canvas.copySelection() == Canvas::Edit::Done);
 
@@ -716,10 +716,10 @@ TEST_CASE(selection_copy_keeps_soft_edges_and_survives_new_canvas) {
     REQUIRE(canvas.init(8, 8));
     CHECK(canvas.canPaste());
     CHECK(canvas.paste() == Canvas::Edit::Done);
-    REQUIRE(canvas.layers().count() == 3);
+    REQUIRE(canvas.layers().count() == 2);
     // El borde a medias (x = 8 en el original) es la primera columna de lo copiado.
-    CHECK_PIXEL(layerAt(canvas, 2, 0, 4), (Pixel{0, 0, 128, 128}), 1);
-    CHECK_PIXEL(layerAt(canvas, 2, 4, 4), kBlue, 0);
+    CHECK_PIXEL(layerAt(canvas, 1, 0, 4), (Pixel{0, 0, 128, 128}), 1);
+    CHECK_PIXEL(layerAt(canvas, 1, 4, 4), kBlue, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -730,8 +730,8 @@ TEST_CASE(transform_moves_the_layer) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));
     CHECK(canvas.beginTransform() == Canvas::Edit::Nothing);   // capa vacía
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
 
     REQUIRE(canvas.beginTransform() == Canvas::Edit::Done);
     CHECK(canvas.transforming());
@@ -742,34 +742,34 @@ TEST_CASE(transform_moves_the_layer) {
     // Se ve movido, pero la capa no cambia hasta aplicar.
     CHECK_PIXEL(compositeAt(canvas, 16, 16), kWhite, 0);
     CHECK_PIXEL(compositeAt(canvas, 36, 26), kRed, 1);
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
 
     canvas.applyTransform();
     CHECK(!canvas.transforming());
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 16), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 36, 26), kRed, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 28, 18), kRed, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 27, 18), kClear, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 43, 33), kRed, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 44, 33), kClear, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 16), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 36, 26), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 28, 18), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 27, 18), kClear, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 43, 33), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 44, 33), kClear, 1);
     CHECK_PIXEL(compositeAt(canvas, 16, 16), kWhite, 0);
-    const std::vector<uint8_t> after = layerPixels(canvas, 1);
+    const std::vector<uint8_t> after = layerPixels(canvas, 0);
 
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
     REQUIRE(canvas.redo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), after), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), after), 0);
 
     // Una capa oculta no se transforma.
-    canvas.setLayerVisible(1, false);
+    canvas.setLayerVisible(0, false);
     CHECK(canvas.beginTransform() == Canvas::Edit::Hidden);
 }
 
 TEST_CASE(transform_cancel_undo_and_settle) {
     Canvas canvas;
     REQUIRE(canvas.init(48, 48));
-    fillLayer(canvas, 1, {8, 8, 16, 16}, 0.0f, 1.0f, 0.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {8, 8, 16, 16}, 0.0f, 1.0f, 0.0f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     const std::vector<uint8_t> image = composite(canvas);
     glm::vec2 corners[4];
 
@@ -802,11 +802,11 @@ TEST_CASE(transform_cancel_undo_and_settle) {
     REQUIRE(canvas.setTransform(corners, false));
     REQUIRE(canvas.addLayer());
     CHECK(!canvas.transforming());
-    CHECK_PIXEL(layerAt(canvas, 1, 28, 12), kGreen, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 12, 12), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 28, 12), kGreen, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 12, 12), kClear, 0);
     REQUIRE(canvas.undo());   // la capa nueva
     REQUIRE(canvas.undo());   // la transformación
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
 
     // Un cuadrilátero que se cruza no vale.
     REQUIRE(canvas.beginTransform() == Canvas::Edit::Done);
@@ -819,16 +819,16 @@ TEST_CASE(transform_flip_rotate_scale_and_distort) {
     Canvas canvas;
     REQUIRE(canvas.init(40, 40));
     // Mitad izquierda roja, mitad derecha verde.
-    fillLayer(canvas, 1, {8, 12, 16, 20}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {16, 12, 24, 20}, 0.0f, 1.0f, 0.0f);
+    fillLayer(canvas, 0, {8, 12, 16, 20}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {16, 12, 24, 20}, 0.0f, 1.0f, 0.0f);
 
     // Voltear en horizontal: las esquinas de la izquierda van a la derecha.
     REQUIRE(canvas.beginTransform() == Canvas::Edit::Done);
     const glm::vec2 flipped[4] = {{24.0f, 12.0f}, {8.0f, 12.0f}, {8.0f, 20.0f}, {24.0f, 20.0f}};
     REQUIRE(canvas.setTransform(flipped, false));
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 10, 16), kGreen, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 21, 16), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 10, 16), kGreen, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 21, 16), kRed, 1);
     REQUIRE(canvas.undo());
 
     // Girar 90° a la derecha alrededor del centro (16, 16).
@@ -836,9 +836,9 @@ TEST_CASE(transform_flip_rotate_scale_and_distort) {
     const glm::vec2 rotated[4] = {{20.0f, 8.0f}, {20.0f, 24.0f}, {12.0f, 24.0f}, {12.0f, 8.0f}};
     REQUIRE(canvas.setTransform(rotated, false));
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 10), kRed, 1);     // lo de la izquierda, arriba
-    CHECK_PIXEL(layerAt(canvas, 1, 16, 21), kGreen, 1);   // lo de la derecha, abajo
-    CHECK_PIXEL(layerAt(canvas, 1, 22, 16), kClear, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 10), kRed, 1);     // lo de la izquierda, arriba
+    CHECK_PIXEL(layerAt(canvas, 0, 16, 21), kGreen, 1);   // lo de la derecha, abajo
+    CHECK_PIXEL(layerAt(canvas, 0, 22, 16), kClear, 1);
     REQUIRE(canvas.undo());
 
     // Escalar al doble: suave en el borde, o nítido.
@@ -851,10 +851,10 @@ TEST_CASE(transform_flip_rotate_scale_and_distort) {
     REQUIRE(canvas.setTransform(scaled, true));
     CHECK_PIXEL(compositeAt(canvas, 8, 12), kRed, 0);
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 12), kRed, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 20, 20), kRed, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 30, 20), kGreen, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 30, 30), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 12), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 20, 20), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 30, 20), kGreen, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 30, 30), kClear, 0);
     REQUIRE(canvas.undo());
 
     // Reducir a la mitad (con mipmaps): el centro sigue siendo del color.
@@ -862,9 +862,9 @@ TEST_CASE(transform_flip_rotate_scale_and_distort) {
     const glm::vec2 half[4] = {{8.0f, 12.0f}, {16.0f, 12.0f}, {16.0f, 16.0f}, {8.0f, 16.0f}};
     REQUIRE(canvas.setTransform(half, false));
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 9, 14), kRed, 2);
-    CHECK_PIXEL(layerAt(canvas, 1, 14, 14), kGreen, 2);
-    CHECK_PIXEL(layerAt(canvas, 1, 20, 14), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 9, 14), kRed, 2);
+    CHECK_PIXEL(layerAt(canvas, 0, 14, 14), kGreen, 2);
+    CHECK_PIXEL(layerAt(canvas, 0, 20, 14), kClear, 0);
     REQUIRE(canvas.undo());
 
     // Distorsionar: un trapecio, más estrecho arriba. Con perspectiva, la mitad de arriba
@@ -874,18 +874,18 @@ TEST_CASE(transform_flip_rotate_scale_and_distort) {
     const glm::vec2 trapezoid[4] = {{12.0f, 4.0f}, {20.0f, 4.0f}, {24.0f, 20.0f}, {8.0f, 20.0f}};
     REQUIRE(canvas.setTransform(trapezoid, false));
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 12, 9), kRed, 2);
-    CHECK_PIXEL(layerAt(canvas, 1, 19, 9), kGreen, 2);
-    CHECK_PIXEL(layerAt(canvas, 1, 9, 5), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 22, 5), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 12, 9), kRed, 2);
+    CHECK_PIXEL(layerAt(canvas, 0, 19, 9), kGreen, 2);
+    CHECK_PIXEL(layerAt(canvas, 0, 9, 5), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 22, 5), kClear, 0);
 }
 
 TEST_CASE(transform_selection_moves_part_and_selection) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));
-    fillLayer(canvas, 1, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f);
-    fillLayer(canvas, 1, {40, 40, 56, 56}, 0.0f, 0.0f, 1.0f);
-    const std::vector<uint8_t> original = layerPixels(canvas, 1);
+    fillLayer(canvas, 0, {8, 8, 24, 24}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {40, 40, 56, 56}, 0.0f, 0.0f, 1.0f);
+    const std::vector<uint8_t> original = layerPixels(canvas, 0);
     REQUIRE(selectRect(canvas, {0, 0, 32, 32}));
 
     // Solo lo seleccionado, con la caja de lo que tiene pintado.
@@ -895,9 +895,9 @@ TEST_CASE(transform_selection_moves_part_and_selection) {
     moved(canvas.transformSource(), 24.0f, 0.0f, corners);
     REQUIRE(canvas.setTransform(corners, false));
     canvas.applyTransform();
-    CHECK_PIXEL(layerAt(canvas, 1, 12, 12), kClear, 0);
-    CHECK_PIXEL(layerAt(canvas, 1, 36, 12), kRed, 1);
-    CHECK_PIXEL(layerAt(canvas, 1, 48, 48), kBlue, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 12, 12), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 36, 12), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 48, 48), kBlue, 0);
     // La selección se ha movido igual.
     CHECK(canvas.hasSelection());
     CHECK_RECT(canvas.selectionBounds(), (IRect{24, 0, 56, 32}));
@@ -906,13 +906,13 @@ TEST_CASE(transform_selection_moves_part_and_selection) {
 
     // Un paso deshace las dos cosas.
     REQUIRE(canvas.undo());
-    CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 0), original), 0);
     CHECK_RECT(canvas.selectionBounds(), (IRect{0, 0, 32, 32}));
     CHECK_EQ(maskAt(canvas, 20, 16), 255);
     CHECK_EQ(maskAt(canvas, 40, 16), 0);
     REQUIRE(canvas.redo());
     CHECK_RECT(canvas.selectionBounds(), (IRect{24, 0, 56, 32}));
-    CHECK_PIXEL(layerAt(canvas, 1, 36, 12), kRed, 1);
+    CHECK_PIXEL(layerAt(canvas, 0, 36, 12), kRed, 1);
 
     // Selección sin nada pintado debajo: nada que transformar.
     REQUIRE(selectRect(canvas, {0, 40, 16, 56}));
@@ -922,7 +922,7 @@ TEST_CASE(transform_selection_moves_part_and_selection) {
 TEST_CASE(selection_lost_with_context) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
-    fillLayer(canvas, 1, {4, 4, 12, 12}, 1.0f, 0.0f, 0.0f);
+    fillLayer(canvas, 0, {4, 4, 12, 12}, 1.0f, 0.0f, 0.0f);
     REQUIRE(selectRect(canvas, {0, 0, 16, 16}));
     CHECK(canvas.copySelection() == Canvas::Edit::Done);
     REQUIRE(canvas.beginTransform() == Canvas::Edit::Done);
@@ -933,7 +933,7 @@ TEST_CASE(selection_lost_with_context) {
     // La selección y el portapapeles vivían en la GPU; lo demás sigue.
     CHECK(!canvas.hasSelection());
     CHECK(!canvas.canPaste());
-    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), kRed, 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), kRed, 0);
     REQUIRE(selectRect(canvas, {0, 0, 8, 8}));
     CHECK_EQ(maskAt(canvas, 4, 4), 255);
     CHECK(canvas.beginTransform() == Canvas::Edit::Done);

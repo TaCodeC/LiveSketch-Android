@@ -278,6 +278,7 @@ bool App::routeEvent(const SDL_Event& event) {
         const uint32_t bit = 1u << event.button.button;
         if (uiWantsPoint(event.button.x, event.button.y)) {
             m_uiMouseButtons |= bit;
+            m_uiTouch = isEmulatedMouse(event.button.which);
             ImGui_ImplSDL3_ProcessEvent(&event);
             return true;
         }

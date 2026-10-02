@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Canvas/BrushLibrary.h"
+#include "Canvas/CanvasSpec.h"
 #include "Canvas/DrawingGuide.h"
 #include "Canvas/ImageAdjust.h"
 #include "Canvas/PressureCurve.h"
@@ -8,6 +9,7 @@
 #include "Tools/SelectTool.h"
 #include "Tools/ToolView.h"
 #include "Tools/TransformTool.h"
+#include "UI/CanvasForm.h"
 #include "UI/Kit.h"
 #include "UI/Previews.h"
 
@@ -38,6 +40,7 @@ struct UiStatus {
     bool viewTurning = false;     // se está girando la vista: se muestra el ángulo
     StrokePointer strokePointer = StrokePointer::None;   // con qué se dibuja el trazo en curso
     float penPressure = -1.0f;    // presión del lápiz mientras toca la pantalla (0..1), o -1
+    bool touchInput = false;      // lo último que tocó la interfaz fue un dedo o el lápiz (no el ratón)
 
     bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
     bool ndiRunning = false;
@@ -48,8 +51,8 @@ struct UiStatus {
 
 // Lo que la interfaz pide a la app en este frame.
 struct UiRequests {
-    int canvasWidth = 0;    // > 0: crear un lienzo nuevo de este tamaño
-    int canvasHeight = 0;
+    bool createCanvas = false;   // crear un lienzo nuevo como `canvas`
+    CanvasSpec canvas;
     bool fitView = false;   // centrar el lienzo (animado)
     int rotateView = 0;     // girar la vista de 15 en 15 grados (+: en el sentido de las agujas del reloj)
     bool straightenView = false;   // dejar la vista derecha
@@ -80,8 +83,8 @@ enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
 // UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
 // (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
 // (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
-// rellenar), UiPen.cpp (curva de presión y suavizado) y UiDialogs.cpp (alertas y lienzo
-// nuevo).
+// rellenar), UiPen.cpp (curva de presión y suavizado), UiCanvas.cpp (tarjeta de lienzo
+// nuevo) y UiDialogs.cpp (alertas y pantalla de inicio).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -160,6 +163,8 @@ public:
 
 private:
     enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify, Adjust };
+    // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
+    enum class ColorTarget { Brush, Background };
     enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas };
 
     struct Layout {
@@ -282,10 +287,19 @@ private:
     void ndiPanel(Canvas& canvas, UiRequests& requests);
     void layersPanel(Canvas& canvas);
     void blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view);
+    // Al final de la lista de capas, el color de fondo: tocarlo abre su página.
+    void backgroundRow(Canvas& canvas, ImDrawList* dl, const ImRect& row, float thumbWidth, float thumbHeight);
     void layerMenu(Canvas& canvas);
     void colorPanel(Canvas& canvas);
+    // Rueda de tono con el cuadro de saturación y brillo, el hexadecimal, los recientes y la
+    // paleta, para el color de `target`, entre `left` y `right` desde `y`. `wide`: la rueda a
+    // la izquierda y lo demás a su derecha.
+    void colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float left, float right, float y,
+                     float wheel, bool wide);
+    void targetColor(const Canvas& canvas, ColorTarget target, float rgb[3]) const;
+    void setTargetColor(Canvas& canvas, ColorTarget target, const float rgb[3]);
     void syncHsv(const float rgb[3]);
-    void applyHsv(Canvas& canvas);
+    void applyHsv(Canvas& canvas, ColorTarget target);
 
     // --- UiBrushes.cpp ---
     void initBrushes();
@@ -407,9 +421,47 @@ private:
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
     void openDialog(Dialog dialog, const Canvas* canvas);
+    void startScreen(UiRequests& requests);
+
+    // --- UiCanvas.cpp ---
+    // Lo que dice el resumen de la tarjeta de lienzo nuevo.
+    struct CanvasSummary {
+        std::string size;           // "2480 × 3508 px"
+        std::string detail;         // "A4 vertical · 21 × 29,7 cm a 300 ppp"
+        std::string note;           // las capas que caben o, si no se puede crear, por qué
+        ImU32 noteColor = 0;        // 0: nada que avisar; si no, el color del aviso
+        bool canCreate = true;
+    };
     // Tarjeta de lienzo nuevo: pantalla de inicio (`modal` false) o desde Acciones.
     void newCanvasCard(bool modal, float presence, bool interactive, UiRequests& requests);
-    void startScreen(UiRequests& requests);
+    // Los tamaños (pestañas de las categorías y fichas) y los ajustes (nombre, tamaño a
+    // medida, resolución y fondo): su alto con este ancho y dibujarlos desde `y`.
+    float canvasPresetsHeight(float width, int category) const;
+    void canvasPresets(ImDrawList* dl, float left, float right, float y);
+    float canvasSettingsHeight(float width, bool colorOptions) const;
+    void canvasSettings(ImDrawList* dl, float left, float right, float y, bool interactive);
+    // Campo de un número (ancho o alto) que se escribe al tocarlo.
+    void numberField(ImDrawList* dl, const char* id, const ImRect& rect, CanvasForm::Field field, const char* caption,
+                     const std::string& value, const char* unit);
+    CanvasSummary canvasSummary() const;
+    // La forma del lienzo con su fondo y el resumen a su derecha, desde `top`.
+    void canvasSummaryBlock(ImDrawList* dl, const CanvasSummary& summary, float left, float right, float top,
+                            float preview);
+    // Teclado numérico para el número que se escribe.
+    void canvasKeypad(ImDrawList* dl, const ImRect& area);
+    // Píxeles de un tamaño de la tarjeta: la pantalla, o el papel a `ppi`.
+    void presetPixels(const canvasspec::Preset& preset, float ppi, int* width, int* height) const;
+    void beginCanvasEdit(CanvasForm::Field field, bool keypad);
+    // Deja de escribir (Escape sin cambiar nada; atrás, con lo escrito). Devuelve si se
+    // escribía algo.
+    bool cancelCanvasEdit();
+    // Teclado físico mientras se escribe un número.
+    void canvasKeys();
+    void submitCanvas(UiRequests& requests, bool modal);
+    void loadSavedSizes();
+    void saveSavedSizes() const;
+    // «Guardar tamaño»: lo que está configurado pasa a «Mis tamaños».
+    void saveCanvasSize();
 
     Previews m_previews;
     UiStatus m_status;
@@ -436,6 +488,9 @@ private:
     bool m_blendPage = false;       // el panel de capas muestra la lista de modos de fusión
     bool m_blendEditing = false;    // se han probado modos: al salir de la lista se guarda el paso
     bool m_blendScroll = false;     // al abrir la lista, mostrar el modo de la capa
+    bool m_backgroundPage = false;  // el panel de capas muestra el color de fondo
+    bool m_backgroundEditing = false;   // se cambió el fondo: al salir de su página se guarda el paso
+    float m_previousBackground[3] = {1.0f, 1.0f, 1.0f};   // el color de fondo al abrir su página
     ImRect m_activeRow;             // fila de la capa activa (para situar su menú)
     ImRect m_layersRect;            // panel de capas en pantalla
     bool m_layerOpacityDragging = false;
@@ -552,6 +607,15 @@ private:
     std::string m_dialogTitle;
     char m_renameBuffer[64] = {};
     bool m_dialogFocus = false;
-    int m_preset = 0;               // lienzo nuevo: tamaño elegido
-    int m_orientation = 0;          // 0 horizontal, 1 vertical
+
+    // Lienzo nuevo: lo que se configura, «Mis tamaños» y el número que se escribe.
+    CanvasForm m_canvasForm;
+    int m_canvasPreset[2] = {-1, -1};   // categoría y posición del último tamaño elegido
+    std::vector<canvasspec::SavedSize> m_savedSizes;
+    bool m_savedSizesLoaded = false;
+    bool m_keypad = false;          // los números se escriben con el teclado de la tarjeta
+    bool m_fieldScroll = false;     // hay que mostrar el campo que se empieza a escribir
+    ImRect m_fieldRect;             // campo que se escribe (en el frame anterior)
+    ImRect m_keypadRect;            // teclado numérico (en el frame anterior)
+    double m_eraseRepeat = 0.0;     // borrar mantenido: cuándo se vuelve a borrar
 };

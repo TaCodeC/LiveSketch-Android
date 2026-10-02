@@ -74,6 +74,14 @@ float paragraph(ImDrawList* dl, Weight weight, float points, ImVec2 pos, float w
 ImU32 withAlpha(ImU32 color, float factor);
 ImU32 mix(ImU32 a, ImU32 b, float t);
 ImU32 fromFloat(const float rgb[3], float alpha = 1.0f);
+// Componentes de 0 a 1 de `color` (sin el alfa).
+void toFloat(ImU32 color, float rgb[3]);
+// Iguales a la vista: ninguna componente se aleja más de medio paso de 8 bits.
+bool sameColor(const float a[3], const float b[3]);
+// Lee "#RGB", "#RRGGBB" o lo mismo sin "#".
+bool parseHex(const char* text, float rgb[3]);
+// "#RRGGBB" en `out` (8 caracteres como mínimo).
+void formatHex(const float rgb[3], char* out, size_t size);
 // Luminancia aproximada (0..1) para decidir si encima va texto claro u oscuro.
 float luminance(const float rgb[3]);
 
@@ -92,6 +100,9 @@ void glass(ImDrawList* dl, const ImRect& rect, float radius, ImU32 tint, ImDrawF
 void pushUnclipped(ImDrawList* dl);
 void popUnclipped(ImDrawList* dl);
 
+// Damero de lo transparente en un rectángulo redondeado, con casillas de `cell` (las de
+// las esquinas redondeadas se quedan en el gris de debajo).
+void checkerboard(ImDrawList* dl, const ImRect& rect, float radius, float cell);
 // Línea horizontal de un píxel.
 void separator(ImDrawList* dl, float x0, float x1, float y, ImU32 color = theme::kSeparator);
 // Borde de `thickness` por dentro de un rectángulo redondeado.

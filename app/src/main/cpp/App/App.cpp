@@ -390,20 +390,21 @@ void App::updateWindowSize() {
     m_camera.setViewport({static_cast<float>(width), static_cast<float>(height)});
 }
 
-void App::createCanvas(int width, int height) {
+void App::createCanvas(const CanvasSpec& spec) {
     // NDI emite al tamaño del lienzo: con uno nuevo se vuelve a empezar.
     const bool ndi = m_ndi.running();
     m_ndi.stop();
     endGestures();
     m_fitAnimation.active = false;
-    if (!m_canvas.init(width, height)) {
-        m_ui.notify("No se pudo crear un lienzo de " + std::to_string(width) + " × " + std::to_string(height),
+    if (!m_canvas.init(spec)) {
+        m_ui.notify("No se pudo crear un lienzo de " + std::to_string(spec.width) + " × " + std::to_string(spec.height),
                     Notice::Error, 5000);
         return;
     }
     m_ui.canvasCreated();
-    m_camera.setCanvasSize({static_cast<float>(width), static_cast<float>(height)});
-    SDL_Log("Lienzo de %dx%d (hasta %d capas)", width, height, m_canvas.maxLayers());
+    m_camera.setCanvasSize({static_cast<float>(spec.width), static_cast<float>(spec.height)});
+    SDL_Log("Lienzo de %dx%d a %.0f ppp (hasta %d capas)", spec.width, spec.height, static_cast<double>(spec.ppi),
+            m_canvas.maxLayers());
     if (ndi) {
         setNdiEnabled(true);
     }
@@ -580,6 +581,7 @@ UiStatus App::uiStatus() const {
         }
     }
     status.penPressure = m_pen.down ? m_pen.pressure : -1.0f;
+    status.touchInput = m_uiTouch;
     status.ndiAvailable = m_ndiAvailable;
     status.ndiRunning = m_ndi.running();
     status.ndiConnections = m_ndi.connections();
@@ -589,8 +591,8 @@ UiStatus App::uiStatus() const {
 }
 
 void App::applyRequests(const UiRequests& requests) {
-    if (requests.canvasWidth > 0 && requests.canvasHeight > 0) {
-        createCanvas(requests.canvasWidth, requests.canvasHeight);
+    if (requests.createCanvas) {
+        createCanvas(requests.canvas);
         m_redrawFrames = std::max(m_redrawFrames, kFramesAfterInput);
     }
     if (requests.fitView) {

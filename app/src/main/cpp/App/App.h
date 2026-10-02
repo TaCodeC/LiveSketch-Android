@@ -32,7 +32,7 @@ private:
     void onDidEnterForeground();
     void onRenderDeviceReset();
     void updateWindowSize();
-    void createCanvas(int width, int height);
+    void createCanvas(const CanvasSpec& spec);
     void setNdiEnabled(bool enabled);
     void requestPngExport();
     void exportPng();
@@ -233,4 +233,7 @@ private:
     // Botones del ratón (reales o emulados) cuya pulsación recibió ImGui. Su soltar
     // también tiene que llegarle; el resto de pulsaciones son del lienzo.
     uint32_t m_uiMouseButtons = 0;
+    // La última pulsación que recibió ImGui fue de un dedo o del lápiz: no suele haber
+    // teclado a mano (la tarjeta de lienzo nuevo saca el suyo para escribir números).
+    bool m_uiTouch = false;
 };
