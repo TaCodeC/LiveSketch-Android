@@ -93,6 +93,32 @@ std::string formatPpi(double ppi);
 // "Vertical", "Horizontal" o "Cuadrado".
 const char* orientationName(int width, int height);
 
+// --- Datos del lienzo (Propiedades) ---
+// Fecha y hora local, lo que hace falta para escribirla.
+struct LocalTime {
+    int year = 1970;
+    int month = 1;   // 1..12
+    int day = 1;
+    int hour = 0;
+    int minute = 0;
+};
+// "Hoy, 19:30", "Ayer, 8:05", "2 oct, 19:30" (de este año) o "2 oct 2025" (hoy, ayer y
+// este año, según `now`).
+std::string formatDate(const LocalTime& when, const LocalTime& now);
+// Tiempo dibujando: "Menos de 1 min", "12 min", "1 h 5 min" o "3 h".
+std::string formatDuration(double seconds);
+// Un número entero con un espacio cada tres cifras desde las cinco (como pide la RAE):
+// "1234", "12 345", "1 234 567".
+std::string formatCount(uint64_t count);
+
+// Tiempo dibujando: cada trazo suma lo que dura y, si empieza poco después de acabar el
+// anterior (pensar, cambiar de pincel o de color...), también esa pausa. Las pausas más
+// largas no cuentan.
+inline constexpr double kDrawingPause = 30.0;
+// Segundos que suma un trazo de `start` a `end` si el anterior acabó en `previousEnd`
+// (negativo: no hubo). En segundos de un reloj que solo avanza.
+double strokeSeconds(double start, double end, double previousEnd);
+
 // --- Tamaños de la tarjeta de lienzo nuevo ---
 enum class PresetCategory : uint8_t { Video, Screen, Social, Paper, Comic, Saved };
 inline constexpr int kPresetCategoryCount = 6;

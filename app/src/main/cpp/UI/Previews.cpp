@@ -95,6 +95,7 @@ bool Previews::init() {
 
 void Previews::destroy() {
     m_thumbnails.clear();
+    m_canvasThumbnail.target.destroy();
     m_strokes.clear();
     m_wetCoverage.destroy();
     m_brush.destroy();
@@ -108,18 +109,34 @@ GLuint Previews::layerThumbnail(const Layer& layer, int width, int height, int c
     if (!m_program || width <= 0 || height <= 0 || !layer.target) {
         return 0;
     }
-    Thumbnail& thumbnail = m_thumbnails[layer.id];
+    const GLuint texture = thumbnail(m_thumbnails[layer.id], layer.target, layer.revision, width, height, checkerCell);
+    if (texture == 0) {
+        m_thumbnails.erase(layer.id);
+    }
+    return texture;
+}
+
+GLuint Previews::canvasThumbnail(const gfx::RenderTarget& composite, uint64_t version, int width, int height,
+                                 int checkerCell) {
+    if (!m_program || width <= 0 || height <= 0 || !composite) {
+        return 0;
+    }
+    return thumbnail(m_canvasThumbnail, composite, version, width, height, checkerCell);
+}
+
+GLuint Previews::thumbnail(Thumbnail& thumbnail, const gfx::RenderTarget& source, uint64_t revision, int width,
+                           int height, int checkerCell) {
     const bool sized = thumbnail.target && thumbnail.target.width == width && thumbnail.target.height == height;
-    if (sized && thumbnail.revision == layer.revision) {
+    if (sized && thumbnail.revision == revision) {
         return thumbnail.target.texture.id();
     }
     if (!sized && !thumbnail.target.create(width, height)) {
-        m_thumbnails.erase(layer.id);
+        thumbnail.target.destroy();
         return 0;
     }
 
-    const float footprintX = static_cast<float>(layer.target.width) / static_cast<float>(width);
-    const float footprintY = static_cast<float>(layer.target.height) / static_cast<float>(height);
+    const float footprintX = static_cast<float>(source.width) / static_cast<float>(width);
+    const float footprintY = static_cast<float>(source.height) / static_cast<float>(height);
     const float footprint = std::max(footprintX, footprintY);
     const int taps = std::clamp(static_cast<int>(std::ceil(footprint * 0.5f)), 1, 16);
 
@@ -129,19 +146,19 @@ GLuint Previews::layerThumbnail(const Layer& layer, int width, int height, int c
     glDisable(GL_BLEND);
     glUseProgram(m_program.id());
     glUniform1i(m_uSource, 0);
-    glUniform2f(m_uTexel, 1.0f / static_cast<float>(layer.target.width), 1.0f / static_cast<float>(layer.target.height));
+    glUniform2f(m_uTexel, 1.0f / static_cast<float>(source.width), 1.0f / static_cast<float>(source.height));
     glUniform2f(m_uFootprint, footprintX, footprintY);
     glUniform1i(m_uTaps, taps);
     glUniform1f(m_uCell, static_cast<float>(std::max(checkerCell, 1)));
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, layer.target.texture.id());
+    glBindTexture(GL_TEXTURE_2D, source.texture.id());
     glBindVertexArray(m_vao.id());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    thumbnail.revision = layer.revision;
+    thumbnail.revision = revision;
     return thumbnail.target.texture.id();
 }
 

@@ -20,6 +20,10 @@ public:
     // Miniatura opaca de la capa (sobre un damero) de `width`×`height` píxeles.
     // `checkerCell`: lado de las casillas del damero en píxeles.
     GLuint layerThumbnail(const Layer& layer, int width, int height, int checkerCell);
+    // Lo mismo con el compuesto del lienzo (con el fondo, o el damero si está oculto).
+    // `version`: Canvas::version(), para rehacerla solo si cambió.
+    GLuint canvasThumbnail(const gfx::RenderTarget& composite, uint64_t version, int width, int height,
+                           int checkerCell);
     // Olvida las miniaturas de las capas que ya no están en la pila.
     void pruneThumbnails(const LayerStack& layers);
 
@@ -37,6 +41,10 @@ private:
         gfx::RenderTarget target;
         uint64_t revision = 0;
     };
+    // Reduce `source` a `thumbnail` (del tamaño pedido) si cambió `revision` o el tamaño.
+    // Devuelve su textura, o 0 si no se pudo crear.
+    GLuint thumbnail(Thumbnail& thumbnail, const gfx::RenderTarget& source, uint64_t revision, int width, int height,
+                     int checkerCell);
     struct Stroke {
         gfx::RenderTarget target;
         BrushParams params;
@@ -52,6 +60,7 @@ private:
     gfx::Buffer m_vbo;
 
     std::unordered_map<uint32_t, Thumbnail> m_thumbnails;   // por id de capa
+    Thumbnail m_canvasThumbnail;
     Brush m_brush;
     bool m_brushReady = false;
     StrokePath m_path;

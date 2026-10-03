@@ -458,9 +458,15 @@ void App::exportPng() {
         m_ui.notify("No se pudo leer el lienzo para guardar el PNG", Notice::Error, 5000);
         return;
     }
-    const std::string path = io::timestampedPath(io::downloadsFolder(), "LiveSketch", ".png");
-    if (!m_exporter.start(std::move(pixels), m_canvas.width(), m_canvas.height(), path,
-                          [] { pushEvent(g_exportEventType); })) {
+    // Con el nombre del lienzo (o la fecha y hora), sus ppp (se imprime a su tamaño) y su
+    // perfil de color.
+    const CanvasInfo& info = m_canvas.info();
+    png::Info png;
+    png.ppi = info.ppi;
+    png.profile = info.profile;
+    png.title = info.name;
+    if (!m_exporter.start(std::move(pixels), m_canvas.width(), m_canvas.height(), io::downloadsFolder(),
+                          io::fileStem(info.name), std::move(png), [] { pushEvent(g_exportEventType); })) {
         m_ui.notify("No se pudo empezar a guardar el PNG", Notice::Error, 5000);
         return;
     }
@@ -476,7 +482,8 @@ void App::onPngSaved(const io::PngExporter::Result& result) {
         m_ui.notify("PNG descargado: " + result.path.substr(result.path.find_last_of('/') + 1), Notice::Success,
                     5000);
 #elif defined(SDL_PLATFORM_ANDROID)
-        m_ui.notify("PNG guardado en Descargas", Notice::Success, 4000);
+        m_ui.notify("Guardado en Descargas: " + result.path.substr(result.path.find_last_of('/') + 1),
+                    Notice::Success, 4000);
 #else
         m_ui.notify("PNG guardado en " + result.path, Notice::Success, 5000);
 #endif

@@ -9,19 +9,27 @@
 // Los números se escriben con un teclado numérico propio cuando se tocan con el dedo o el
 // lápiz: el navegador de un móvil no saca su teclado para la app, y el de Android no pasa
 // a numérico sin cerrarlo y volverlo a abrir. Con el ratón se usa el teclado físico.
+//
+// Aquí van también las propiedades del lienzo, una página del panel de Acciones: el
+// nombre, la resolución (sin reescalar) y el fondo, con las mismas piezas que la tarjeta,
+// y los datos del lienzo (capas, memoria, tiempo dibujando, trazos y fechas).
 #include "UI/Ui.h"
 
+#include "Canvas/Canvas.h"
 #include "UI/Anim.h"
 #include "UI/Icons.h"
+#include "UI/PanelParts.h"
 
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_platform_defines.h>
 #include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_time.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -373,8 +381,7 @@ bool Ui::cancelCanvasEdit() {
     return false;
 }
 
-void Ui::canvasKeys() {
-    CanvasForm& form = m_canvasForm;
+void Ui::numberKeys(CanvasForm& form, bool cycle) {
     for (int i = 0; i < 10; ++i) {
         if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + i)) ||
             ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + i))) {
@@ -390,7 +397,7 @@ void Ui::canvasKeys() {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
         form.commit();
-    } else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+    } else if (cycle && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
         // Tabulador: ancho, alto y resolución, en vuelta (con Mayús, hacia atrás).
         constexpr Field kOrder[3] = {Field::Width, Field::Height, Field::Ppi};
         int at = 0;
@@ -765,48 +772,8 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
     // Resolución: las habituales o la que se escriba.
     section(dl, left, right, y, "RESOLUCIÓN (PPP)");
     y += pt(kSection);
-    {
-        const bool editing = form.field() == Field::Ppi;
-        int matched = -1;
-        for (int i = 0; i < 4; ++i) {
-            if (std::fabs(form.ppi() - kPpiChoices[i]) < 0.05f) {
-                matched = i;
-            }
-        }
-        const float gap = pt(6.0f);
-        const float chipWidth = (width - gap * 4.0f) / 5.0f;
-        for (int i = 0; i < 5; ++i) {
-            const float x0 = left + (chipWidth + gap) * static_cast<float>(i);
-            const ImRect chip(ImVec2(x0, y), ImVec2(x0 + chipWidth, y + pt(kChip)));
-            const bool other = i == 4;
-            ImGui::PushID(i);
-            const ui::Choice c = ui::choice("##ppi", chip, other ? (matched < 0 || editing) : (matched == i && !editing));
-            ImGui::PopID();
-            const ImU32 color = ui::mix(IM_COL32(235, 235, 245, 191), th::kLabel, c.on);
-            if (!other) {
-                char text[8];
-                std::snprintf(text, sizeof(text), "%d", static_cast<int>(kPpiChoices[i]));
-                ui::label(dl, Weight::SemiBold, th::kCallout, chip.GetCenter(), Align::Center, color, text);
-                if (c.press.clicked) {
-                    form.commit();
-                    form.setPpi(kPpiChoices[i]);
-                }
-                continue;
-            }
-            // «Otra»: se escribe ahí mismo; si los ppp no son de los de antes, los muestra.
-            if (editing) {
-                ui::outline(dl, chip, pt(th::kControlRadius), th::kAccent, pt(1.5f));
-                editText(dl, th::kCallout, chip.GetCenter(), Align::Center, form.text(), form.fresh());
-                m_fieldRect = chip;
-            } else {
-                const std::string value = matched < 0 ? canvasspec::formatNumber(form.ppi(), 1) : std::string("Otra");
-                ui::label(dl, Weight::SemiBold, th::kCallout, chip.GetCenter(), Align::Center, color, value.c_str(),
-                          chipWidth - pt(8.0f));
-            }
-            if (c.press.clicked && !editing) {
-                beginCanvasEdit(Field::Ppi, kKeypadAlways || m_status.touchInput);
-            }
-        }
+    if (ppiChips(dl, left, right, y, form, &m_fieldRect)) {
+        beginCanvasEdit(Field::Ppi, kKeypadAlways || m_status.touchInput);
     }
     y += pt(kChip + kHintGap);
     {
@@ -825,36 +792,92 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
     // Fondo: blanco, un color o transparente (en Capas se puede cambiar después).
     section(dl, left, right, y, "FONDO");
     y += pt(kSection);
+    backgroundOptions(dl, left, right, y, &form.background, form.color, interactive);
+}
+
+bool Ui::ppiChips(ImDrawList* dl, float left, float right, float y, CanvasForm& form, ImRect* fieldRect) {
+    const bool editing = form.field() == Field::Ppi;
+    int matched = -1;
+    for (int i = 0; i < 4; ++i) {
+        if (std::fabs(form.ppi() - kPpiChoices[i]) < 0.05f) {
+            matched = i;
+        }
+    }
+    bool begin = false;
+    const float gap = pt(6.0f);
+    const float chipWidth = (right - left - gap * 4.0f) / 5.0f;
+    for (int i = 0; i < 5; ++i) {
+        const float x0 = left + (chipWidth + gap) * static_cast<float>(i);
+        const ImRect chip(ImVec2(x0, y), ImVec2(x0 + chipWidth, y + pt(kChip)));
+        const bool other = i == 4;
+        ImGui::PushID(i);
+        const ui::Choice c = ui::choice("##ppi", chip, other ? (matched < 0 || editing) : (matched == i && !editing));
+        ImGui::PopID();
+        const ImU32 color = ui::mix(IM_COL32(235, 235, 245, 191), th::kLabel, c.on);
+        if (!other) {
+            char text[8];
+            std::snprintf(text, sizeof(text), "%d", static_cast<int>(kPpiChoices[i]));
+            ui::label(dl, Weight::SemiBold, th::kCallout, chip.GetCenter(), Align::Center, color, text);
+            if (c.press.clicked) {
+                form.commit();
+                form.setPpi(kPpiChoices[i]);
+            }
+            continue;
+        }
+        // «Otra»: se escribe ahí mismo; si los ppp no son de los de antes, los muestra.
+        if (editing) {
+            ui::outline(dl, chip, pt(th::kControlRadius), th::kAccent, pt(1.5f));
+            editText(dl, th::kCallout, chip.GetCenter(), Align::Center, form.text(), form.fresh());
+            *fieldRect = chip;
+        } else {
+            const std::string value = matched < 0 ? canvasspec::formatNumber(form.ppi(), 1) : std::string("Otra");
+            ui::label(dl, Weight::SemiBold, th::kCallout, chip.GetCenter(), Align::Center, color, value.c_str(),
+                      chipWidth - pt(8.0f));
+        }
+        begin = c.press.clicked && !editing;
+    }
+    return begin;
+}
+
+float Ui::backgroundOptionsHeight(bool colorOptions) const {
+    return pt(kBackgroundChip + (colorOptions ? kColorOptions : 0.0f));
+}
+
+bool Ui::backgroundOptions(ImDrawList* dl, float left, float right, float y, FormBackground* kind, float color[3],
+                           bool interactive) {
+    const float width = right - left;
+    bool changed = false;
     {
         const char* labels[3] = {"Blanco", "Color", "Transparente"};
         const float gap = pt(8.0f);
         const float chipWidth = (width - gap * 2.0f) / 3.0f;
         for (int i = 0; i < 3; ++i) {
-            const auto kind = static_cast<FormBackground>(i);
+            const auto option = static_cast<FormBackground>(i);
             const float x0 = left + (chipWidth + gap) * static_cast<float>(i);
             const ImRect chip(ImVec2(x0, y), ImVec2(x0 + chipWidth, y + pt(kBackgroundChip)));
             ImGui::PushID(i);
-            const ui::Choice c = ui::choice("##background", chip, form.background == kind);
+            const ui::Choice c = ui::choice("##background", chip, *kind == option);
             ImGui::PopID();
             const ImVec2 center(chip.GetCenter().x, chip.Min.y + pt(21.0f));
             const ImRect sample(ImVec2(center.x - pt(11.0f), center.y - pt(11.0f)),
                                 ImVec2(center.x + pt(11.0f), center.y + pt(11.0f)));
-            backgroundFill(dl, sample, pt(5.0f), kind, form.color);
+            backgroundFill(dl, sample, pt(5.0f), option, color);
             ui::outline(dl, sample, pt(5.0f), IM_COL32(255, 255, 255, 46), ui::hairline());
             ui::label(dl, Weight::SemiBold, th::kMicro, ImVec2(chip.GetCenter().x, chip.Max.y - pt(13.0f)),
                       Align::Center, ui::mix(IM_COL32(235, 235, 245, 166), th::kAccentText, c.on), labels[i],
                       chipWidth - pt(6.0f));
-            if (c.press.clicked) {
-                form.background = kind;
-                if (kind != FormBackground::Color) {
+            if (c.press.clicked && *kind != option) {
+                *kind = option;
+                changed = true;
+                if (option != FormBackground::Color) {
                     m_hexEditing = false;
                 }
             }
         }
     }
     y += pt(kBackgroundChip);
-    if (form.background != FormBackground::Color) {
-        return;
+    if (*kind != FormBackground::Color) {
+        return changed;
     }
 
     // El color: muestras y el hexadecimal.
@@ -869,8 +892,9 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
             ui::toFloat(kBackgroundSwatches[i], rgb);
             ImGui::PushID(i);
             if (ui::swatch("##swatch", ImRect(ImVec2(x0, y0), ImVec2(x0 + cell, y0 + pt(kSwatch))), kBackgroundSwatches[i],
-                           ui::sameColor(rgb, form.color))) {
-                std::copy(rgb, rgb + 3, form.color);
+                           ui::sameColor(rgb, color))) {
+                std::copy(rgb, rgb + 3, color);
+                changed = true;
                 m_hexEditing = false;
             }
             ImGui::PopID();
@@ -879,7 +903,7 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
     y += pt(kSwatch * 2.0f + kSwatchGap + 14.0f);
     {
         char hex[16];
-        ui::formatHex(form.color, hex, sizeof(hex));
+        ui::formatHex(color, hex, sizeof(hex));
         const float fieldWidth = pt(112.0f);
         const ImRect field(ImVec2(right - fieldWidth, y), ImVec2(right, y + pt(kHex)));
         ui::sectionLabel(dl, left, field.Min.x - pt(10.0f), field.GetCenter().y, "HEX");
@@ -893,7 +917,8 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
             if (enter || (!active && m_hexFocusFrames == 0)) {
                 float rgb[3];
                 if (ui::parseHex(m_hexBuffer, rgb)) {
-                    std::copy(rgb, rgb + 3, form.color);
+                    changed = changed || !ui::sameColor(rgb, color);
+                    std::copy(rgb, rgb + 3, color);
                 } else if (enter) {
                     notify("Escribe el color como #RRGGBB", Notice::Warning, 2500);
                 }
@@ -909,42 +934,36 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
             ui::outline(dl, field, radius, IM_COL32(255, 255, 255, 31), pt(1.0f));
             ui::label(dl, Weight::SemiBold, th::kCallout, field.GetCenter(), Align::Center, th::kLabel, hex);
             if (press.clicked) {
+                // Deja escrito el número que se estuviera escribiendo.
                 m_canvasForm.commit();
+                m_ppiForm.commit();
                 m_hexEditing = true;
                 m_hexFocusFrames = 2;
                 std::snprintf(m_hexBuffer, sizeof(m_hexBuffer), "%s", hex);
             }
         }
     }
+    return changed;
 }
 
 // -----------------------------------------------------------------------------
 // Resumen
 // -----------------------------------------------------------------------------
 
-Ui::CanvasSummary Ui::canvasSummary() const {
-    const CanvasForm& form = m_canvasForm;
-    const int width = form.pixelWidth();
-    const int height = form.pixelHeight();
-    CanvasSummary summary;
-    char text[160];
-    std::snprintf(text, sizeof(text), "%d × %d px", width, height);
-    summary.size = text;
-
-    // Qué tamaño es: el que se eligió si aún lo es, el primero que coincida (mejor en su
-    // orientación que girado), un papel conocido o uno a medida.
+std::string Ui::sizeName(int width, int height, float ppi, int category, int index) const {
+    // Qué tamaño es: el elegido (`category` e `index`) si aún lo es, el primero que coincida
+    // (mejor en su orientación que girado), un papel conocido o uno a medida.
     auto match = [&](const canvasspec::Preset& preset) {
         int w = 0;
         int h = 0;
-        presetPixels(preset, form.ppi(), &w, &h);
+        presetPixels(preset, ppi, &w, &h);
         return sizeMatch(width, height, w, h);
     };
     const char* name = nullptr;
-    if (m_canvasPreset[0] >= 0) {
-        const auto list = canvasspec::presets(static_cast<PresetCategory>(m_canvasPreset[0]));
-        if (m_canvasPreset[1] >= 0 && m_canvasPreset[1] < static_cast<int>(list.size()) &&
-            match(list[static_cast<size_t>(m_canvasPreset[1])]) > 0) {
-            name = list[static_cast<size_t>(m_canvasPreset[1])].name;
+    if (category >= 0 && category < static_cast<int>(PresetCategory::Saved)) {
+        const auto list = canvasspec::presets(static_cast<PresetCategory>(category));
+        if (index >= 0 && index < static_cast<int>(list.size()) && match(list[static_cast<size_t>(index)]) > 0) {
+            name = list[static_cast<size_t>(index)].name;
         }
     }
     for (int wanted = 2; !name && wanted > 0; --wanted) {
@@ -958,28 +977,39 @@ Ui::CanvasSummary Ui::canvasSummary() const {
         }
     }
     if (!name) {
-        name = canvasspec::paperName(width, height, form.ppi());
+        name = canvasspec::paperName(width, height, ppi);
     }
     const char* orientation = canvasspec::orientationName(width, height);
-    std::string detail;
-    if (name) {
-        // "A4 vertical", pero "Cuadrado" o "Full HD vertical" sin repetirlo.
-        auto lower = [](std::string s) {
-            for (char& ch : s) {
-                if (ch >= 'A' && ch <= 'Z') {
-                    ch = static_cast<char>(ch - 'A' + 'a');
-                }
-            }
-            return s;
-        };
-        const std::string word = lower(orientation);
-        detail = name;
-        if (lower(detail).find(word) == std::string::npos) {
-            detail += " " + word;
-        }
-    } else {
-        detail = std::string(orientation) + " a medida";
+    if (!name) {
+        return std::string(orientation) + " a medida";
     }
+    // "A4 vertical", pero "Cuadrado" o "Full HD vertical" sin repetirlo.
+    auto lower = [](std::string text) {
+        for (char& ch : text) {
+            if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+        return text;
+    };
+    const std::string word = lower(orientation);
+    std::string text = name;
+    if (lower(text).find(word) == std::string::npos) {
+        text += " " + word;
+    }
+    return text;
+}
+
+Ui::CanvasSummary Ui::canvasSummary() const {
+    const CanvasForm& form = m_canvasForm;
+    const int width = form.pixelWidth();
+    const int height = form.pixelHeight();
+    CanvasSummary summary;
+    char text[160];
+    std::snprintf(text, sizeof(text), "%d × %d px", width, height);
+    summary.size = text;
+
+    std::string detail = sizeName(width, height, form.ppi(), m_canvasPreset[0], m_canvasPreset[1]);
     // Medido en papel, lo que mide a esos ppp; en píxeles, solo los ppp (el tamaño al
     // imprimir no suele importar para vídeo o pantalla).
     if (form.unit() == LengthUnit::Pixels) {
@@ -1064,9 +1094,7 @@ void Ui::canvasSummaryBlock(ImDrawList* dl, const CanvasSummary& summary, float 
 // Teclado numérico
 // -----------------------------------------------------------------------------
 
-void Ui::canvasKeypad(ImDrawList* dl, const ImRect& area) {
-    CanvasForm& form = m_canvasForm;
-    m_keypadRect = area;
+void Ui::numberKeypad(ImDrawList* dl, const ImRect& area, CanvasForm& form) {
     ImGui::PushID("##keypad");
 
     // Barra: qué se escribe con su valor, y «Listo».
@@ -1185,7 +1213,7 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         if (tap && !m_fieldRect.Contains(io.MouseClickedPos[0]) && !m_keypadRect.Contains(io.MouseClickedPos[0])) {
             form.commit();
         } else {
-            canvasKeys();
+            numberKeys(form, true);
         }
     }
     m_fieldRect = ImRect();
@@ -1279,7 +1307,8 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         dl->AddRectFilled(ImVec2(rect.Min.x, footerTop), ImVec2(rect.Max.x, rect.Max.y), IM_COL32(16, 16, 19, 140));
         ui::separator(dl, rect.Min.x, rect.Max.x, footerTop, th::kRule);
         if (keypad) {
-            canvasKeypad(dl, ImRect(ImVec2(left, footerTop + pt(10.0f)), ImVec2(right, footerTop + footerHeight - pt(8.0f))));
+            m_keypadRect = ImRect(ImVec2(left, footerTop + pt(10.0f)), ImVec2(right, footerTop + footerHeight - pt(8.0f)));
+            numberKeypad(dl, m_keypadRect, form);
         } else {
             float top = footerTop + pt(12.0f);
             canvasSummaryBlock(dl, summary, left, right, top, pt(kSummary));
@@ -1379,7 +1408,8 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
             const float kx = left + (presetsWidth - keypadWidth) * 0.5f;
             const float top = bodyTop + pt(kBodyPad);
             const float kh = std::min(keypadHeight(), bodyBottom - pt(kBodyPad) - top);
-            canvasKeypad(dl, ImRect(ImVec2(kx, top), ImVec2(kx + keypadWidth, top + kh)));
+            m_keypadRect = ImRect(ImVec2(kx, top), ImVec2(kx + keypadWidth, top + kh));
+            numberKeypad(dl, m_keypadRect, form);
         } else {
             const float content = canvasPresetsHeight(presetsWidth, form.category) + pt(kBodyPad * 2.0f);
             const bool scrolls = content > presetsView.GetHeight() + 0.5f;
@@ -1442,5 +1472,339 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         submitCanvas(requests, modal);
     } else if (close) {
         m_dialog = Dialog::None;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Propiedades del lienzo
+// -----------------------------------------------------------------------------
+
+namespace {
+
+// Medidas de la página (pt).
+constexpr float kPagePad = 16.0f;         // márgenes de la página
+constexpr float kPreview = 76.0f;         // caja de la miniatura del lienzo
+constexpr float kFact = 58.0f;            // cada fila de los datos
+constexpr float kKeypadGap = 12.0f;       // entre las fichas de los ppp y el teclado
+
+constexpr const char* kPpiNote =
+    "No reescala el dibujo: solo cambia el tamaño al imprimir, que también se guarda en el PNG.";
+
+// Fecha local de un SDL_Time (0: no se sabe).
+bool localDate(int64_t when, canvasspec::LocalTime* out) {
+    SDL_DateTime date;
+    if (when == 0 || !SDL_TimeToDateTime(when, &date, true)) {
+        return false;
+    }
+    *out = {date.year, date.month, date.day, date.hour, date.minute};
+    return true;
+}
+
+std::string dateText(int64_t when) {
+    canvasspec::LocalTime date;
+    canvasspec::LocalTime today;
+    SDL_Time now = 0;
+    if (!localDate(when, &date) || !SDL_GetCurrentTime(&now) || !localDate(now, &today)) {
+        return "—";
+    }
+    return canvasspec::formatDate(date, today);
+}
+
+// El nombre sin los espacios de los extremos.
+std::string trimmed(const char* text) {
+    const std::string name = text;
+    const size_t first = name.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return {};
+    }
+    return name.substr(first, name.find_last_not_of(" \t") - first + 1);
+}
+
+// Copia `text` en `buffer` (de `size` bytes) sin partir un carácter UTF-8.
+void copyName(const std::string& text, char* buffer, size_t size) {
+    size_t length = std::min(text.size(), size - 1);
+    while (length > 0 && length < text.size() && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80) {
+        --length;
+    }
+    std::memcpy(buffer, text.data(), length);
+    buffer[length] = '\0';
+}
+
+bool isWhite(const float rgb[3]) {
+    constexpr float kWhite[3] = {1.0f, 1.0f, 1.0f};
+    return ui::sameColor(rgb, kWhite);
+}
+
+// La ficha del fondo que corresponde al del lienzo.
+FormBackground backgroundKind(const CanvasBackground& background) {
+    if (!background.visible) {
+        return FormBackground::Transparent;
+    }
+    return isWhite(background.color) ? FormBackground::White : FormBackground::Color;
+}
+
+} // namespace
+
+void Ui::openProperties(const Canvas& canvas) {
+    m_actionsPage = ActionsPage::Properties;
+    m_ppiForm.cancel();
+    m_ppiForm.setPpi(canvas.info().ppi);
+    m_ppiKeypad = false;
+    m_ppiScroll = false;
+    m_nameEditing = false;
+    m_hexEditing = false;
+    copyName(canvas.info().name, m_nameBuffer, sizeof(m_nameBuffer));
+    // Se abre por arriba.
+    ui::scrollIntoView("##properties", 0.0f, 0.0f, 1.0f);
+}
+
+bool Ui::stopPropertiesEdit(Canvas& canvas, bool keep) {
+    bool stopped = false;
+    if (m_ppiForm.field() != Field::None) {
+        if (keep) {
+            m_ppiForm.commit();
+        } else {
+            m_ppiForm.cancel();
+        }
+        if (m_ppiForm.ppi() != canvas.info().ppi) {
+            canvas.setPpi(m_ppiForm.ppi());
+        }
+        stopped = true;
+    }
+    if (m_nameEditing) {
+        // El nombre ya cambió según se escribía.
+        ImGui::ClearActiveID();
+        m_nameEditing = false;
+        stopped = true;
+    }
+    return stopped;
+}
+
+float Ui::propertiesHeight(const Canvas& canvas, float width) const {
+    const float inner = width - pt(kPagePad * 2.0f);
+    float height = pt(kPagePad + kPreview + kSectionGap);   // resumen
+    height += pt(kSection + kNameField + kSectionGap);        // nombre
+    height += pt(kSection + kChip);                           // resolución
+    if (m_ppiKeypad && m_ppiForm.field() != Field::None) {
+        height += pt(kKeypadGap) + keypadHeight();
+    }
+    height += pt(kHintGap) +
+              ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f), inner, Align::Left, 0, kPpiNote,
+                            1.4f) +
+              pt(kSectionGap);
+    height += pt(kSection) + backgroundOptionsHeight(backgroundKind(canvas.background()) == FormBackground::Color) +
+              pt(kSectionGap);                                // fondo
+    height += pt(kSection + kFact * 3.0f + kPagePad);         // información
+    return height;
+}
+
+void Ui::propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool interactive) {
+    const ImGuiIO& io = ImGui::GetIO();
+    const CanvasInfo& info = canvas.info();
+    CanvasForm& form = m_ppiForm;
+
+    // Los ppp: sin escribirlos, los del lienzo. Escribiéndolos, un toque fuera de su ficha y
+    // del teclado (sin arrastrar, que es desplazar) los deja escritos; si no, el teclado
+    // físico.
+    if (form.field() == Field::None) {
+        if (form.ppi() != info.ppi) {
+            form.setPpi(info.ppi);
+        }
+    } else if (interactive) {
+        const float slop = pt(kTapSlop);
+        const bool tap = ImGui::IsMouseReleased(ImGuiMouseButton_Left) && io.MouseDragMaxDistanceSqr[0] <= slop * slop;
+        if (tap && !m_ppiFieldRect.Contains(io.MouseClickedPos[0]) && !m_ppiKeypadRect.Contains(io.MouseClickedPos[0])) {
+            form.commit();
+        } else {
+            numberKeys(form, false);
+        }
+    }
+    m_ppiFieldRect = ImRect();
+    m_ppiKeypadRect = ImRect();
+    const bool keypad = m_ppiKeypad && form.field() != Field::None;
+
+    const float left = view.Min.x + pt(kPagePad);
+    const float right = view.Max.x - pt(kPagePad);
+    const float inner = right - left;
+    const float body = propertiesHeight(canvas, view.GetWidth());
+    const bool colorOptions = backgroundKind(canvas.background()) == FormBackground::Color;
+    const bool scrolls = body > view.GetHeight() + 0.5f;
+    const float scroll = scrolls ? ui::beginScroll("##properties", view, body) : 0.0f;
+    const float origin = view.Min.y - scroll;   // lo alto de la página
+    float y = origin + pt(kPagePad);
+
+    // Resumen: el lienzo en miniatura, sus píxeles, qué tamaño es y lo que mide en papel a
+    // sus ppp (mientras se escriben, a los que se escriben).
+    {
+        const float ppi = form.ppi();
+        const ImRect box(ImVec2(left, y), ImVec2(left + pt(kPreview), y + pt(kPreview)));
+        const float radius = pt(12.0f);
+        dl->AddRectFilled(box.Min, box.Max, IM_COL32(0, 0, 0, 64), radius);
+        ui::outline(dl, box, radius, IM_COL32(255, 255, 255, 20), ui::hairline());
+        const float w = static_cast<float>(std::max(canvas.width(), 1));
+        const float h = static_cast<float>(std::max(canvas.height(), 1));
+        const float fit = (pt(kPreview) - pt(14.0f)) / std::max(w, h);
+        const ImRect shape =
+            frameRect(box.GetCenter(), ImVec2(std::max(w * fit, pt(4.0f)), std::max(h * fit, pt(4.0f))));
+        const float pixels = m_status.pixelsPerUnit;
+        const int checker = std::max(1, static_cast<int>(std::lround(pt(4.0f) * pixels)));
+        const GLuint texture = m_previews.canvasThumbnail(
+            canvas.composite(), canvas.version(), static_cast<int>(std::lround(shape.GetWidth() * pixels)),
+            static_cast<int>(std::lround(shape.GetHeight() * pixels)), checker);
+        const float shapeRadius = pt(3.0f);
+        if (texture != 0) {
+            dl->AddImageRounded(ImTextureRef(ui::parts::textureId(texture)), shape.Min, shape.Max, ImVec2(0.0f, 0.0f),
+                                ImVec2(1.0f, 1.0f), IM_COL32_WHITE, shapeRadius);
+        } else {
+            backgroundFill(dl, shape, shapeRadius, backgroundKind(canvas.background()), canvas.background().color);
+        }
+        ui::outline(dl, shape, shapeRadius, IM_COL32(255, 255, 255, 46), ui::hairline());
+
+        const float x = box.Max.x + pt(14.0f);
+        const float textWidth = std::max(right - x, pt(40.0f));
+        const float cy = box.GetCenter().y;
+        char size[48];
+        std::snprintf(size, sizeof(size), "%d × %d px", canvas.width(), canvas.height());
+        ui::label(dl, Weight::SemiBold, th::kBody, ImVec2(x, cy - pt(20.0f)), Align::Left, th::kLabel, size, textWidth);
+        const std::string name = sizeName(canvas.width(), canvas.height(), ppi, -1, -1);
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(x, cy + pt(1.0f)), Align::Left, th::kSecondaryLabel,
+                  name.c_str(), textWidth);
+        // En papel, en la unidad en que se midió (centímetros si fue en píxeles).
+        const LengthUnit unit = info.unit == LengthUnit::Pixels ? LengthUnit::Centimeters : info.unit;
+        const std::string paper =
+            canvasspec::paperSize(canvas.width(), canvas.height(), unit, ppi) + " a " + canvasspec::formatPpi(ppi);
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(x, cy + pt(20.0f)), Align::Left,
+                  IM_COL32(235, 235, 245, 128), paper.c_str(), textWidth);
+    }
+    y += pt(kPreview + kSectionGap);
+
+    // Nombre: cambia según se escribe.
+    section(dl, left, right, y, "NOMBRE");
+    y += pt(kSection);
+    {
+        const ImRect field(ImVec2(left, y), ImVec2(right, y + pt(kNameField)));
+        if (!m_nameEditing && info.name != m_nameBuffer) {
+            copyName(info.name, m_nameBuffer, sizeof(m_nameBuffer));
+        }
+        if (interactive) {
+            const bool enter =
+                ui::textField("##properties-name", field, m_nameBuffer, sizeof(m_nameBuffer), false, "Sin título");
+            const bool active = ImGui::IsItemActive();
+            if (active || enter || ImGui::IsItemDeactivated()) {
+                std::string name = trimmed(m_nameBuffer);
+                if (name != info.name) {
+                    canvas.setName(std::move(name));
+                }
+            }
+            m_nameEditing = active;
+        } else {
+            staticField(dl, field, m_nameBuffer, "Sin título");
+            m_nameEditing = false;
+        }
+    }
+    y += pt(kNameField + kSectionGap);
+
+    // Resolución: las fichas, el teclado mientras se escribe con él y qué cambia.
+    section(dl, left, right, y, "RESOLUCIÓN (PPP)");
+    y += pt(kSection);
+    const float ppiTop = y - origin;
+    if (ppiChips(dl, left, right, y, form, &m_ppiFieldRect) && interactive) {
+        form.begin(Field::Ppi);
+        m_ppiKeypad = kKeypadAlways || m_status.touchInput;
+        m_ppiScroll = true;
+        m_hexEditing = false;
+    }
+    y += pt(kChip);
+    if (keypad) {
+        y += pt(kKeypadGap);
+        m_ppiKeypadRect = ImRect(ImVec2(left, y), ImVec2(right, y + keypadHeight()));
+        numberKeypad(dl, m_ppiKeypadRect, form);
+        y += keypadHeight();
+    }
+    const float ppiBottom = y - origin;
+    y += pt(kHintGap);
+    y += ui::paragraph(dl, Weight::Regular, th::kFootnote, ImVec2(left, y), inner, Align::Left, th::kSecondaryLabel,
+                       kPpiNote, 1.4f);
+    y += pt(kSectionGap);
+
+    // Fondo: cada cambio es un paso de deshacer. «Color» vuelve al último que no era blanco.
+    section(dl, left, right, y, "FONDO");
+    y += pt(kSection);
+    {
+        const CanvasBackground background = canvas.background();
+        if (!isWhite(background.color)) {
+            std::copy(background.color, background.color + 3, m_propertiesColor);
+        }
+        FormBackground kind = backgroundKind(background);
+        float color[3];
+        std::copy(m_propertiesColor, m_propertiesColor + 3, color);
+        if (backgroundOptions(dl, left, right, y, &kind, color, interactive)) {
+            CanvasBackground next = background;
+            next.visible = kind != FormBackground::Transparent;
+            if (kind == FormBackground::White) {
+                std::fill(next.color, next.color + 3, 1.0f);
+            } else if (kind == FormBackground::Color) {
+                std::copy(color, color + 3, next.color);
+                std::copy(color, color + 3, m_propertiesColor);
+            }
+            if (!(next == background)) {
+                canvas.setBackground(next);
+            }
+        }
+    }
+    y += backgroundOptionsHeight(colorOptions) + pt(kSectionGap);
+
+    // Datos del lienzo, en una tira de dos columnas.
+    section(dl, left, right, y, "INFORMACIÓN");
+    y += pt(kSection);
+    {
+        const int count = canvas.layers().count();
+        const size_t bytes = canvasspec::layerBytes(canvas.width(), canvas.height()) * static_cast<size_t>(count);
+        struct Fact {
+            const char* caption;
+            std::string value;
+        };
+        const Fact facts[6] = {
+            {"CAPAS", std::to_string(count) + " de " + std::to_string(canvas.maxLayers())},
+            {"MEMORIA", canvasspec::formatBytes(bytes)},
+            {"TIEMPO DIBUJANDO", canvasspec::formatDuration(info.drawingSeconds)},
+            {"TRAZOS", canvasspec::formatCount(info.strokes)},
+            {"CREADO", dateText(info.created)},
+            {"MODIFICADO", dateText(info.modified)},
+        };
+        const ImRect strip(ImVec2(left, y), ImVec2(right, y + pt(kFact * 3.0f)));
+        const float radius = pt(12.0f);
+        dl->AddRectFilled(strip.Min, strip.Max, IM_COL32(255, 255, 255, 13), radius);
+        ui::outline(dl, strip, radius, th::kRule, pt(1.0f));
+        const float column = strip.GetWidth() * 0.5f;
+        const float lineX = ui::snap(strip.Min.x + column);
+        dl->AddRectFilled(ImVec2(lineX, strip.Min.y), ImVec2(lineX + ui::hairline(), strip.Max.y), th::kRule);
+        for (int row = 1; row < 3; ++row) {
+            ui::separator(dl, strip.Min.x, strip.Max.x, ui::snap(strip.Min.y + pt(kFact) * static_cast<float>(row)),
+                          th::kRule);
+        }
+        for (int i = 0; i < 6; ++i) {
+            const float x0 = strip.Min.x + column * static_cast<float>(i % 2) + pt(12.0f);
+            const float y0 = strip.Min.y + pt(kFact) * static_cast<float>(i / 2);
+            ui::tracked(dl, Weight::Bold, 10.0f, ImVec2(x0, y0 + pt(18.0f)), th::kSectionLabel, facts[i].caption, 0.08f);
+            ui::label(dl, Weight::SemiBold, th::kCallout, ImVec2(x0, y0 + pt(40.0f)), Align::Left, th::kLabel,
+                      facts[i].value.c_str(), column - pt(20.0f));
+        }
+    }
+
+    if (scrolls) {
+        ui::endScroll();
+    }
+    // Al empezar a escribir los ppp, que se vean sus fichas y el teclado (cuando ya ocupa
+    // su sitio en la página).
+    if (m_ppiScroll && keypad == (m_ppiKeypad && form.field() != Field::None)) {
+        if (scrolls) {
+            ui::scrollIntoView("##properties", ppiTop - pt(kSection + 8.0f), ppiBottom + pt(16.0f), view.GetHeight());
+        }
+        m_ppiScroll = false;
+    }
+    // Los ppp elegidos o escritos pasan al lienzo.
+    if (form.field() == Field::None && form.ppi() != canvas.info().ppi) {
+        canvas.setPpi(form.ppi());
     }
 }

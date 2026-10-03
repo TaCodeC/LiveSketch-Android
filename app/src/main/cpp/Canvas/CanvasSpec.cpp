@@ -265,6 +265,85 @@ const char* orientationName(int width, int height) {
     return width < height ? "Vertical" : "Cuadrado";
 }
 
+namespace {
+
+// Días desde el 1 de enero de 1970 (calendario gregoriano; vale para cualquier año).
+int64_t daysFromCivil(int year, int month, int day) {
+    const int64_t y = static_cast<int64_t>(year) - (month <= 2 ? 1 : 0);
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const int64_t yearOfEra = y - era * 400;
+    const int64_t dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const int64_t dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+    return era * 146097 + dayOfEra - 719468;
+}
+
+} // namespace
+
+std::string formatDate(const LocalTime& when, const LocalTime& now) {
+    static constexpr const char* kMonths[12] = {"ene", "feb", "mar", "abr", "may", "jun",
+                                                "jul", "ago", "sept", "oct", "nov", "dic"};
+    char time[16];
+    std::snprintf(time, sizeof(time), "%d:%02d", std::clamp(when.hour, 0, 23), std::clamp(when.minute, 0, 59));
+    const int64_t days = daysFromCivil(now.year, now.month, now.day) - daysFromCivil(when.year, when.month, when.day);
+    if (days == 0) {
+        return std::string("Hoy, ") + time;
+    }
+    if (days == 1) {
+        return std::string("Ayer, ") + time;
+    }
+    // Este año, el día y la hora; de otro año, el día con el año.
+    const char* month = kMonths[std::clamp(when.month, 1, 12) - 1];
+    char text[48];
+    if (when.year == now.year) {
+        std::snprintf(text, sizeof(text), "%d %s, %s", when.day, month, time);
+    } else {
+        std::snprintf(text, sizeof(text), "%d %s %d", when.day, month, when.year);
+    }
+    return text;
+}
+
+std::string formatDuration(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 60.0) {
+        return "Menos de 1 min";
+    }
+    const auto minutes = static_cast<int64_t>(seconds / 60.0);
+    const int64_t hours = minutes / 60;
+    if (hours == 0) {
+        return std::to_string(minutes) + " min";
+    }
+    std::string text = std::to_string(hours) + " h";
+    if (minutes % 60 != 0) {
+        text += " " + std::to_string(minutes % 60) + " min";
+    }
+    return text;
+}
+
+std::string formatCount(uint64_t count) {
+    const std::string digits = std::to_string(count);
+    if (digits.size() <= 4) {
+        return digits;
+    }
+    std::string text;
+    for (size_t i = 0; i < digits.size(); ++i) {
+        if (i > 0 && (digits.size() - i) % 3 == 0) {
+            text += ' ';
+        }
+        text += digits[i];
+    }
+    return text;
+}
+
+double strokeSeconds(double start, double end, double previousEnd) {
+    if (!std::isfinite(start) || !std::isfinite(end) || end < start) {
+        return 0.0;
+    }
+    double seconds = end - start;
+    if (std::isfinite(previousEnd) && previousEnd >= 0.0 && start >= previousEnd && start - previousEnd <= kDrawingPause) {
+        seconds += start - previousEnd;
+    }
+    return seconds;
+}
+
 const char* categoryName(PresetCategory category) {
     switch (category) {
     case PresetCategory::Video:

@@ -1,7 +1,6 @@
 #include "IO/ImageExport.h"
 
 #include "Gfx/Pixels.h"
-#include "ThirdParty/stb_image_write.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_filesystem.h>
@@ -17,6 +16,7 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
 #include <system_error>
 
 #ifdef SDL_PLATFORM_EMSCRIPTEN
@@ -151,17 +151,41 @@ void androidScanFile(JNIEnv* env, const std::string& path, const char* mimeType)
 
 #endif // SDL_PLATFORM_ANDROID
 
-struct PngStream {
-    SDL_IOStream* io = nullptr;
-    bool ok = true;
-};
+// Nombres de archivo de como mucho tantos bytes (sin la extensión ni el « (2)»).
+constexpr size_t kMaxStem = 96;
+// Nombres que se prueban antes de rendirse: «stem», «stem (2)»... «stem (999)».
+constexpr int kMaxCopies = 999;
 
-void writeToStream(void* context, void* data, int size) {
-    auto* stream = static_cast<PngStream*>(context);
-    const auto bytes = static_cast<size_t>(size);
-    if (stream->ok && SDL_WriteIO(stream->io, data, bytes) != bytes) {
-        stream->ok = false;
+// Quita los espacios y puntos de los extremos (un nombre que empieza por punto queda oculto
+// en Linux y Android, y Windows no admite que acabe en punto o espacio).
+std::string trimStem(const std::string& text) {
+    const size_t first = text.find_first_not_of(" .");
+    if (first == std::string::npos) {
+        return {};
     }
+    return text.substr(first, text.find_last_not_of(" .") - first + 1);
+}
+
+// Escribe con `produce` (que recibe adónde) en `io` y lo cierra. Si algo falla, borra el
+// archivo a medias y deja el motivo en SDL_GetError().
+template <typename Produce>
+bool fillFile(SDL_IOStream* io, const std::string& path, Produce produce) {
+    bool written = true;
+    const png::Sink sink = [io, &written](const uint8_t* data, size_t size) {
+        written = written && SDL_WriteIO(io, data, size) == size;
+        return written;
+    };
+    const bool produced = produce(sink);
+    std::string error = produced ? std::string() : std::string(SDL_GetError());
+    if (!SDL_CloseIO(io) && error.empty()) {
+        error = SDL_GetError();
+    }
+    if (error.empty()) {
+        return true;
+    }
+    SDL_RemovePath(path.c_str());
+    SDL_SetError("%s", error.c_str());
+    return false;
 }
 
 } // namespace
@@ -192,49 +216,71 @@ std::string downloadsFolder() {
 #endif
 }
 
-std::string timestampedPath(const std::string& folder, const char* prefix, const char* extension) {
+std::string fileStem(const std::string& canvasName) {
+    std::string stem;
+    for (const char c : canvasName) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte < 0x20 || byte == 0x7F || std::strchr("*?\"<>|", c)) {
+            continue;
+        }
+        stem += (c == '/' || c == '\\' || c == ':') ? '-' : c;
+    }
+    stem = trimStem(stem);
+    if (stem.size() > kMaxStem) {
+        // Sin partir un carácter UTF-8 por la mitad.
+        size_t cut = kMaxStem;
+        while (cut > 0 && (static_cast<unsigned char>(stem[cut]) & 0xC0) == 0x80) {
+            --cut;
+        }
+        stem = trimStem(stem.substr(0, cut));
+    }
+    if (!stem.empty()) {
+        return stem;
+    }
+
     SDL_Time now = 0;
     SDL_DateTime date;
     SDL_zero(date);
     if (SDL_GetCurrentTime(&now)) {
         SDL_TimeToDateTime(now, &date, true);
     }
-    char stamp[32];
-    std::snprintf(stamp, sizeof(stamp), "%04d%02d%02d_%02d%02d%02d", date.year, date.month, date.day, date.hour,
-                  date.minute, date.second);
-
-    const std::string base = folder + prefix + "_" + stamp;
-    std::string path = base + extension;
-    for (int n = 2; SDL_GetPathInfo(path.c_str(), nullptr) && n < 1000; ++n) {
-        path = base + "_" + std::to_string(n) + extension;
-    }
-    return path;
+    char stamp[48];
+    std::snprintf(stamp, sizeof(stamp), "LiveSketch_%04d%02d%02d_%02d%02d%02d", date.year, date.month, date.day,
+                  date.hour, date.minute, date.second);
+    return stamp;
 }
 
-bool writePng(const std::string& path, const uint8_t* rgba, int width, int height) {
+SDL_IOStream* createFile(const std::string& folder, const std::string& stem, const char* extension,
+                         std::string* path) {
+    if (!SDL_GetPathInfo(folder.empty() ? "." : folder.c_str(), nullptr)) {
+        return nullptr;   // sin la carpeta no sirve probar otros nombres
+    }
+    for (int n = 1; n <= kMaxCopies; ++n) {
+        std::string candidate = folder + stem;
+        if (n > 1) {
+            candidate += " (" + std::to_string(n) + ")";
+        }
+        candidate += extension;
+        // "x": solo si no existe, así no se pisa ninguno (ni uno que acabe de crear otro).
+        // No se mira antes si existe: en Android los archivos que dejó otra app (o una
+        // instalación anterior de esta) pueden no verse y aun así ocupar el nombre.
+        if (SDL_IOStream* io = SDL_IOFromFile(candidate.c_str(), "wbx")) {
+            *path = std::move(candidate);
+            return io;
+        }
+    }
+    *path = folder + stem + extension;
+    return nullptr;
+}
+
+bool writePng(const std::string& path, const uint8_t* rgba, int width, int height, const png::Info& info) {
     SDL_IOStream* io = SDL_IOFromFile(path.c_str(), "wb");
     if (!io) {
         return false;
     }
-    PngStream stream{io, true};
-    // stb arma el PNG entero en memoria y lo entrega de una vez.
-    const bool encoded = stbi_write_png_to_func(writeToStream, &stream, width, height, 4, rgba, width * 4) != 0;
-
-    std::string error;
-    if (!encoded) {
-        error = "no hay memoria para comprimir la imagen";
-    } else if (!stream.ok) {
-        error = SDL_GetError();
-    }
-    if (!SDL_CloseIO(io) && error.empty()) {
-        error = SDL_GetError();
-    }
-    if (error.empty()) {
-        return true;
-    }
-    SDL_RemovePath(path.c_str());
-    SDL_SetError("%s", error.c_str());
-    return false;
+    return fillFile(io, path, [&](const png::Sink& sink) {
+        return png::encode(rgba, width, height, static_cast<size_t>(width) * 4, info, sink);
+    });
 }
 
 void announceFile([[maybe_unused]] const std::string& path, [[maybe_unused]] const char* mimeType) {
@@ -255,8 +301,8 @@ PngExporter::~PngExporter() {
     wait();
 }
 
-bool PngExporter::start(std::vector<uint8_t> premultiplied, int width, int height, std::string path,
-                        std::function<void()> onFinished) {
+bool PngExporter::start(std::vector<uint8_t> premultiplied, int width, int height, std::string folder,
+                        std::string stem, png::Info info, std::function<void()> onFinished) {
     const size_t expectedBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
     if (width <= 0 || height <= 0 || premultiplied.size() != expectedBytes) {
         return false;
@@ -272,16 +318,25 @@ bool PngExporter::start(std::vector<uint8_t> premultiplied, int width, int heigh
         m_thread.join();   // el guardado anterior ya terminó
     }
 
-    auto save = [this, pixels = std::move(premultiplied), width, height, path = std::move(path),
-                 onFinished = std::move(onFinished)]() mutable {
-        gfx::unpremultiply(pixels.data(), pixels.size() / 4);
+    auto save = [this, pixels = std::move(premultiplied), width, height, folder = std::move(folder),
+                 stem = std::move(stem), info = std::move(info), onFinished = std::move(onFinished)]() mutable {
         Result result;
-        result.ok = writePng(path, pixels.data(), width, height);
-        if (!result.ok) {
+        gfx::unpremultiply(pixels.data(), pixels.size() / 4);
+        std::vector<uint8_t> filtered = png::filterRows(pixels.data(), width, height, static_cast<size_t>(width) * 4);
+        pixels = {};   // mientras se comprime, una imagen menos en memoria
+        if (filtered.empty()) {
+            result.error = "no hay memoria para comprimir la imagen";
+        } else if (SDL_IOStream* io = createFile(folder, stem, ".png", &result.path)) {
+            result.ok = fillFile(io, result.path,
+                                 [&](const png::Sink& sink) { return png::write(filtered, width, height, info, sink); });
+        }
+        if (!result.ok && result.error.empty()) {
             result.error = SDL_GetError();
         }
-        result.path = std::move(path);
-        pixels = {};
+        if (result.path.empty()) {
+            result.path = folder + stem + ".png";
+        }
+        filtered = {};
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);

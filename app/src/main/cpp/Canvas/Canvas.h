@@ -56,6 +56,10 @@ struct CanvasInfo {
     float ppi = 72.0f;                          // resolución de impresión
     LengthUnit unit = LengthUnit::Pixels;       // en qué se midió al crearlo
     ColorProfile profile = ColorProfile::Srgb;
+    int64_t created = 0;                        // SDL_Time: nanosegundos desde 1970 (UTC)
+    int64_t modified = 0;                       // último cambio del documento
+    double drawingSeconds = 0.0;                // tiempo dibujando (ver canvasspec::strokeSeconds)
+    uint64_t strokes = 0;                       // trazos terminados
 };
 
 class Canvas {
@@ -69,7 +73,14 @@ public:
     int width() const { return m_layers.width(); }
     int height() const { return m_layers.height(); }
 
+    // Nombre, resolución, fechas y estadísticas. El nombre y los ppp se cambian sin deshacer
+    // (los ppp no cambian los píxeles: solo el tamaño al imprimir).
     const CanvasInfo& info() const { return m_info; }
+    void setName(std::string name);
+    void setPpi(float ppi);
+    // Sube cada vez que cambia el documento: los píxeles, las capas, el fondo, la guía, el
+    // nombre o los ppp (la selección no cuenta).
+    uint64_t documentVersion() const { return m_documentVersion; }
 
     // Color de fondo, debajo de todas las capas. Como la opacidad de una capa, se puede
     // cambiar de forma continua (`final` = false, mientras se elige el color): el paso de
@@ -379,6 +390,11 @@ private:
     void swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stored);
     void record(HistoryStep step);
     void applyStep(HistoryStep& step, bool undo);
+    // Sin memoria para guardar el paso de deshacer de un cambio ya hecho: lo anterior ya no
+    // se puede deshacer.
+    void dropHistory();
+    // El documento cambió: sube documentVersion() y la fecha de cambio.
+    void markChanged();
     size_t layerBytes() const;
 
     // Selección (CanvasSelection.cpp).
@@ -414,6 +430,7 @@ private:
     bool m_ready = false;
     int m_maxTextureSize = 0;          // lado máximo de una textura en esta GPU
     CanvasInfo m_info;
+    uint64_t m_documentVersion = 0;
     CanvasBackground m_background;
     LayerStack m_layers;
     Compositor m_compositor;
@@ -436,6 +453,8 @@ private:
     bool m_useBase = false;
     uint32_t m_drawnRevision = 0;
     uint32_t m_strokeCount = 0;         // semilla del azar de cada trazo
+    uint64_t m_strokeStartNs = 0;       // SDL_GetTicksNS al empezar el trazo en curso
+    uint64_t m_lastStrokeEndNs = 0;     // al acabar el anterior (0: no hubo)
     bool m_wet = false;                 // el trazo mezcla con la capa (húmedo o Difuminar)
     bool m_wetCoverage = false;         // m_strokeBase lleva la cobertura del trazo húmedo
     WetMix m_wetMix;

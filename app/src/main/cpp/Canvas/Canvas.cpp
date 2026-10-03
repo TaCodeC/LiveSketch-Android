@@ -3,6 +3,8 @@
 #include "Canvas/BrushTips.h"
 
 #include <SDL3/SDL_log.h>
+#include <SDL3/SDL_time.h>
+#include <SDL3/SDL_timer.h>
 #include <glm/common.hpp>
 
 #include <algorithm>
@@ -73,9 +75,15 @@ bool Canvas::init(const CanvasSpec& spec) {
     }
     m_info = {};
     m_info.name = spec.name;
-    m_info.ppi = std::clamp(spec.ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi);
+    m_info.ppi = std::isfinite(spec.ppi) ? std::clamp(spec.ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi) : 72.0f;
     m_info.unit = spec.unit;
     m_info.profile = spec.profile;
+    SDL_Time now = 0;
+    if (SDL_GetCurrentTime(&now)) {
+        m_info.created = now;
+        m_info.modified = now;
+    }
+    m_lastStrokeEndNs = 0;
     m_background = spec.background;
     m_layers.reset(width, height);
     m_guide = guide::defaults({static_cast<float>(width), static_cast<float>(height)});
@@ -248,6 +256,7 @@ bool Canvas::beginStroke(float x, float y, float pressure, bool eraserTip) {
     }
     path.pixelsPerPoint = m_pixelsPerPoint;
     path.seed = ++m_strokeCount * 0x9E3779B9U;
+    m_strokeStartNs = SDL_GetTicksNS();
     m_path.begin(m_strokeParams, path, x, y, pressure);
     m_drawnRevision = m_path.revision() - 1;
 
@@ -320,6 +329,14 @@ void Canvas::endStroke() {
     m_path.finish();
     flushDabs();
     commitStroke();
+
+    // Estadísticas: un trazo más y lo que se ha estado dibujando.
+    const uint64_t now = SDL_GetTicksNS();
+    const double previous = m_lastStrokeEndNs > 0 ? static_cast<double>(m_lastStrokeEndNs) * 1e-9 : -1.0;
+    m_info.drawingSeconds += canvasspec::strokeSeconds(static_cast<double>(m_strokeStartNs) * 1e-9,
+                                                       static_cast<double>(now) * 1e-9, previous);
+    m_lastStrokeEndNs = now;
+    ++m_info.strokes;
 }
 
 void Canvas::cancelStroke() {
@@ -450,7 +467,7 @@ void Canvas::changeRegions(Layer& layer, const std::vector<IRect>& regions, Fini
     }
     ++layer.revision;
     if (!saved) {
-        m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
+        dropHistory();
     } else if (steps.size() == 1) {
         record(std::move(steps.front()));
     } else {
@@ -801,7 +818,11 @@ void Canvas::setGuide(const DrawingGuide& guide) {
     g.opacity = std::isfinite(g.opacity) ? std::clamp(g.opacity, 0.0f, 1.0f) : 1.0f;
     g.gridSize = std::isfinite(g.gridSize) ? std::clamp(g.gridSize, guide::kMinGridSize, guide::kMaxGridSize)
                                            : guide::defaults(size).gridSize;
+    if (g == m_guide) {
+        return;
+    }
     m_guide = g;
+    markChanged();
 }
 
 // -----------------------------------------------------------------------------
@@ -980,7 +1001,7 @@ bool Canvas::mergeDown(int index) {
         step.bytes = 2 * layerBytes();
         record(std::move(step));
     } else {
-        m_history.clear();
+        dropHistory();
     }
     return true;
 }
@@ -1011,7 +1032,7 @@ void Canvas::changePixels(int index, Change change) {
         step.bytes = bytesOf(rect.width(), rect.height());
         record(std::move(step));
     } else {
-        m_history.clear();
+        dropHistory();
     }
 }
 
@@ -1253,7 +1274,45 @@ void Canvas::swapRegion(Layer& layer, const IRect& rect, gfx::RenderTarget& stor
     m_layers.markDirty(rect);
 }
 
-void Canvas::record(HistoryStep step) { m_history.push(std::move(step)); }
+void Canvas::record(HistoryStep step) {
+    if (step.kind != HistoryStep::Kind::Selection) {
+        markChanged();
+    }
+    m_history.push(std::move(step));
+}
+
+void Canvas::dropHistory() {
+    m_history.clear();
+    markChanged();
+}
+
+void Canvas::markChanged() {
+    ++m_documentVersion;
+    SDL_Time now = 0;
+    if (SDL_GetCurrentTime(&now)) {
+        m_info.modified = now;
+    }
+}
+
+void Canvas::setName(std::string name) {
+    if (!m_ready || name == m_info.name) {
+        return;
+    }
+    m_info.name = std::move(name);
+    markChanged();
+}
+
+void Canvas::setPpi(float ppi) {
+    if (!m_ready || !std::isfinite(ppi)) {
+        return;
+    }
+    ppi = std::clamp(ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi);
+    if (ppi == m_info.ppi) {
+        return;
+    }
+    m_info.ppi = ppi;
+    markChanged();
+}
 
 void Canvas::applyStep(HistoryStep& step, bool undo) {
     using Kind = HistoryStep::Kind;
@@ -1361,6 +1420,9 @@ bool Canvas::undo() {
         return false;
     }
     applyStep(*step, true);
+    if (step->kind != HistoryStep::Kind::Selection) {
+        markChanged();
+    }
     return true;
 }
 
@@ -1382,6 +1444,9 @@ bool Canvas::redo() {
         return false;
     }
     applyStep(*step, false);
+    if (step->kind != HistoryStep::Kind::Selection) {
+        markChanged();
+    }
     return true;
 }
 

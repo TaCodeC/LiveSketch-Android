@@ -453,6 +453,20 @@ bool Ui::closeTopmost(Canvas* canvas) {
         m_layerMenu = false;
         return true;
     }
+    if (m_actionsPage == ActionsPage::Properties && m_panel == Panel::Actions) {
+        // Primero se deja de escribir (atrás, con lo escrito, como el teclado del sistema);
+        // después, vuelve a las pestañas.
+        if (canvas && stopPropertiesEdit(*canvas, ImGui::IsKeyPressed(ImGuiKey_AppBack, false))) {
+            return true;
+        }
+        if (m_hexEditing) {
+            m_hexEditing = false;
+            ImGui::ClearActiveID();
+            return true;
+        }
+        m_actionsPage = ActionsPage::Main;
+        return true;
+    }
     if ((m_blendPage || m_backgroundPage) && m_panel == Panel::Layers) {
         m_blendPage = false;   // vuelve a la lista de capas
         m_backgroundPage = false;
@@ -538,7 +552,8 @@ void Ui::handleKeys(Canvas& canvas, UiRequests& requests) {
         }
         return;
     }
-    if (io.WantTextInput || m_dialog != Dialog::None) {
+    // Escribiendo (también los ppp de las propiedades del lienzo), las teclas no son atajos.
+    if (io.WantTextInput || m_dialog != Dialog::None || m_ppiForm.field() != CanvasForm::Field::None) {
         return;
     }
     const bool command = io.KeyCtrl || io.KeySuper;

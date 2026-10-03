@@ -11,9 +11,11 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 - Pressure-sensitive brushes (four brush textures, each with a preview stroke), color wheel with hex input, recent colors and a palette. The brush and the eraser keep their own brush, size and opacity; the stylus eraser tip uses the eraser settings.
 - Undo and redo for strokes and layer changes.
 - Eyedropper, with a loupe that shows the color under it next to the current one.
-- New canvas sizes: full screen, HD 720p, Full HD 1080p, QHD 1440p, 4K UHD and a small one, horizontal or vertical.
+- New canvas card: sizes by category (video and NDI, screen, social media, paper, comics) and your own saved sizes, or a custom size in px, mm, cm or inches with its resolution in ppi; the canvas name and its background (white, any color or transparent), with a live summary of the print size and how many layers fit.
+- The background is a color of the canvas, not a layer: the "Color de fondo" row at the bottom of the Layers panel changes it without touching the drawing, or hides it for a transparent PNG and NDI with alpha.
+- Actions > Canvas > "Propiedades": rename the canvas, change its ppi without resampling and change its background, and see its size in pixels and on paper, layers, memory, dates, drawing time and strokes.
 - NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom. The NDI capsule turns red while live and shows the number of receivers.
-- "Guardar PNG" saves the full canvas to Downloads as `LiveSketch_YYYYMMDD_HHMMSS.png`, with transparency.
+- "Guardar PNG" saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file, so it prints at the canvas size. Hiding the background color makes it transparent.
 - The Android back button closes the open panel; with everything closed, it asks before exiting.
 - It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
 
@@ -121,4 +123,5 @@ tools/fonts/         script that builds the font subsets and UI/Icons.h
 - [Inter](https://rsms.me/inter/) – interface font (SIL Open Font License 1.1, `app/src/main/assets/fonts/Inter-LICENSE.txt`).
 - [Lucide](https://lucide.dev/) – icons (ISC License, `app/src/main/assets/fonts/Lucide-LICENSE.txt`).
 - [glm](https://github.com/g-truc/glm) – math.
-- [stb_image / stb_image_write](https://github.com/nothings/stb) – brush textures and PNG export.
+- [stb_image](https://github.com/nothings/stb) – brush textures.
+- [libdeflate](https://github.com/ebiggers/libdeflate) – PNG compression (MIT License, `app/src/main/cpp/ThirdParty/libdeflate/COPYING`).

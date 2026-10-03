@@ -29,6 +29,8 @@ struct DrawingGuide {
 
     // Los trazos se repiten.
     bool mirrors() const { return enabled && kind == GuideKind::Symmetry; }
+
+    bool operator==(const DrawingGuide&) const = default;
 };
 
 namespace guide {

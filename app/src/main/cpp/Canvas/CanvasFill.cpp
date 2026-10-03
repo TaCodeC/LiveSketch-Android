@@ -121,7 +121,7 @@ bool Canvas::endFill(bool apply) {
             step.bytes = bytesOf(bounds.width(), bounds.height());
             record(std::move(step));
         } else {
-            m_history.clear();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
+            dropHistory();   // sin memoria para guardarlo: lo anterior ya no se puede deshacer
         }
     }
     // El buffer de trazo vuelve a quedar transparente y la capa se ve otra vez sola.

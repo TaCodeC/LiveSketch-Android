@@ -796,6 +796,6 @@ void Canvas::applyTransform() {
     if (saved) {
         record(std::move(group));
     } else {
-        m_history.clear();
+        dropHistory();
     }
 }

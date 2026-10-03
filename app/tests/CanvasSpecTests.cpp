@@ -3,6 +3,7 @@
 
 #include "Canvas/CanvasSpec.h"
 
+#include <cmath>
 #include <string>
 
 using namespace canvasspec;
@@ -161,4 +162,48 @@ TEST_CASE(canvas_spec_saved_sizes_round_trip) {
     CHECK(!fromLine("1920 1080 px 0", &read));
     CHECK(!fromLine("2 2 px 72", &read));            // demasiado pequeño
     CHECK(!fromLine("90000 90000 px 72", &read));    // demasiado grande
+}
+
+TEST_CASE(canvas_spec_dates_durations_and_counts) {
+    const LocalTime now{2026, 10, 2, 21, 5};
+    CHECK_EQ(formatDate({2026, 10, 2, 19, 30}, now), std::string("Hoy, 19:30"));
+    CHECK_EQ(formatDate({2026, 10, 1, 8, 5}, now), std::string("Ayer, 8:05"));
+    // De este año, con la hora; de otro, con el año.
+    CHECK_EQ(formatDate({2026, 9, 30, 23, 59}, now), std::string("30 sept, 23:59"));
+    CHECK_EQ(formatDate({2026, 1, 1, 0, 0}, now), std::string("1 ene, 0:00"));
+    CHECK_EQ(formatDate({2025, 1, 15, 7, 45}, now), std::string("15 ene 2025"));
+    CHECK_EQ(formatDate({2025, 12, 31, 23, 0}, now), std::string("31 dic 2025"));
+    // Ayer, cambiando de mes y de año (y con el 29 de febrero).
+    CHECK_EQ(formatDate({2026, 12, 31, 0, 0}, {2027, 1, 1, 9, 0}), std::string("Ayer, 0:00"));
+    CHECK_EQ(formatDate({2024, 2, 29, 12, 0}, {2024, 3, 1, 9, 0}), std::string("Ayer, 12:00"));
+    CHECK_EQ(formatDate({2025, 2, 28, 12, 0}, {2025, 3, 1, 9, 0}), std::string("Ayer, 12:00"));
+    // Una fecha futura (el reloj cambió) no es hoy ni ayer.
+    CHECK_EQ(formatDate({2026, 10, 3, 10, 0}, now), std::string("3 oct, 10:00"));
+
+    CHECK_EQ(formatDuration(0.0), std::string("Menos de 1 min"));
+    CHECK_EQ(formatDuration(59.9), std::string("Menos de 1 min"));
+    CHECK_EQ(formatDuration(60.0), std::string("1 min"));
+    CHECK_EQ(formatDuration(12 * 60 + 59), std::string("12 min"));
+    CHECK_EQ(formatDuration(3600 + 5 * 60), std::string("1 h 5 min"));
+    CHECK_EQ(formatDuration(3 * 3600 + 30), std::string("3 h"));
+    CHECK_EQ(formatDuration(std::nan("")), std::string("Menos de 1 min"));
+
+    CHECK_EQ(formatCount(0), std::string("0"));
+    CHECK_EQ(formatCount(1234), std::string("1234"));
+    CHECK_EQ(formatCount(12345), std::string("12 345"));
+    CHECK_EQ(formatCount(100000), std::string("100 000"));
+    CHECK_EQ(formatCount(1234567), std::string("1 234 567"));
+}
+
+TEST_CASE(canvas_spec_drawing_time) {
+    // El primer trazo cuenta lo que dura.
+    CHECK_NEAR(strokeSeconds(10.0, 12.5, -1.0), 2.5, 1e-9);
+    // Una pausa corta antes del trazo también cuenta; una larga, no.
+    CHECK_NEAR(strokeSeconds(20.0, 21.0, 12.5), 8.5, 1e-9);
+    CHECK_NEAR(strokeSeconds(51.0, 52.0, 21.0), 31.0, 1e-9);   // justo kDrawingPause
+    CHECK_NEAR(strokeSeconds(100.0, 101.0, 21.0), 1.0, 1e-9);
+    // Relojes sin sentido: nada, o solo el trazo.
+    CHECK_NEAR(strokeSeconds(5.0, 4.0, -1.0), 0.0, 1e-9);
+    CHECK_NEAR(strokeSeconds(5.0, 6.0, 9.0), 1.0, 1e-9);
+    CHECK_NEAR(strokeSeconds(std::nan(""), 6.0, -1.0), 0.0, 1e-9);
 }

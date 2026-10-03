@@ -142,9 +142,11 @@ constexpr float kHelpHeight = 8.0f + kHelpSection + kGestureRow * kGestureCount 
                               kShortcutRow * kShortcutCount + 12.0f + 16.0f + 12.0f;
 
 // Fila de menú: icono atenuado, título y, a la derecha, un valor. `filled`: con fondo
-// suave (la acción principal de su grupo). Sin `id` es solo información.
+// suave (la acción principal de su grupo). Sin `id` es solo información. `chevron`: abre
+// una página del panel (lleva una flecha a la derecha).
 bool menuRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyph, const char* title,
-             const char* value = nullptr, bool filled = false, bool enabled = true, ImU32 color = th::kLabel) {
+             const char* value = nullptr, bool filled = false, bool enabled = true, ImU32 color = th::kLabel,
+             bool chevron = false) {
     const float radius = pt(th::kControlRadius);
     Press press;
     if (id) {
@@ -165,6 +167,10 @@ bool menuRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyp
     const float cy = row.GetCenter().y;
     ui::icon(dl, glyph, ImVec2(row.Min.x + pt(10.0f + 9.0f), cy), 18.0f, iconColor);
     float right = row.Max.x - pt(10.0f);
+    if (chevron) {
+        ui::icon(dl, icon::kChevronRight, ImVec2(right - pt(8.0f), cy), 16.0f, IM_COL32(235, 235, 245, 102));
+        right -= pt(16.0f + 8.0f);
+    }
     if (value) {
         ui::label(dl, Weight::Regular, th::kCallout, ImVec2(right, cy), Align::Right,
                   info ? th::kSecondaryLabel : IM_COL32(235, 235, 245, 128), value);
@@ -326,6 +332,11 @@ void Ui::drawPanels(Canvas& canvas, UiRequests& requests) {
 
 void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     const Layout& L = m_layout;
+    const bool properties = m_actionsPage == ActionsPage::Properties;
+    // Al cerrarse el panel, los ppp que se escribían en las propiedades se quedan.
+    if (properties && m_panel != Panel::Actions) {
+        stopPropertiesEdit(canvas, true);
+    }
     const int tab = std::clamp(m_actionsTab, 0, 3);
     const float rowPoints = L.narrow ? 48.0f : 44.0f;
     const float width = pt(332.0f);
@@ -333,20 +344,24 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     constexpr float kStrip = 8.0f + 54.0f + 8.0f;   // pestañas con su margen
 
 #ifdef SDL_PLATFORM_EMSCRIPTEN
-    const char* shareNote =
-        "Se descarga con el navegador, a tamaño completo. Si ocultas el color de fondo (en Capas), queda transparente.";
+    const char* shareNote = "Se descarga con el navegador con el nombre del lienzo, a tamaño completo y con sus ppp "
+                            "para imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
 #elif defined(SDL_PLATFORM_ANDROID)
-    const char* shareNote =
-        "Se guarda en Descargas, a tamaño completo. Si ocultas el color de fondo (en Capas), queda transparente.";
+    const char* shareNote = "Se guarda en Descargas con el nombre del lienzo, a tamaño completo y con sus ppp para "
+                            "imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
 #else
-    const char* shareNote = "Se guarda en la carpeta de descargas, a tamaño completo. Si ocultas el color de fondo "
-                            "(en Capas), queda transparente.";
+    const char* shareNote = "Se guarda en la carpeta de descargas con el nombre del lienzo, a tamaño completo y con "
+                            "sus ppp para imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
 #endif
     const float noteWidth = panelWidth - pt(8.0f + 10.0f) * 2.0f;
 
-    // Alto del contenido de la pestaña elegida; al cambiar de pestaña el panel se anima.
+    // Alto del contenido de la pestaña elegida (o de las propiedades del lienzo); al
+    // cambiar, el panel se anima.
     float body = 0.0f;
-    switch (tab) {
+    switch (properties ? -1 : tab) {
+    case -1:
+        body = propertiesHeight(canvas, panelWidth);
+        break;
     case 0:
         body = pt(8.0f + rowPoints * 6.0f + 2.0f * 5.0f + 8.0f);
         break;
@@ -364,16 +379,32 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         body = pt(kHelpHeight);
         break;
     }
-    const float content = ui::anim::follow(ImHashStr("##actions-height"), pt(kStrip) + body, 22.0f, 0.5f);
+    const float header = properties ? pt(th::kHeaderHeight) : pt(kStrip);
+    const float content = ui::anim::follow(ImHashStr("##actions-height"), header + body, 22.0f, 0.5f);
     const float anchorX = L.leftBar.Min.x + pt(th::kBarPadding) + L.barButton * 0.5f;
     PanelFrame f;
     if (!beginPanel(f, Panel::Actions, "##panel-actions", L.leftBar.Min.x, width, content, anchorX, false)) {
+        // Cerrado del todo: la próxima vez se abre en las pestañas.
+        m_actionsPage = ActionsPage::Main;
         return;
     }
     ImDrawList* dl = f.dl;
     const float left = f.content.Min.x + pt(8.0f);
     const float right = f.content.Max.x - pt(8.0f);
     float y = f.content.Min.y;
+
+    // Propiedades del lienzo: volver a las pestañas y la página.
+    if (properties) {
+        bool back = false;
+        ui::parts::backHeader(dl, f.content, y, "##properties-back", "Propiedades del lienzo", &back);
+        propertiesPage(canvas, dl, ImRect(ImVec2(f.content.Min.x, y + pt(th::kHeaderHeight)), f.content.Max), f.open);
+        if (back) {
+            stopPropertiesEdit(canvas, true);
+            m_actionsPage = ActionsPage::Main;
+        }
+        endPanel(f);
+        return;
+    }
 
     // Pestañas: icono y nombre; la elegida, en el color de acento.
     {
@@ -439,7 +470,10 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
             startGuide(canvas);
         }
         y += row + pt(2.0f);
-        menuRow(dl, nullptr, ImRect(left, y, right, y + row), icon::kProportions, "Tamaño del lienzo", size);
+        if (menuRow(dl, "##properties", ImRect(left, y, right, y + row), icon::kInfo, "Propiedades", size, false, true,
+                    th::kLabel, true)) {
+            openProperties(canvas);
+        }
         break;
 
     case 1: {

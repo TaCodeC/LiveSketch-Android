@@ -91,6 +91,26 @@ target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 ${GLES_LIBRARY})
 
 # -----------------------------------------------------------------------------
+# libdeflate 1.26 (MIT, en ThirdParty/libdeflate; sin la parte de gzip): comprime los PNG.
+# Siempre optimizada, también en Debug: comprimir sin optimizar tarda varias veces más.
+# -----------------------------------------------------------------------------
+set(LIBDEFLATE_DIR ${SRC_DIR}/ThirdParty/libdeflate)
+add_library(libdeflate STATIC
+        ${LIBDEFLATE_DIR}/lib/adler32.c
+        ${LIBDEFLATE_DIR}/lib/crc32.c
+        ${LIBDEFLATE_DIR}/lib/deflate_compress.c
+        ${LIBDEFLATE_DIR}/lib/deflate_decompress.c
+        ${LIBDEFLATE_DIR}/lib/utils.c
+        ${LIBDEFLATE_DIR}/lib/zlib_compress.c
+        ${LIBDEFLATE_DIR}/lib/zlib_decompress.c
+        ${LIBDEFLATE_DIR}/lib/arm/cpu_features.c
+        ${LIBDEFLATE_DIR}/lib/x86/cpu_features.c
+)
+set_target_properties(libdeflate PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+target_include_directories(libdeflate PUBLIC ${LIBDEFLATE_DIR})
+target_compile_options(libdeflate PRIVATE -O2 -w)
+
+# -----------------------------------------------------------------------------
 # LiveSketch
 # -----------------------------------------------------------------------------
 add_library(livesketch_core STATIC
@@ -124,6 +144,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Gfx/Shader.cpp
         ${SRC_DIR}/IO/Assets.cpp
         ${SRC_DIR}/IO/ImageExport.cpp
+        ${SRC_DIR}/IO/Png.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
         ${SRC_DIR}/ThirdParty/stb_impl.cpp
         ${SRC_DIR}/Tools/SelectTool.cpp
@@ -149,7 +170,7 @@ target_include_directories(livesketch_core PUBLIC ${SRC_DIR} ${EXTERNALS_DIR}/gl
 target_compile_options(livesketch_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 # Código de terceros: sin avisos.
 set_source_files_properties(${SRC_DIR}/ThirdParty/stb_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
-target_link_libraries(livesketch_core PUBLIC imgui SDL3::SDL3 ${GLES_LIBRARY})
+target_link_libraries(livesketch_core PUBLIC imgui libdeflate SDL3::SDL3 ${GLES_LIBRARY})
 
 if(ANDROID)
     target_link_libraries(livesketch_core PUBLIC log android)

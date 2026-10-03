@@ -5,6 +5,7 @@
 #include <glm/vec2.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -109,6 +110,75 @@ TEST_CASE(canvas_init_creates_layer_over_background) {
     spec.background.visible = false;
     REQUIRE(canvas.init(spec));
     CHECK_PIXEL(compositeAt(canvas, 20, 15), kClear, 0);
+}
+
+TEST_CASE(canvas_info_tracks_changes_and_strokes) {
+    Canvas canvas;
+    CanvasSpec spec;
+    spec.width = 64;
+    spec.height = 48;
+    spec.ppi = 300.0f;
+    spec.name = "Prueba";
+    REQUIRE(canvas.init(spec));
+    CHECK_EQ(canvas.info().name, std::string("Prueba"));
+    CHECK(canvas.info().created > 0);
+    CHECK_EQ(canvas.info().modified, canvas.info().created);
+    CHECK_EQ(canvas.info().strokes, uint64_t{0});
+    CHECK_EQ(canvas.info().drawingSeconds, 0.0);
+
+    // Un trazo: cuenta, y el documento cambia.
+    uint64_t version = canvas.documentVersion();
+    setBrush(canvas, 1.0f, 0.0f, 0.0f, 1.0f);
+    drawLine(canvas, {10.0f, 10.0f}, {40.0f, 30.0f});
+    CHECK_EQ(canvas.info().strokes, uint64_t{1});
+    CHECK(canvas.info().drawingSeconds >= 0.0);
+    CHECK(canvas.documentVersion() > version);
+    CHECK(canvas.info().modified >= canvas.info().created);
+    // Uno cancelado no cuenta.
+    canvas.beginStroke(5.0f, 5.0f, 1.0f);
+    canvas.strokeTo(20.0f, 5.0f, 1.0f);
+    canvas.cancelStroke();
+    CHECK_EQ(canvas.info().strokes, uint64_t{1});
+
+    // Deshacer cambia el documento (pero el trazo sigue contado).
+    version = canvas.documentVersion();
+    CHECK(canvas.undo());
+    CHECK(canvas.documentVersion() > version);
+    CHECK_EQ(canvas.info().strokes, uint64_t{1});
+
+    // La selección no es parte del documento.
+    version = canvas.documentVersion();
+    canvas.selectAll();
+    canvas.deselect();
+    CHECK_EQ(canvas.documentVersion(), version);
+
+    // El nombre, los ppp y la guía sí (repetir el mismo valor, no).
+    canvas.setName("Otro");
+    CHECK_EQ(canvas.info().name, std::string("Otro"));
+    CHECK_EQ(canvas.documentVersion(), version + 1);
+    canvas.setName("Otro");
+    CHECK_EQ(canvas.documentVersion(), version + 1);
+    canvas.setPpi(150.0f);
+    CHECK_EQ(canvas.info().ppi, 150.0f);
+    CHECK_EQ(canvas.documentVersion(), version + 2);
+    CHECK_EQ(canvas.width(), 64);   // los píxeles no cambian
+    canvas.setPpi(1.0e9f);
+    CHECK_EQ(canvas.info().ppi, canvasspec::kMaxPpi);
+    canvas.setPpi(std::nanf(""));
+    CHECK_EQ(canvas.info().ppi, canvasspec::kMaxPpi);
+    version = canvas.documentVersion();
+    DrawingGuide guide = canvas.guide();
+    guide.enabled = !guide.enabled;
+    canvas.setGuide(guide);
+    CHECK_EQ(canvas.documentVersion(), version + 1);
+    canvas.setGuide(guide);
+    CHECK_EQ(canvas.documentVersion(), version + 1);
+
+    // Un lienzo nuevo empieza de cero.
+    REQUIRE(canvas.init(32, 32));
+    CHECK_EQ(canvas.info().strokes, uint64_t{0});
+    CHECK_EQ(canvas.info().drawingSeconds, 0.0);
+    CHECK(canvas.info().name.empty());
 }
 
 TEST_CASE(canvas_background_color_is_undoable) {

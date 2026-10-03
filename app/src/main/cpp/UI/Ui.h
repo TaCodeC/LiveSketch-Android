@@ -84,7 +84,7 @@ enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
 // (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
 // (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
 // rellenar), UiPen.cpp (curva de presión y suavizado), UiCanvas.cpp (tarjeta de lienzo
-// nuevo) y UiDialogs.cpp (alertas y pantalla de inicio).
+// nuevo y propiedades del lienzo) y UiDialogs.cpp (alertas y pantalla de inicio).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -163,6 +163,8 @@ public:
 
 private:
     enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify, Adjust };
+    // Lo que muestra el panel de Acciones: sus pestañas o las propiedades del lienzo.
+    enum class ActionsPage { Main, Properties };
     // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
     enum class ColorTarget { Brush, Background };
     enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas };
@@ -443,25 +445,50 @@ private:
     // Campo de un número (ancho o alto) que se escribe al tocarlo.
     void numberField(ImDrawList* dl, const char* id, const ImRect& rect, CanvasForm::Field field, const char* caption,
                      const std::string& value, const char* unit);
+    // Fichas de la resolución de `form` (72, 150, 300, 600 y «Otra», que se escribe ahí
+    // mismo) desde `y`. Elegir una cambia los ppp de `form`; devuelve si se tocó «Otra»
+    // para escribirla. Mientras se escribe, deja en `fieldRect` dónde está.
+    bool ppiChips(ImDrawList* dl, float left, float right, float y, CanvasForm& form, ImRect* fieldRect);
+    // Fichas del fondo (blanco, un color o transparente) y, con Color, las muestras y el
+    // hexadecimal, desde `y`. Devuelve si se cambió `kind` o `color`.
+    float backgroundOptionsHeight(bool colorOptions) const;
+    bool backgroundOptions(ImDrawList* dl, float left, float right, float y, CanvasForm::Background* kind,
+                           float color[3], bool interactive);
+    // Qué tamaño es: "A4 vertical", "Full HD horizontal" o "Horizontal a medida". Con
+    // `category` e `index`, mejor ese tamaño de la tarjeta si aún lo es.
+    std::string sizeName(int width, int height, float ppi, int category, int index) const;
     CanvasSummary canvasSummary() const;
     // La forma del lienzo con su fondo y el resumen a su derecha, desde `top`.
     void canvasSummaryBlock(ImDrawList* dl, const CanvasSummary& summary, float left, float right, float top,
                             float preview);
-    // Teclado numérico para el número que se escribe.
-    void canvasKeypad(ImDrawList* dl, const ImRect& area);
+    // Teclado numérico para el número que se escribe en `form`.
+    void numberKeypad(ImDrawList* dl, const ImRect& area, CanvasForm& form);
     // Píxeles de un tamaño de la tarjeta: la pantalla, o el papel a `ppi`.
     void presetPixels(const canvasspec::Preset& preset, float ppi, int* width, int* height) const;
     void beginCanvasEdit(CanvasForm::Field field, bool keypad);
     // Deja de escribir (Escape sin cambiar nada; atrás, con lo escrito). Devuelve si se
     // escribía algo.
     bool cancelCanvasEdit();
-    // Teclado físico mientras se escribe un número.
-    void canvasKeys();
+    // Teclado físico mientras se escribe un número en `form`. `cycle`: el tabulador pasa
+    // al ancho, al alto y a la resolución.
+    void numberKeys(CanvasForm& form, bool cycle);
     void submitCanvas(UiRequests& requests, bool modal);
     void loadSavedSizes();
     void saveSavedSizes() const;
     // «Guardar tamaño»: lo que está configurado pasa a «Mis tamaños».
     void saveCanvasSize();
+
+    // Propiedades del lienzo, una página del panel de Acciones: el nombre, la resolución
+    // (sin reescalar) y el fondo, y los datos del lienzo.
+    void openProperties(const Canvas& canvas);
+    // Deja de escribir el nombre o los ppp: con `keep`, con lo escrito; si no, los ppp
+    // vuelven a como estaban (el nombre se queda: cambia según se escribe). Devuelve si se
+    // escribía algo.
+    bool stopPropertiesEdit(Canvas& canvas, bool keep);
+    // Alto de la página con este ancho y la página en `view` (bajo su cabecera), que se
+    // desplaza si no cabe.
+    float propertiesHeight(const Canvas& canvas, float width) const;
+    void propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool interactive);
 
     Previews m_previews;
     UiStatus m_status;
@@ -484,6 +511,7 @@ private:
     bool m_brushScroll = false;     // al abrir la lista, mostrar el pincel elegido
     Panel m_panel = Panel::None;
     int m_actionsTab = 0;           // Acciones: 0 lienzo, 1 compartir, 2 preferencias, 3 ayuda
+    ActionsPage m_actionsPage = ActionsPage::Main;
     bool m_layerMenu = false;
     bool m_blendPage = false;       // el panel de capas muestra la lista de modos de fusión
     bool m_blendEditing = false;    // se han probado modos: al salir de la lista se guarda el paso
@@ -618,4 +646,16 @@ private:
     ImRect m_fieldRect;             // campo que se escribe (en el frame anterior)
     ImRect m_keypadRect;            // teclado numérico (en el frame anterior)
     double m_eraseRepeat = 0.0;     // borrar mantenido: cuándo se vuelve a borrar
+
+    // Propiedades del lienzo: los ppp que se escriben (con el teclado de la página o el
+    // físico), el nombre y el último color de fondo que no era blanco (el que vuelve al
+    // elegir «Color»).
+    CanvasForm m_ppiForm;
+    bool m_ppiKeypad = false;       // los ppp se escriben con el teclado de la página
+    bool m_ppiScroll = false;       // hay que mostrar las fichas y el teclado
+    ImRect m_ppiFieldRect;          // «Otra» mientras se escribe (en el frame anterior)
+    ImRect m_ppiKeypadRect;         // el teclado (en el frame anterior)
+    char m_nameBuffer[64] = {};
+    bool m_nameEditing = false;
+    float m_propertiesColor[3] = {243.0f / 255.0f, 237.0f / 255.0f, 226.0f / 255.0f};
 };
