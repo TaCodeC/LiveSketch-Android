@@ -214,6 +214,7 @@ CanvasSpec CanvasForm::spec() const {
     spec.height = pixelHeight();
     spec.ppi = m_ppi;
     spec.unit = m_unit;
+    spec.profile = profile;
     spec.background.visible = background != Background::Transparent;
     if (background == Background::Color) {
         std::copy(color, color + 3, spec.background.color);

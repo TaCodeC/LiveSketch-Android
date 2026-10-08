@@ -1314,6 +1314,79 @@ void Canvas::setPpi(float ppi) {
     markChanged();
 }
 
+size_t Canvas::profileStepBytes(std::vector<IRect>& content) {
+    content.assign(static_cast<size_t>(m_layers.count()), IRect{});
+    size_t bytes = kSmallStepBytes;
+    for (int i = 0; i < m_layers.count(); ++i) {
+        const IRect rect = m_bounds.find(m_layers.at(i).target, nullptr, IRect::ofSize(width(), height()));
+        content[static_cast<size_t>(i)] = rect;
+        if (!rect.empty()) {
+            bytes += bytesOf(rect.width(), rect.height());
+        }
+    }
+    return bytes;
+}
+
+bool Canvas::profileChangeUndoable() {
+    if (!m_ready) {
+        return false;
+    }
+    std::vector<IRect> content;
+    return profileStepBytes(content) <= m_history.maxBytes();
+}
+
+bool Canvas::convertProfile(ColorProfile profile) {
+    if (!m_ready || profile == m_info.profile) {
+        return false;
+    }
+    settle();
+    const colorspace::Transform transform = colorspace::between(m_info.profile, profile);
+    HistoryStep step;
+    step.kind = HistoryStep::Kind::Profile;
+    step.profileBefore = m_info.profile;
+    step.profileAfter = profile;
+    step.backgroundBefore = m_background;
+
+    // Solo cambia lo pintado de cada capa, y es lo que se guarda para deshacer.
+    std::vector<IRect> content;
+    const size_t bytes = profileStepBytes(content);
+    bool saved = bytes <= m_history.maxBytes();
+    for (int i = 0; i < m_layers.count(); ++i) {
+        const IRect& rect = content[static_cast<size_t>(i)];
+        if (rect.empty()) {
+            continue;
+        }
+        Layer& layer = m_layers.at(i);
+        if (saved) {
+            HistoryStep pixels;
+            pixels.kind = HistoryStep::Kind::Pixels;
+            pixels.layerId = layer.id;
+            pixels.rect = rect;
+            if (saveRegion(layer, rect, pixels.pixels)) {
+                pixels.bytes = bytesOf(rect.width(), rect.height());
+                step.children.push_back(std::move(pixels));
+            } else {
+                saved = false;
+                step.children.clear();
+            }
+        }
+        m_compositor.convertColors(layer.target, transform, m_strokeTarget, rect);
+        ++layer.revision;
+    }
+    colorspace::convert(transform, m_background.color);
+    step.backgroundAfter = m_background;
+    m_info.profile = profile;
+    m_layers.markAllDirty();
+
+    if (saved) {
+        step.bytes = bytes;
+        record(std::move(step));
+    } else {
+        dropHistory();
+    }
+    return true;
+}
+
 void Canvas::applyStep(HistoryStep& step, bool undo) {
     using Kind = HistoryStep::Kind;
     const int index = m_layers.indexOf(step.layerId);
@@ -1383,6 +1456,19 @@ void Canvas::applyStep(HistoryStep& step, bool undo) {
             swapSelection(step.rect, step.pixels);
         }
         setSelectionState(undo ? step.selectionBefore : step.selectionAfter);
+        break;
+
+    case Kind::Profile:
+        // Las capas vuelven a sus píxeles de antes (o de después) sin cambiar la activa.
+        for (HistoryStep& child : step.children) {
+            const int childIndex = m_layers.indexOf(child.layerId);
+            if (childIndex >= 0) {
+                swapRegion(m_layers.at(childIndex), child.rect, child.pixels);
+            }
+        }
+        m_info.profile = undo ? step.profileBefore : step.profileAfter;
+        m_background = undo ? step.backgroundBefore : step.backgroundAfter;
+        m_layers.markAllDirty();
         break;
 
     case Kind::Group:

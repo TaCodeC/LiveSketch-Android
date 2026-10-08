@@ -71,17 +71,28 @@ std::vector<uint8_t> expectedFrame(Canvas& canvas) {
 
 // Hace lo mismo que el bucle de la app en cada frame hasta que `done()` se cumpla.
 template <typename Done>
-bool pump(NdiOutput& ndi, Canvas& canvas, Done done, uint64_t timeoutMs = 3000) {
+bool pump(NdiOutput& ndi, Canvas& canvas, Done done, uint64_t timeoutMs = 3000,
+          const colorspace::Transform& toSrgb = {}) {
     const uint64_t end = SDL_GetTicks() + timeoutMs;
     while (SDL_GetTicks() < end) {
         canvas.update();
-        ndi.capture(canvas.composite().fbo.id(), canvas.version());
+        ndi.capture(canvas.composite(), canvas.version(), toSrgb);
         if (done()) {
             return true;
         }
         SDL_Delay(4);
     }
     return false;
+}
+
+// Un píxel del último frame enviado (RGBA), o -1 si aún no hay frame.
+std::array<int, 4> framePixel(SinkLog& log, int x, int y) {
+    std::lock_guard<std::mutex> lock(log.mutex);
+    const size_t at = static_cast<size_t>(y) * static_cast<size_t>(log.stride) + static_cast<size_t>(x) * 4;
+    if (log.lastFrame.size() < at + 4) {
+        return {-1, -1, -1, -1};
+    }
+    return {log.lastFrame[at], log.lastFrame[at + 1], log.lastFrame[at + 2], log.lastFrame[at + 3]};
 }
 
 void drawLine(Canvas& canvas, float x0, float y0, float x1, float y1) {
@@ -196,7 +207,7 @@ TEST_CASE(ndi_survives_context_loss) {
     // Lo mismo que hace la app: segundo plano, contexto perdido y vuelta.
     drawLine(canvas, 2.0f, 2.0f, 30.0f, 30.0f);
     canvas.update();
-    ndi.capture(canvas.composite().fbo.id(), canvas.version());   // deja una lectura en curso
+    ndi.capture(canvas.composite(), canvas.version());   // deja una lectura en curso
     ndi.dropInFlight();
     REQUIRE(canvas.takeSnapshot(size_t{1} << 30));
     REQUIRE(test::recreateGLContext());
@@ -208,6 +219,35 @@ TEST_CASE(ndi_survives_context_loss) {
     drawLine(canvas, 2.0f, 30.0f, 30.0f, 2.0f);
     const std::vector<uint8_t> expected = expectedFrame(canvas);
     CHECK(pump(ndi, canvas, [&] { return test::maxDifference(lastFrame(*log), expected) == 0; }));
+    CHECK(ndi.error().empty());
+    ndi.stop();
+}
+
+TEST_CASE(ndi_sends_display_p3_canvas_as_srgb) {
+    // Un naranja de P3 que cabe en sRGB a la izquierda; el fondo blanco a la derecha.
+    CanvasSpec spec;
+    spec.width = 32;
+    spec.height = 24;
+    spec.profile = ColorProfile::DisplayP3;
+    Canvas canvas;
+    REQUIRE(canvas.init(spec));
+    test::fillRect(canvas.layers().at(0).target, {0, 0, 16, 24}, 204.0f / 255.0f, 128.0f / 255.0f, 77.0f / 255.0f,
+                   1.0f);
+    canvas.layers().markDirty({0, 0, 16, 24});
+
+    auto log = std::make_shared<SinkLog>();
+    NdiOutput ndi;
+    REQUIRE(ndi.start(std::make_unique<FakeSink>(log), 32, 24));
+    // Sin conversión, los números del lienzo.
+    const std::array<int, 4> p3{204, 128, 77, 255};
+    CHECK(pump(ndi, canvas, [&] { return framePixel(*log, 4, 4) == p3; }));
+    // Con la del lienzo a sRGB, aunque el dibujo no cambie, se vuelve a mandar convertido.
+    const colorspace::Transform toSrgb = colorspace::between(ColorProfile::DisplayP3, ColorProfile::Srgb);
+    const std::array<int, 4> srgb{217, 123, 65, 255};
+    CHECK(pump(
+        ndi, canvas, [&] { return framePixel(*log, 4, 4) == srgb; }, 3000, toSrgb));
+    const std::array<int, 4> white{255, 255, 255, 255};
+    CHECK(framePixel(*log, 24, 4) == white);
     CHECK(ndi.error().empty());
     ndi.stop();
 }

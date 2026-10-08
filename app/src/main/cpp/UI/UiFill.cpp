@@ -8,6 +8,7 @@
 
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
+#include "UI/ColorManage.h"
 #include "UI/Icons.h"
 
 #include <SDL3/SDL_timer.h>
@@ -187,7 +188,10 @@ void Ui::drawDrop(Canvas& canvas) {
     ui::shadow(dl, circle, outer, pt(16.0f), pt(4.0f), 0.3f);
     ui::popUnclipped(dl);
     dl->AddCircleFilled(center, outer, IM_COL32_WHITE, 0);
-    dl->AddCircleFilled(center, radius, ui::fromFloat(canvas.brushSettings().color), 0);
+    {
+        const ui::gamut::Scope scope(dl);
+        dl->AddCircleFilled(center, radius, ui::fromFloat(canvas.brushSettings().color), 0);
+    }
     dl->AddCircle(center, outer + ui::hairline() * 0.5f, IM_COL32(0, 0, 0, 60), 0, ui::hairline());
     ui::transform(drawn, center, 0.6f + 0.4f * p, ImVec2(0.0f, 0.0f), p);
     ui::endSurface();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Gfx/ColorSpace.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -16,9 +18,6 @@
 // los píxeles en px y el tamaño en papel en las demás).
 enum class LengthUnit : uint8_t { Pixels, Millimeters, Centimeters, Inches };
 inline constexpr int kLengthUnitCount = 4;
-
-// Perfil de color del lienzo: el espacio de sus colores. NDI recibe siempre sRGB.
-enum class ColorProfile : uint8_t { Srgb, DisplayP3 };
 
 // Color de fondo del lienzo, debajo de todas las capas. Oculto, lo que no está pintado es
 // transparente (en el PNG y por NDI).

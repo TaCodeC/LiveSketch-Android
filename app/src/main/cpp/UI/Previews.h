@@ -2,7 +2,9 @@
 
 #include "Canvas/Brush.h"
 #include "Canvas/LayerStack.h"
+#include "Gfx/ColorSpace.h"
 #include "Gfx/GLObjects.h"
+#include "Gfx/Shader.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -16,6 +18,9 @@ class Previews {
 public:
     bool init();
     void destroy();
+
+    // Del perfil del lienzo al de la pantalla: las miniaturas se ven como el lienzo.
+    void setGamut(const colorspace::Transform& gamut) { m_gamut = gamut; }
 
     // Miniatura opaca de la capa (sobre un damero) de `width`×`height` píxeles.
     // `checkerCell`: lado de las casillas del damero en píxeles.
@@ -40,6 +45,7 @@ private:
     struct Thumbnail {
         gfx::RenderTarget target;
         uint64_t revision = 0;
+        int gamut = -1;   // colorspace::Transform::key() con el que se hizo
     };
     // Reduce `source` a `thumbnail` (del tamaño pedido) si cambió `revision` o el tamaño.
     // Devuelve su textura, o 0 si no se pudo crear.
@@ -56,6 +62,8 @@ private:
     GLint m_uFootprint = -1;
     GLint m_uTaps = -1;
     GLint m_uCell = -1;
+    gfx::GamutUniforms m_uGamut;
+    colorspace::Transform m_gamut;
     gfx::VertexArray m_vao;
     gfx::Buffer m_vbo;
 

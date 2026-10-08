@@ -1,7 +1,6 @@
 #include "UI/Previews.h"
 
 #include "Canvas/BrushTips.h"
-#include "Gfx/Shader.h"
 
 #include <algorithm>
 #include <cmath>
@@ -19,7 +18,8 @@ void main() {
 )";
 
 // Reduce la capa promediando una rejilla de uTaps×uTaps muestras bilineales dentro de la
-// zona que cubre cada píxel, y la pone sobre un damero (resultado opaco).
+// zona que cubre cada píxel, y la pone sobre un damero (resultado opaco). Los colores pasan
+// del perfil del lienzo al de la pantalla (colorspace::kGlsl va delante).
 constexpr const char* kFragment = R"(
 in vec2 vUV;
 uniform sampler2D uSource;
@@ -42,7 +42,7 @@ void main() {
             sum += texture(uSource, vUV + offset * uFootprint * uTexel);
         }
     }
-    vec4 color = sum / float(uTaps * uTaps);
+    vec4 color = gamutConvertPremultiplied(sum / float(uTaps * uTaps));
     vec2 cell = floor(gl_FragCoord.xy / uCell);
     float checker = mix(0.84, 1.0, mod(cell.x + cell.y, 2.0));
     fragColor = vec4(color.rgb + vec3(checker) * (1.0 - color.a), 1.0);
@@ -68,7 +68,7 @@ Point cubic(Point a, Point b, Point c, Point d, float t) {
 
 bool Previews::init() {
     destroy();
-    m_program = gfx::makeProgram("thumbnail", kVertex, kFragment);
+    m_program = gfx::makeProgram("thumbnail", kVertex, kFragment, colorspace::kGlsl);
     if (!m_program) {
         return false;
     }
@@ -77,6 +77,7 @@ bool Previews::init() {
     m_uFootprint = glGetUniformLocation(m_program.id(), "uFootprint");
     m_uTaps = glGetUniformLocation(m_program.id(), "uTaps");
     m_uCell = glGetUniformLocation(m_program.id(), "uCell");
+    m_uGamut.locate(m_program);
 
     const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
     m_vao = gfx::VertexArray::create();
@@ -127,7 +128,7 @@ GLuint Previews::canvasThumbnail(const gfx::RenderTarget& composite, uint64_t ve
 GLuint Previews::thumbnail(Thumbnail& thumbnail, const gfx::RenderTarget& source, uint64_t revision, int width,
                            int height, int checkerCell) {
     const bool sized = thumbnail.target && thumbnail.target.width == width && thumbnail.target.height == height;
-    if (sized && thumbnail.revision == revision) {
+    if (sized && thumbnail.revision == revision && thumbnail.gamut == m_gamut.key()) {
         return thumbnail.target.texture.id();
     }
     if (!sized && !thumbnail.target.create(width, height)) {
@@ -150,6 +151,7 @@ GLuint Previews::thumbnail(Thumbnail& thumbnail, const gfx::RenderTarget& source
     glUniform2f(m_uFootprint, footprintX, footprintY);
     glUniform1i(m_uTaps, taps);
     glUniform1f(m_uCell, static_cast<float>(std::max(checkerCell, 1)));
+    m_uGamut.set(m_gamut);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, source.texture.id());
     glBindVertexArray(m_vao.id());
@@ -159,6 +161,7 @@ GLuint Previews::thumbnail(Thumbnail& thumbnail, const gfx::RenderTarget& source
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     thumbnail.revision = revision;
+    thumbnail.gamut = m_gamut.key();
     return thumbnail.target.texture.id();
 }
 

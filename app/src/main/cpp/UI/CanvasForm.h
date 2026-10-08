@@ -5,8 +5,8 @@
 #include <string>
 
 // Lo que se configura en la tarjeta de lienzo nuevo, sin la interfaz: el tamaño en su
-// unidad, los ppp, el candado de proporción, el fondo, el nombre y el número que se está
-// escribiendo.
+// unidad, los ppp, el candado de proporción, el perfil de color, el fondo, el nombre y el
+// número que se está escribiendo.
 //
 // Las medidas se guardan sin redondear en su unidad, como en Photoshop: en px, cambiar los
 // ppp conserva los píxeles; en mm, cm o pulgadas, conserva el tamaño en papel (y cambian
@@ -61,6 +61,8 @@ public:
     int decimals() const;
 
     // --- Lo demás ---
+    // Perfil de color del lienzo. El color de fondo son números en este perfil.
+    ColorProfile profile = ColorProfile::Srgb;
     Background background = Background::White;
     float color[3] = {243.0f / 255.0f, 237.0f / 255.0f, 226.0f / 255.0f};   // el de Background::Color
     char name[64] = {};

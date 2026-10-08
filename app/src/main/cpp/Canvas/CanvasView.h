@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Canvas/Camera.h"
+#include "Gfx/ColorSpace.h"
 #include "Gfx/GLObjects.h"
+#include "Gfx/Shader.h"
 
 // Dibuja la escena: el fondo liso, la sombra del lienzo y, encima, el lienzo compuesto
 // (con un damero donde es transparente) en la posición, con el zoom y con el giro y el
@@ -13,6 +15,9 @@ public:
 
     // Medidas de la sombra según la densidad de la interfaz (píxeles por punto).
     void setPixelsPerPoint(float pixelsPerPoint) { m_pixelsPerPoint = pixelsPerPoint; }
+    // Del perfil del lienzo al de la pantalla.
+    void setGamut(const colorspace::Transform& gamut) { m_gamut = gamut; }
+    const colorspace::Transform& gamut() const { return m_gamut; }
 
     // Dibuja en `fbo` (0: la ventana), de `width`×`height` píxeles. `scale` son píxeles
     // de destino por píxel de la ventana: 1 en la ventana, menos para el fondo desenfocado
@@ -50,6 +55,8 @@ private:
     GLint m_uViewport = -1;
     GLint m_uCanvas = -1;
     GLint m_uCell = -1;
+    gfx::GamutUniforms m_uGamut;
+    colorspace::Transform m_gamut;
 
     gfx::Program m_selectionProgram;
     GLint m_uSelectionOrigin = -1;

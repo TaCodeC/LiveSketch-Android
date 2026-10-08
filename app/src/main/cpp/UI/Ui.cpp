@@ -4,6 +4,7 @@
 
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
+#include "UI/ColorManage.h"
 #include "UI/Icons.h"
 
 #include <SDL3/SDL_filesystem.h>
@@ -133,6 +134,13 @@ void Ui::loadPrefs() {
             }
             continue;
         }
+        if (key == "lienzo-perfil") {
+            int profile = 0;
+            if (fields >> profile && profile >= 0 && profile < kColorProfileCount) {
+                m_canvasForm.profile = static_cast<ColorProfile>(profile);
+            }
+            continue;
+        }
         if (key == "lienzo-fondo") {
             int kind = 0;
             float rgb[3] = {0.0f, 0.0f, 0.0f};
@@ -182,6 +190,7 @@ void Ui::savePrefs() const {
         << "suavizado " << m_prefs.smoothing << '\n'
         << "curva-presion " << m_prefs.pressure.toText() << '\n'
         << "lienzo-tamano " << canvasspec::toLine(m_canvasForm.size()) << '\n'
+        << "lienzo-perfil " << static_cast<int>(m_canvasForm.profile) << '\n'
         << "lienzo-fondo " << static_cast<int>(m_canvasForm.background) << ' ' << m_canvasForm.color[0] << ' '
         << m_canvasForm.color[1] << ' ' << m_canvasForm.color[2] << '\n'
         << "lienzo-candado " << (m_canvasForm.locked() ? 1 : 0) << '\n'
@@ -192,6 +201,8 @@ void Ui::beginFrame(const UiStatus& status) {
     m_status = status;
     ui::setScale(status.pointScale * kSizeFactors[std::clamp(m_prefs.size, 0, 2)], status.pixelsPerUnit);
     ui::anim::newFrame(ImGui::GetIO().DeltaTime);
+    ui::gamut::beginFrame(status.displayProfile, status.canvasProfile);
+    m_previews.setGamut(colorspace::between(status.canvasProfile, status.displayProfile));
 }
 
 void Ui::build(Canvas* canvas, UiRequests& requests) {
@@ -208,6 +219,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
         drawToast();
         return;
     }
+    followCanvasProfile(*canvas);
     syncBrush(*canvas);
     handleKeys(*canvas, requests);
     toolFrame(*canvas);
@@ -410,6 +422,23 @@ void Ui::pushRecent(const float rgb[3]) {
     if (found < 0) {
         m_recentCount = std::min(m_recentCount + 1, 6);
     }
+}
+
+void Ui::followCanvasProfile(Canvas& canvas) {
+    const ColorProfile profile = canvas.info().profile;
+    // Durante un trazo no se toca el color del pincel (el perfil tampoco cambia).
+    if (profile == m_colorProfile || canvas.stroking()) {
+        return;
+    }
+    const colorspace::Transform transform = colorspace::between(m_colorProfile, profile);
+    colorspace::convert(transform, canvas.brushSettings().color);
+    for (int i = 0; i < m_recentCount; ++i) {
+        colorspace::convert(transform, m_recent[i]);
+    }
+    colorspace::convert(transform, m_previousColor);
+    colorspace::convert(transform, m_previousBackground);
+    colorspace::convert(transform, m_propertiesColor);
+    m_colorProfile = profile;
 }
 
 void Ui::showPicker(ImVec2 position, const float* rgb, bool touch) {
@@ -750,7 +779,10 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         const ImVec2 center = rect.GetCenter();
         dl->AddCircleFilled(center, radius + pt(3.0f), IM_COL32(0, 0, 0, 90), 0);
         dl->AddCircleFilled(center, radius + pt(2.0f), IM_COL32_WHITE, 0);
-        dl->AddCircleFilled(center, radius, ui::fromFloat(canvas.brushSettings().color), 0);
+        {
+            const ui::gamut::Scope scope(dl);
+            dl->AddCircleFilled(center, radius, ui::fromFloat(canvas.brushSettings().color), 0);
+        }
         if (press.clicked) {
             if (m_panel != Panel::Color) {
                 std::copy(canvas.brushSettings().color, canvas.brushSettings().color + 3, m_previousColor);
@@ -957,6 +989,7 @@ void Ui::drawHud(Canvas& canvas) {
         if (eraser) {
             dl->AddCircle(center, r, IM_COL32_WHITE, 0, pt(2.0f));
         } else {
+            const ui::gamut::Scope scope(dl);
             dl->AddCircleFilled(center, r, color, 0);
             dl->AddCircle(center, r, IM_COL32(255, 255, 255, 64), 0, ui::hairline());
         }
@@ -971,7 +1004,10 @@ void Ui::drawHud(Canvas& canvas) {
             dl->PathArcTo(center, r, a0, a0 + IM_PI * 0.5f, 12);
             dl->PathFillConvex(IM_COL32(204, 204, 204, 255));
         }
-        dl->AddCircleFilled(center, r, ui::withAlpha(color, preset.opacity), 0);
+        {
+            const ui::gamut::Scope scope(dl);
+            dl->AddCircleFilled(center, r, ui::withAlpha(color, preset.opacity), 0);
+        }
         dl->AddCircle(center, r, IM_COL32(255, 255, 255, 64), 0, ui::hairline());
         // En difuminar, el deslizador de la opacidad es su fuerza.
         std::snprintf(text, sizeof(text), m_tool == Tool::Smudge ? "Fuerza %d %%" : "%d %%",
@@ -1013,10 +1049,13 @@ void Ui::drawPicker(Canvas& canvas) {
     const ImU32 current = ui::fromFloat(canvas.brushSettings().color);
     const ImU32 picked = m_picker.valid ? ui::fromFloat(m_picker.rgb) : current;
     const float middle = outer - ring * 0.5f;
-    dl->PathArcTo(center, middle, IM_PI, 2.0f * IM_PI, 40);
-    dl->PathStroke(picked, 0, ring);
-    dl->PathArcTo(center, middle, 0.0f, IM_PI, 40);
-    dl->PathStroke(current, 0, ring);
+    {
+        const ui::gamut::Scope scope(dl);
+        dl->PathArcTo(center, middle, IM_PI, 2.0f * IM_PI, 40);
+        dl->PathStroke(picked, 0, ring);
+        dl->PathArcTo(center, middle, 0.0f, IM_PI, 40);
+        dl->PathStroke(current, 0, ring);
+    }
     dl->AddCircle(center, outer, IM_COL32(255, 255, 255, 235), 0, pt(1.5f));
     dl->AddCircle(center, outer - ring, IM_COL32(255, 255, 255, 235), 0, pt(1.5f));
     if (!m_picker.touch) {

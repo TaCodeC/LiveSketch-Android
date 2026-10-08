@@ -618,6 +618,35 @@ TEST_CASE(selection_copy_cut_paste_duplicate) {
     CHECK_EQ(test::maxDifference(layerPixels(canvas, 1), original), 0);
 }
 
+TEST_CASE(selection_paste_keeps_colors_across_profiles) {
+    // Copiado en un lienzo sRGB y pegado en uno Display P3 (el portapapeles se queda al
+    // crear otro lienzo): se pega con los números de P3 que se ven igual.
+    Canvas canvas;
+    REQUIRE(canvas.init(32, 32));
+    fillLayer(canvas, 0, {4, 4, 12, 12}, 1.0f, 0.0f, 0.0f);
+    REQUIRE(canvas.copySelection() == Canvas::Edit::Done);
+    CanvasSpec spec;
+    spec.width = 32;
+    spec.height = 32;
+    spec.profile = ColorProfile::DisplayP3;
+    REQUIRE(canvas.init(spec));
+    REQUIRE(canvas.paste() == Canvas::Edit::Done);
+    REQUIRE(canvas.layers().count() == 2);
+    CHECK_PIXEL(layerAt(canvas, 1, 8, 8), (Pixel{234, 51, 35, 255}), 1);
+    CHECK_PIXEL(layerAt(canvas, 1, 20, 20), kClear, 0);
+
+    // En el mismo perfil, tal cual.
+    const std::vector<uint8_t> pasted = layerPixels(canvas, 1);
+    REQUIRE(canvas.copySelection() == Canvas::Edit::Done);
+    REQUIRE(canvas.paste() == Canvas::Edit::Done);
+    CHECK_EQ(test::maxDifference(layerPixels(canvas, 2), pasted), 0);
+
+    // Lo copiado antes de convertir el lienzo se pega con el perfil nuevo.
+    REQUIRE(canvas.convertProfile(ColorProfile::Srgb));
+    REQUIRE(canvas.paste() == Canvas::Edit::Done);
+    CHECK_PIXEL(layerAt(canvas, 3, 8, 8), kRed, 1);
+}
+
 TEST_CASE(selection_pasted_and_duplicated_layers_move_whole) {
     Canvas canvas;
     REQUIRE(canvas.init(64, 64));

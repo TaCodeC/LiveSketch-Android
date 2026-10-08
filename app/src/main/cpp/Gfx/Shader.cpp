@@ -10,10 +10,10 @@ namespace {
 
 constexpr const char* kHeader = "#version 300 es\nprecision highp float;\n";
 
-GLuint compile(const char* name, GLenum type, const char* source) {
+GLuint compile(const char* name, GLenum type, const char* source, const char* prelude) {
     const GLuint shader = glCreateShader(type);
-    const char* sources[] = {kHeader, source};
-    glShaderSource(shader, 2, sources, nullptr);
+    const char* sources[] = {kHeader, prelude ? prelude : "", source};
+    glShaderSource(shader, 3, sources, nullptr);
     glCompileShader(shader);
 
     GLint ok = GL_FALSE;
@@ -33,9 +33,10 @@ GLuint compile(const char* name, GLenum type, const char* source) {
 
 } // namespace
 
-Program makeProgram(const char* name, const char* vertexSource, const char* fragmentSource) {
-    const GLuint vs = compile(name, GL_VERTEX_SHADER, vertexSource);
-    const GLuint fs = compile(name, GL_FRAGMENT_SHADER, fragmentSource);
+Program makeProgram(const char* name, const char* vertexSource, const char* fragmentSource,
+                    const char* fragmentPrelude) {
+    const GLuint vs = compile(name, GL_VERTEX_SHADER, vertexSource, nullptr);
+    const GLuint fs = compile(name, GL_FRAGMENT_SHADER, fragmentSource, fragmentPrelude);
     if (!vs || !fs) {
         glDeleteShader(vs);
         glDeleteShader(fs);
@@ -60,6 +61,25 @@ Program makeProgram(const char* name, const char* vertexSource, const char* frag
         return {};
     }
     return program;
+}
+
+void GamutUniforms::locate(const Program& program) {
+    matrix = glGetUniformLocation(program.id(), "uGamut");
+    on = glGetUniformLocation(program.id(), "uGamutOn");
+}
+
+void GamutUniforms::set(const colorspace::Transform& transform) const {
+    glUniform1i(on, transform.identity() ? 0 : 1);
+    if (!transform.identity()) {
+        // GLSL guarda las matrices por columnas.
+        float columns[9];
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 3; ++column) {
+                columns[column * 3 + row] = transform.matrix[row * 3 + column];
+            }
+        }
+        glUniformMatrix3fv(matrix, 1, GL_FALSE, columns);
+    }
 }
 
 } // namespace gfx

@@ -78,6 +78,13 @@ public:
     const CanvasInfo& info() const { return m_info; }
     void setName(std::string name);
     void setPpi(float ppi);
+    // Pasa el lienzo a otro perfil de color convirtiendo sus colores (las capas y el fondo):
+    // se ve igual, salvo lo que el perfil nuevo no tiene, que se recorta a su borde. Se puede
+    // deshacer si lo pintado cabe en el historial; si no, el historial se vacía. Devuelve
+    // false si no cambia nada.
+    bool convertProfile(ColorProfile profile);
+    // Si convertProfile se podrá deshacer (mide lo pintado de cada capa en la GPU).
+    bool profileChangeUndoable();
     // Sube cada vez que cambia el documento: los píxeles, las capas, el fondo, la guía, el
     // nombre o los ppp (la selección no cuenta).
     uint64_t documentVersion() const { return m_documentVersion; }
@@ -396,6 +403,9 @@ private:
     // El documento cambió: sube documentVersion() y la fecha de cambio.
     void markChanged();
     size_t layerBytes() const;
+    // Lo pintado de cada capa (de abajo arriba) y lo que ocupa guardarlo para deshacer un
+    // cambio de perfil.
+    size_t profileStepBytes(std::vector<IRect>& content);
 
     // Selección (CanvasSelection.cpp).
     // Paso de deshacer con la máscara de `rect` tal como está ahora (antes de cambiarla).
@@ -522,6 +532,7 @@ private:
     struct Clipboard {
         gfx::RenderTarget pixels;   // premultiplicado, del tamaño de `rect`
         IRect rect;                 // de dónde salió, en el lienzo
+        ColorProfile profile = ColorProfile::Srgb;   // el del lienzo de donde salió
     } m_clipboard;
 
     // Transformar.

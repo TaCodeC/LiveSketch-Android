@@ -489,6 +489,7 @@ Canvas::Edit Canvas::copySelection() {
     clearStrokeBuffer(rect);
     m_clipboard.pixels = std::move(pixels);
     m_clipboard.rect = rect;
+    m_clipboard.profile = m_info.profile;
     return Edit::Done;
 }
 
@@ -529,6 +530,9 @@ Canvas::Edit Canvas::paste() {
         glDisable(GL_SCISSOR_TEST);
         copyRect(m_clipboard.pixels.fbo.id(), from, layer->target.fbo.id(), visible.x0, visible.y0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        // Copiado en un lienzo con otro perfil: se pega con los colores que se veían.
+        m_compositor.convertColors(layer->target, colorspace::between(m_clipboard.profile, m_info.profile),
+                                   m_strokeTarget, visible);
         ++layer->revision;
         m_layers.markDirty(visible);
     }

@@ -1,6 +1,7 @@
 #include "Test.h"
 
 #include "Gfx/Pixels.h"
+#include "IO/Icc.h"
 #include "IO/ImageExport.h"
 #include "IO/Png.h"
 #include "ThirdParty/stb_image.h"
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <random>
 #include <regex>
 
@@ -99,6 +101,26 @@ const Chunk* findChunk(const std::vector<Chunk>& chunks, const char* type) {
         }
     }
     return nullptr;
+}
+
+// Un número s15Fixed16 de un perfil ICC.
+double fixedAt(const std::vector<uint8_t>& icc, size_t at) {
+    return static_cast<double>(static_cast<int32_t>(get32(icc.data() + at))) / 65536.0;
+}
+
+// Inversa de una matriz 3×3 (por filas).
+void invert3(const double m[9], double out[9]) {
+    const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                       m[2] * (m[3] * m[7] - m[4] * m[6]);
+    out[0] = (m[4] * m[8] - m[5] * m[7]) / det;
+    out[1] = (m[2] * m[7] - m[1] * m[8]) / det;
+    out[2] = (m[1] * m[5] - m[2] * m[4]) / det;
+    out[3] = (m[5] * m[6] - m[3] * m[8]) / det;
+    out[4] = (m[0] * m[8] - m[2] * m[6]) / det;
+    out[5] = (m[2] * m[3] - m[0] * m[5]) / det;
+    out[6] = (m[3] * m[7] - m[4] * m[6]) / det;
+    out[7] = (m[1] * m[6] - m[0] * m[7]) / det;
+    out[8] = (m[0] * m[4] - m[1] * m[3]) / det;
 }
 
 } // namespace
@@ -208,6 +230,151 @@ TEST_CASE(png_carries_resolution_profile_and_name) {
     CHECK(findChunk(plain, "pHYs") == nullptr);
     CHECK(findChunk(plain, "iTXt") == nullptr);
     CHECK(findChunk(plain, "sRGB") != nullptr);
+}
+
+TEST_CASE(png_display_p3_carries_its_profile) {
+    const uint8_t pixels[8] = {255, 0, 0, 255, 204, 128, 77, 128};
+    png::Info info;
+    info.profile = ColorProfile::DisplayP3;
+    const std::vector<uint8_t> file = encodePng(pixels, 2, 1, 8, info);
+    const std::vector<Chunk> chunks = readChunks(file);
+    REQUIRE(!chunks.empty());
+
+    // cICP: primarios P3 (12), curva de sRGB (13), RGB (0) y rango completo.
+    const Chunk* cicp = findChunk(chunks, "cICP");
+    REQUIRE(cicp);
+    CHECK(cicp->data == std::vector<uint8_t>({12, 13, 0, 1}));
+    // iCCP: el nombre, deflate y el perfil ICC de Display P3. Con él no va el chunk sRGB.
+    const Chunk* iccp = findChunk(chunks, "iCCP");
+    REQUIRE(iccp);
+    const std::string name = "Display P3";
+    REQUIRE(iccp->data.size() > name.size() + 2);
+    CHECK_EQ(std::string(iccp->data.begin(), iccp->data.begin() + static_cast<long>(name.size() + 2)),
+             name + std::string("\0\0", 2));
+    const std::vector<uint8_t>& profile = icc::profile(ColorProfile::DisplayP3);
+    std::vector<uint8_t> inflated(profile.size() + 64);
+    size_t inflatedSize = 0;
+    libdeflate_decompressor* decompressor = libdeflate_alloc_decompressor();
+    REQUIRE(decompressor);
+    const libdeflate_result result = libdeflate_zlib_decompress(
+        decompressor, iccp->data.data() + name.size() + 2, iccp->data.size() - name.size() - 2, inflated.data(),
+        inflated.size(), &inflatedSize);
+    libdeflate_free_decompressor(decompressor);
+    CHECK(result == LIBDEFLATE_SUCCESS);
+    inflated.resize(inflatedSize);
+    CHECK(inflated == profile);
+    CHECK(findChunk(chunks, "sRGB") == nullptr);
+    // Y para quien no lea perfiles, la curva y los primarios de P3.
+    const Chunk* gamma = findChunk(chunks, "gAMA");
+    REQUIRE(gamma && gamma->data.size() == 4);
+    CHECK_EQ(get32(gamma->data.data()), 45455u);
+    const Chunk* chromaticities = findChunk(chunks, "cHRM");
+    REQUIRE(chromaticities && chromaticities->data.size() == 32);
+    const uint32_t expected[8] = {31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000};
+    for (int i = 0; i < 8; ++i) {
+        CHECK_EQ(get32(chromaticities->data.data() + i * 4), expected[i]);
+    }
+
+    // Todo antes de los píxeles, que no cambian.
+    bool data = false;
+    for (const Chunk& chunk : chunks) {
+        data = data || chunk.type == "IDAT";
+        if (chunk.type == "cICP" || chunk.type == "iCCP" || chunk.type == "gAMA" || chunk.type == "cHRM") {
+            CHECK(!data);
+        }
+    }
+    int w = 0;
+    int h = 0;
+    CHECK(decodePng(file, &w, &h) == std::vector<uint8_t>(pixels, pixels + 8));
+}
+
+TEST_CASE(icc_display_p3_profile) {
+    CHECK(icc::profile(ColorProfile::Srgb).empty());
+    const std::vector<uint8_t>& icc = icc::profile(ColorProfile::DisplayP3);
+    REQUIRE(icc.size() >= 132);
+    CHECK_EQ(size_t{get32(icc.data())}, icc.size());
+    CHECK_EQ(icc.size() % 4, size_t{0});
+    CHECK_EQ(int{icc[8]}, 4);   // ICC v4
+    CHECK_EQ(std::string(icc.begin() + 12, icc.begin() + 24), std::string("mntrRGB XYZ "));
+    CHECK_EQ(std::string(icc.begin() + 36, icc.begin() + 40), std::string("acsp"));
+    CHECK_EQ(get32(icc.data() + 68), 0xF6D6u);   // blanco D50
+    CHECK_EQ(get32(icc.data() + 72), 0x10000u);
+    CHECK_EQ(get32(icc.data() + 76), 0xD32Du);
+
+    // Las etiquetas, dentro del perfil y en múltiplos de 4.
+    const uint32_t count = get32(icc.data() + 128);
+    REQUIRE(132 + size_t{count} * 12 <= icc.size());
+    std::map<std::string, size_t> tags;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t* entry = icc.data() + 132 + i * 12;
+        const uint32_t offset = get32(entry + 4);
+        const uint32_t size = get32(entry + 8);
+        CHECK_EQ(offset % 4, 0u);
+        CHECK(size_t{offset} + size <= icc.size());
+        tags[std::string(entry, entry + 4)] = offset;
+    }
+    for (const char* tag : {"desc", "cprt", "wtpt", "chad", "rXYZ", "gXYZ", "bXYZ", "rTRC", "gTRC", "bTRC"}) {
+        CHECK(tags.count(tag) == 1);
+    }
+    REQUIRE(tags.size() == 10);
+
+    // El nombre: "Display P3" en UTF-16.
+    const size_t desc = tags["desc"];
+    CHECK_EQ(std::string(icc.begin() + static_cast<long>(desc), icc.begin() + static_cast<long>(desc) + 4),
+             std::string("mluc"));
+    std::string text;
+    for (size_t i = 0; i < get32(icc.data() + desc + 20) / 2; ++i) {
+        text += static_cast<char>(icc[desc + get32(icc.data() + desc + 24) + i * 2 + 1]);
+    }
+    CHECK_EQ(text, std::string("Display P3"));
+
+    // Los primarios: deshaciendo la adaptación a D50 (chad) quedan los de P3 con blanco D65.
+    double chad[9];
+    double inverse[9];
+    for (int i = 0; i < 9; ++i) {
+        chad[i] = fixedAt(icc, tags["chad"] + 8 + static_cast<size_t>(i) * 4);
+    }
+    invert3(chad, inverse);
+    const double primaries[3][2] = {{0.680, 0.320}, {0.265, 0.690}, {0.150, 0.060}};
+    double white[3] = {0.0, 0.0, 0.0};
+    const char* colorants[3] = {"rXYZ", "gXYZ", "bXYZ"};
+    for (int c = 0; c < 3; ++c) {
+        double d50[3];
+        double d65[3] = {0.0, 0.0, 0.0};
+        for (int i = 0; i < 3; ++i) {
+            d50[i] = fixedAt(icc, tags[colorants[c]] + 8 + static_cast<size_t>(i) * 4);
+        }
+        for (int i = 0; i < 3; ++i) {
+            for (int k = 0; k < 3; ++k) {
+                d65[i] += inverse[i * 3 + k] * d50[k];
+            }
+            white[i] += d65[i];
+        }
+        const double sum = d65[0] + d65[1] + d65[2];
+        CHECK_NEAR(d65[0] / sum, primaries[c][0], 1e-4);
+        CHECK_NEAR(d65[1] / sum, primaries[c][1], 1e-4);
+    }
+    const double whiteSum = white[0] + white[1] + white[2];
+    CHECK_NEAR(white[0] / whiteSum, 0.3127, 1e-4);
+    CHECK_NEAR(white[1] / whiteSum, 0.3290, 1e-4);
+    CHECK_NEAR(white[1], 1.0, 1e-4);
+
+    // La curva es la de sRGB, la misma para los tres canales.
+    const size_t trc = tags["rTRC"];
+    CHECK_EQ(tags["gTRC"], trc);
+    CHECK_EQ(tags["bTRC"], trc);
+    CHECK_EQ(std::string(icc.begin() + static_cast<long>(trc), icc.begin() + static_cast<long>(trc) + 4),
+             std::string("para"));
+    CHECK_EQ(int{icc[trc + 8]} * 256 + icc[trc + 9], 3);
+    double p[5];
+    for (int i = 0; i < 5; ++i) {
+        p[i] = fixedAt(icc, trc + 12 + static_cast<size_t>(i) * 4);
+    }
+    for (int i = 0; i <= 64; ++i) {
+        const double x = i / 64.0;
+        const double y = x >= p[4] ? std::pow(p[1] * x + p[2], p[0]) : p[3] * x;
+        CHECK_NEAR(y, colorspace::toLinear(static_cast<float>(x)), 1e-4);
+    }
 }
 
 TEST_CASE(png_pixels_per_meter) {

@@ -1,7 +1,5 @@
 #include "Canvas/Compositor.h"
 
-#include "Gfx/Shader.h"
-
 #include <SDL3/SDL_log.h>
 
 namespace {
@@ -226,19 +224,22 @@ void main() {
 }
 )";
 
-// Filtros de una capa, mezclados con el original según la máscara de la selección.
+// Filtros de una capa, mezclados con el original según la máscara de la selección
+// (colorspace::kGlsl va delante).
 constexpr const char* kFilterFragment = R"(
 in vec2 vUV;
 uniform sampler2D uSource;
 uniform sampler2D uMask;
 uniform int uMaskOn;
-uniform int uFilter;       // 0: invertir
+uniform int uFilter;       // 0: invertir; 1: cambiar de perfil de color
 out vec4 fragColor;
 void main() {
     vec4 c = texture(uSource, vUV);
     vec4 f = c;
     if (uFilter == 0) {
         f = vec4(c.a - c.rgb, c.a);   // premultiplicado: 1 − color pasa a alfa − color
+    } else if (uFilter == 1) {
+        f = gamutConvertPremultiplied(c);
     }
     float m = uMaskOn == 1 ? texture(uMask, vUV).r : 1.0;
     fragColor = mix(c, f, m);
@@ -286,7 +287,7 @@ bool Compositor::init(int width, int height) {
     m_program = gfx::makeProgram("compositor", kVertex, kFragment);
     m_colorProgram = gfx::makeProgram("compositor-color", kVertex, kColorFragment);
     m_maskedColorProgram = gfx::makeProgram("compositor-masked-color", kVertex, kMaskedColorFragment);
-    m_filterProgram = gfx::makeProgram("compositor-filter", kVertex, kFilterFragment);
+    m_filterProgram = gfx::makeProgram("compositor-filter", kVertex, kFilterFragment, colorspace::kGlsl);
     if (!m_program || !m_colorProgram || !m_maskedColorProgram || !m_filterProgram) {
         destroy();
         return false;
@@ -315,6 +316,7 @@ bool Compositor::init(int width, int height) {
     m_uFilterMask = glGetUniformLocation(m_filterProgram.id(), "uMask");
     m_uFilterMaskOn = glGetUniformLocation(m_filterProgram.id(), "uMaskOn");
     m_uFilterKind = glGetUniformLocation(m_filterProgram.id(), "uFilter");
+    m_uFilterGamut.locate(m_filterProgram);
 
     glUseProgram(id);
     glUniform1i(m_uLayer, kLayerUnit);
@@ -656,6 +658,18 @@ void Compositor::invert(GLuint target, const IRect& rect) {
 
 void Compositor::filter(const gfx::RenderTarget& target, Filter filter, GLuint mask, const gfx::RenderTarget& scratch,
                         const IRect& rect) {
+    runFilter(target, static_cast<int>(filter), mask, scratch, rect, colorspace::Transform{});
+}
+
+void Compositor::convertColors(const gfx::RenderTarget& target, const colorspace::Transform& transform,
+                               const gfx::RenderTarget& scratch, const IRect& rect) {
+    if (!transform.identity()) {
+        runFilter(target, 1, 0, scratch, rect, transform);
+    }
+}
+
+void Compositor::runFilter(const gfx::RenderTarget& target, int kind, GLuint mask, const gfx::RenderTarget& scratch,
+                           const IRect& rect, const colorspace::Transform& gamut) {
     const IRect area = rect.intersected(IRect::ofSize(m_composite.width, m_composite.height));
     if (area.empty() || !m_filterProgram) {
         return;
@@ -670,7 +684,8 @@ void Compositor::filter(const gfx::RenderTarget& target, Filter filter, GLuint m
     glBindTexture(GL_TEXTURE_2D, mask ? mask : target.texture.id());
     glUseProgram(m_filterProgram.id());
     glUniform1i(m_uFilterMaskOn, mask ? 1 : 0);
-    glUniform1i(m_uFilterKind, static_cast<int>(filter));
+    glUniform1i(m_uFilterKind, kind);
+    m_uFilterGamut.set(gamut);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     blit(scratch.fbo.id(), target.fbo.id(), area);

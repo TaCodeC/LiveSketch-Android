@@ -1,4 +1,5 @@
-// Diálogos: confirmaciones (eliminar y renombrar capa, salir), con la tarjeta de lienzo
+// Diálogos: confirmaciones (eliminar y renombrar capa, salir, convertir el perfil de color
+// del lienzo), con la tarjeta de lienzo
 // nuevo (UiCanvas.cpp) por encima de lo que haya, y la pantalla de inicio. Las
 // confirmaciones son tarjetas alineadas a la izquierda: un icono, el título, la explicación
 // y botones abajo a la derecha.
@@ -112,6 +113,9 @@ void Ui::openDialog(Dialog dialog, const Canvas* canvas) {
     case Dialog::Exit:
         m_dialogTitle = "¿Salir de LiveSketch?";
         break;
+    case Dialog::ConvertProfile:
+        // askConvertProfile ya puso el título y la explicación.
+        break;
     case Dialog::NewCanvas:
         // Empieza sin nombre; el tamaño, el fondo y la categoría son los de la última vez.
         closePanels();
@@ -122,6 +126,26 @@ void Ui::openDialog(Dialog dialog, const Canvas* canvas) {
     case Dialog::None:
         break;
     }
+}
+
+void Ui::askConvertProfile(Canvas& canvas, ColorProfile profile) {
+    if (m_dialog != Dialog::None || profile == canvas.info().profile) {
+        return;
+    }
+    m_dialogProfile = profile;
+    if (profile == ColorProfile::DisplayP3) {
+        m_dialogTitle = "¿Pasar el lienzo a Display P3?";
+        m_dialogMessage = "Los colores del dibujo se convierten y se ven igual; desde ahí puedes pintar con rojos, "
+                          "verdes y naranjas más intensos.";
+    } else {
+        m_dialogTitle = "¿Pasar el lienzo a sRGB?";
+        m_dialogMessage = "Los colores del dibujo se convierten y se ven igual, salvo los más intensos que sRGB no "
+                          "tiene, que pasan al más parecido.";
+    }
+    m_dialogMessage += canvas.profileChangeUndoable()
+                           ? " Se puede deshacer."
+                           : " No se podrá deshacer: el dibujo no cabe en el historial, que se vaciará.";
+    openDialog(Dialog::ConvertProfile, &canvas);
 }
 
 void Ui::askExit() {
@@ -194,6 +218,10 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
         message = "Lo que no hayas guardado como PNG se perderá.";
         confirmLabel = "Salir";
         confirmStyle = ui::ButtonStyle::Destructive;
+    } else if (m_dialogShown == Dialog::ConvertProfile) {
+        glyph = icon::kPalette;
+        message = m_dialogMessage.c_str();
+        confirmLabel = "Convertir";
     }
 
     const float width = std::min(pt(340.0f), L.display.x - L.margin * 2.0f);
@@ -296,6 +324,11 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
             break;
         case Dialog::Exit:
             requests.quit = true;
+            break;
+        case Dialog::ConvertProfile:
+            if (canvas) {
+                canvas->convertProfile(m_dialogProfile);
+            }
             break;
         default:
             break;

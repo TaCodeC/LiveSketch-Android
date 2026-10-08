@@ -3,6 +3,7 @@
 #include "Gfx/GL.h"
 #include "Gfx/GLObjects.h"
 #include "UI/Anim.h"
+#include "UI/ColorManage.h"
 #include "UI/Kit.h"
 
 #include <imgui.h>
@@ -297,6 +298,12 @@ SDL_AppResult App::event(const SDL_Event& event) {
     case SDL_EVENT_WINDOW_RESIZED:
         updateWindowSize();
         break;
+    // La ventana pasó a otra pantalla, o la pantalla cambió: puede mostrar otra gama.
+    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    case SDL_EVENT_DISPLAY_ADDED:
+    case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+        m_display.displayChanged();
+        break;
     default:
         break;
     }
@@ -347,6 +354,7 @@ void App::onWillEnterBackground() {
 void App::onDidEnterForeground() {
     m_foreground = true;
     m_canvas.dropSnapshot();
+    m_display.displayChanged();
     updateWindowSize();
     m_redrawFrames = std::max(m_redrawFrames, 2);
 }
@@ -517,6 +525,9 @@ SDL_AppResult App::iterate() {
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    // La pantalla en el perfil del lienzo si puede (Display P3); si no, la vista y la
+    // interfaz convierten sus colores.
+    m_displayProfile = m_display.sync(m_window, canvasProfile());
     const UiStatus status = uiStatus();
     m_view.setPixelsPerPoint(status.pointScale * status.pixelsPerUnit);
     // La estabilización del trazo se mide en la pantalla: píxeles del lienzo por punto.
@@ -529,6 +540,7 @@ SDL_AppResult App::iterate() {
     UiRequests requests;
     m_ui.build(m_canvas.ready() ? &m_canvas : nullptr, requests);
     ImGui::Render();
+    ui::gamut::convert(ImGui::GetDrawData());
 
     if (requests.quit) {
         return SDL_APP_SUCCESS;
@@ -543,8 +555,13 @@ SDL_AppResult App::iterate() {
 
     m_canvas.update();
     if (m_ndi.running()) {
-        m_ndi.capture(m_canvas.composite().fbo.id(), m_canvas.version());
+        // Los receptores esperan sRGB.
+        m_ndi.capture(m_canvas.composite(), m_canvas.version(),
+                      colorspace::between(m_canvas.info().profile, ColorProfile::Srgb));
     }
+    // El lienzo pudo cambiar de perfil con lo que pidió la interfaz; la pantalla lo sigue en
+    // el frame siguiente.
+    m_view.setGamut(colorspace::between(canvasProfile(), m_displayProfile));
     updateBackdrop();
     renderFrame();
     schedulePacing();
@@ -594,6 +611,9 @@ UiStatus App::uiStatus() const {
     status.ndiConnections = m_ndi.connections();
     status.ndiError = m_ndi.error();
     status.exporting = m_awaitingPermission || m_exportPending || m_exporter.busy();
+    status.displayProfile = m_displayProfile;
+    status.canvasProfile = canvasProfile();
+    status.wideGamutScreen = m_display.wideAvailable();
     return status;
 }
 
@@ -677,6 +697,7 @@ void App::updateBackdrop() {
     key = mixHash(key, floatBits(m_camera.angle()));
     key = mixHash(key, m_camera.flipped() ? 1 : 0);
     key = mixHash(key, (static_cast<uint64_t>(m_pixelWidth) << 32) | static_cast<uint32_t>(m_pixelHeight));
+    key = mixHash(key, static_cast<uint64_t>(m_view.gamut().key()));
     const float sigma = kBackdropBlurPoints * ui::scale() * SDL_GetWindowPixelDensity(m_window);
     m_backdrop.update(m_view, m_camera, m_canvas.composite().texture.id(), m_pixelWidth, m_pixelHeight, sigma, key);
     retargetTexture(ImGui::GetDrawData(), textureId(m_backdropTexture), textureId(m_backdrop.texture()));

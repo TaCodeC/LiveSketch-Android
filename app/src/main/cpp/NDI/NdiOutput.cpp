@@ -15,6 +15,22 @@ constexpr uint64_t kNoVersion = UINT64_MAX;
 constexpr auto kKeepAlive = std::chrono::seconds(1);
 constexpr auto kSenderTick = std::chrono::milliseconds(250);
 
+constexpr const char* kConvertVertex = R"(
+layout(location = 0) in vec2 aPos;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+// Píxel a píxel (el destino es del tamaño del compuesto); colorspace::kGlsl va delante.
+constexpr const char* kConvertFragment = R"(
+uniform sampler2D uSource;
+out vec4 fragColor;
+void main() {
+    fragColor = gamutConvertPremultiplied(texelFetch(uSource, ivec2(gl_FragCoord.xy), 0));
+}
+)";
+
 } // namespace
 
 NdiOutput::~NdiOutput() {
@@ -41,6 +57,9 @@ bool NdiOutput::start(std::unique_ptr<FrameSink> sink, int width, int height) {
     m_connections = 0;
     m_failed = false;
     m_capturedVersion = kNoVersion;   // la primera captura sale siempre
+    m_latestGamut = 0;
+    m_capturedGamut = 0;
+    m_convertFailed = false;
     m_lastCaptureMs = 0;
     m_sink = std::move(sink);
     m_thread = std::thread(&NdiOutput::senderLoop, this);
@@ -61,6 +80,7 @@ void NdiOutput::stop() {
         releaseFence(slot);
         slot.pbo.reset();
     }
+    destroyConversion();
     m_sink.reset();
     m_scratch = {};
     m_pending = {};
@@ -94,14 +114,66 @@ void NdiOutput::releaseFence(Slot& slot) {
     slot.fence = nullptr;
 }
 
-void NdiOutput::capture(GLuint compositeFbo, uint64_t version) {
+void NdiOutput::destroyConversion() {
+    m_converted.destroy();
+    m_vbo.reset();
+    m_vao.reset();
+    m_convertProgram.reset();
+}
+
+bool NdiOutput::convert(const gfx::RenderTarget& composite, const colorspace::Transform& toSrgb) {
+    if (!m_convertProgram) {
+        m_convertProgram = gfx::makeProgram("ndi to sRGB", kConvertVertex, kConvertFragment, colorspace::kGlsl);
+        if (!m_convertProgram) {
+            return false;
+        }
+        m_uConvertSource = glGetUniformLocation(m_convertProgram.id(), "uSource");
+        m_uConvertGamut.locate(m_convertProgram);
+        const float quad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
+        m_vao = gfx::VertexArray::create();
+        m_vbo = gfx::Buffer::create();
+        glBindVertexArray(m_vao.id());
+        glBindBuffer(GL_ARRAY_BUFFER, m_vbo.id());
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    if (!m_converted || m_converted.width != composite.width || m_converted.height != composite.height) {
+        m_converted.destroy();
+        if (!m_converted.create(composite.width, composite.height)) {
+            m_converted.destroy();
+            return false;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_converted.fbo.id());
+    glViewport(0, 0, composite.width, composite.height);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(m_convertProgram.id());
+    glUniform1i(m_uConvertSource, 0);
+    m_uConvertGamut.set(toSrgb);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, composite.texture.id());
+    glBindVertexArray(m_vao.id());
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+void NdiOutput::capture(const gfx::RenderTarget& composite, uint64_t version, const colorspace::Transform& toSrgb) {
     if (!m_running || m_failed) {
         return;
     }
     m_latestVersion = version;
+    m_latestGamut = toSrgb.key();
     collect();
 
-    if (version == m_capturedVersion) {
+    if (version == m_capturedVersion && m_latestGamut == m_capturedGamut) {
         return;
     }
     const uint64_t now = SDL_GetTicks();
@@ -113,7 +185,17 @@ void NdiOutput::capture(GLuint compositeFbo, uint64_t version) {
         return;
     }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, compositeFbo);
+    GLuint source = composite.fbo.id();
+    if (!toSrgb.identity() && m_width == composite.width && m_height == composite.height) {
+        if (convert(composite, toSrgb)) {
+            source = m_converted.fbo.id();
+        } else if (!m_convertFailed) {
+            // Mejor con los colores sin convertir que sin imagen.
+            m_convertFailed = true;
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "NDI: no se pudo convertir el lienzo a sRGB");
+        }
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, source);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, free->pbo.id());
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glReadPixels(0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -126,6 +208,7 @@ void NdiOutput::capture(GLuint compositeFbo, uint64_t version) {
     glFlush();   // para que la fence avance aunque no haya swap pronto
 
     m_capturedVersion = version;
+    m_capturedGamut = m_latestGamut;
     m_lastCaptureMs = now;
 }
 
@@ -178,7 +261,7 @@ bool NdiOutput::busy() const {
     }
     const bool inFlight =
         std::any_of(m_slots.begin(), m_slots.end(), [](const Slot& slot) { return slot.fence != nullptr; });
-    return inFlight || m_latestVersion != m_capturedVersion;
+    return inFlight || m_latestVersion != m_capturedVersion || m_latestGamut != m_capturedGamut;
 }
 
 void NdiOutput::dropInFlight() {
@@ -195,6 +278,7 @@ void NdiOutput::recreateGpu() {
     for (Slot& slot : m_slots) {
         releaseFence(slot);   // de otra generación: solo se olvida
     }
+    destroyConversion();   // también: se vuelve a crear al usarla
     if (!createPbos()) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_error = "No se pudieron crear los buffers de captura";

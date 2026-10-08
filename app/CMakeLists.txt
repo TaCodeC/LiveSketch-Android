@@ -116,6 +116,7 @@ target_compile_options(libdeflate PRIVATE -O2 -w)
 add_library(livesketch_core STATIC
         ${SRC_DIR}/App/App.cpp
         ${SRC_DIR}/App/AppInput.cpp
+        ${SRC_DIR}/App/DisplayGamut.cpp
         ${SRC_DIR}/Canvas/Bounds.cpp
         ${SRC_DIR}/Canvas/Brush.cpp
         ${SRC_DIR}/Canvas/BrushLibrary.cpp
@@ -139,10 +140,12 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Canvas/SelectionShapes.cpp
         ${SRC_DIR}/Canvas/StrokePath.cpp
         ${SRC_DIR}/Canvas/Warp.cpp
+        ${SRC_DIR}/Gfx/ColorSpace.cpp
         ${SRC_DIR}/Gfx/GLObjects.cpp
         ${SRC_DIR}/Gfx/Pixels.cpp
         ${SRC_DIR}/Gfx/Shader.cpp
         ${SRC_DIR}/IO/Assets.cpp
+        ${SRC_DIR}/IO/Icc.cpp
         ${SRC_DIR}/IO/ImageExport.cpp
         ${SRC_DIR}/IO/Png.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
@@ -152,6 +155,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/Anim.cpp
         ${SRC_DIR}/UI/Backdrop.cpp
         ${SRC_DIR}/UI/CanvasForm.cpp
+        ${SRC_DIR}/UI/ColorManage.cpp
         ${SRC_DIR}/UI/Kit.cpp
         ${SRC_DIR}/UI/PanelParts.cpp
         ${SRC_DIR}/UI/Previews.cpp
@@ -240,6 +244,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/CanvasFormTests.cpp
             ${TESTS_DIR}/CanvasTests.cpp
             ${TESTS_DIR}/CanvasSpecTests.cpp
+            ${TESTS_DIR}/ColorSpaceTests.cpp
             ${TESTS_DIR}/ExportTests.cpp
             ${TESTS_DIR}/FillTests.cpp
             ${TESTS_DIR}/GuideTests.cpp

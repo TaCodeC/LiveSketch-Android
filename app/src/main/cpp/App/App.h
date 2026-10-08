@@ -1,5 +1,6 @@
 #pragma once
 
+#include "App/DisplayGamut.h"
 #include "Canvas/Camera.h"
 #include "Canvas/Canvas.h"
 #include "Canvas/CanvasView.h"
@@ -41,6 +42,9 @@ private:
     void applyRequests(const UiRequests& requests);
     void startFitAnimation();
     void stepFitAnimation();
+    ColorProfile canvasProfile() const {
+        return m_canvas.ready() ? m_canvas.info().profile : ColorProfile::Srgb;
+    }
     void updateBackdrop();
     void renderFrame();
     void schedulePacing();
@@ -113,6 +117,9 @@ private:
 
     Canvas m_canvas;
     CanvasView m_view;
+    // Perfil de color de la pantalla en este frame (ver DisplayGamut).
+    DisplayGamut m_display;
+    ColorProfile m_displayProfile = ColorProfile::Srgb;
     Camera m_camera;
     Ui m_ui;
     Backdrop m_backdrop;

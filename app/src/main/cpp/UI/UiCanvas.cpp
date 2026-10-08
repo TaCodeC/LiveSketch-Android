@@ -1,22 +1,24 @@
 // Tarjeta de lienzo nuevo, que también es la pantalla de inicio: tamaños por categorías
 // (cada ficha con la forma del lienzo a escala), tamaño a medida en px, mm, cm o pulgadas,
-// resolución, fondo y nombre, con un resumen en vivo de lo que saldrá. En una tableta o un
-// ordenador son dos columnas que se desplazan por separado (los tamaños a la izquierda y
-// los ajustes a la derecha) con el resumen y «Crear lienzo» abajo; en un teléfono, una
-// hoja a pantalla completa con todo en una columna y el resumen y «Crear lienzo» fijos
-// abajo.
+// resolución, perfil de color, fondo y nombre, con un resumen en vivo de lo que saldrá.
+// En una tableta o un ordenador son dos columnas que se desplazan por separado (los
+// tamaños a la izquierda y los ajustes a la derecha) con el resumen y «Crear lienzo»
+// abajo; en un teléfono, una hoja a pantalla completa con todo en una columna y el
+// resumen y «Crear lienzo» fijos abajo.
 //
 // Los números se escriben con un teclado numérico propio cuando se tocan con el dedo o el
 // lápiz: el navegador de un móvil no saca su teclado para la app, y el de Android no pasa
 // a numérico sin cerrarlo y volverlo a abrir. Con el ratón se usa el teclado físico.
 //
 // Aquí van también las propiedades del lienzo, una página del panel de Acciones: el
-// nombre, la resolución (sin reescalar) y el fondo, con las mismas piezas que la tarjeta,
-// y los datos del lienzo (capas, memoria, tiempo dibujando, trazos y fechas).
+// nombre, la resolución (sin reescalar), el fondo y el perfil de color (convirtiendo los
+// colores), con las mismas piezas que la tarjeta, y los datos del lienzo (capas, memoria,
+// tiempo dibujando, trazos y fechas).
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
+#include "UI/ColorManage.h"
 #include "UI/Icons.h"
 #include "UI/PanelParts.h"
 
@@ -85,6 +87,7 @@ constexpr float kLock = 40.0f;
 constexpr float kChip = 38.0f;
 constexpr float kHintGap = 8.0f;
 constexpr float kBackgroundChip = 58.0f;
+constexpr float kProfileChip = 54.0f;
 constexpr float kSwatch = 30.0f;
 constexpr float kSwatchGap = 8.0f;
 constexpr float kHex = 32.0f;
@@ -176,19 +179,34 @@ ImVec2 shapeSize(float w, float h, ImVec2 box) {
     return ImVec2(std::max(w * fit, pt(8.0f)), std::max(h * fit, pt(8.0f)));
 }
 
-// Muestra de un fondo: blanco, un color o el damero de lo transparente.
-void backgroundFill(ImDrawList* dl, const ImRect& rect, float radius, FormBackground kind, const float color[3]) {
+// Muestra de un fondo: blanco, un color (de `profile`) o el damero de lo transparente.
+void backgroundFill(ImDrawList* dl, const ImRect& rect, float radius, FormBackground kind, const float color[3],
+                    ColorProfile profile) {
     switch (kind) {
     case FormBackground::White:
         dl->AddRectFilled(rect.Min, rect.Max, IM_COL32_WHITE, radius);
         break;
-    case FormBackground::Color:
+    case FormBackground::Color: {
+        const ui::gamut::Scope scope(dl, profile);
         dl->AddRectFilled(rect.Min, rect.Max, ui::fromFloat(color), radius);
         break;
+    }
     case FormBackground::Transparent:
         ui::checkerboard(dl, rect, radius, std::max(pt(4.0f), ui::hairline()));
         break;
     }
+}
+
+// Lo que se explica de un perfil de color debajo de sus fichas. `wideScreen`: la pantalla
+// muestra Display P3.
+const char* profileHint(ColorProfile profile, bool wideScreen) {
+    if (profile == ColorProfile::Srgb) {
+        return "El de casi todas las pantallas, la web y NDI.";
+    }
+    return wideScreen ? "Rojos, verdes y naranjas más intensos, y esta pantalla los muestra. El PNG guarda el "
+                        "perfil y NDI recibe los colores en sRGB."
+                      : "Rojos, verdes y naranjas más intensos. Esta pantalla no los muestra, pero el PNG los "
+                        "guarda; NDI los recibe en sRGB.";
 }
 
 // Rótulo de sección: `y` es lo alto de su franja (kSection).
@@ -636,11 +654,12 @@ float Ui::canvasSettingsHeight(float width, bool colorOptions) const {
     float points = kSection + kNameField + kSectionGap;                                      // nombre
     points += kSection + kSegment + kRowGap + kNumber + kRowGap + kChip + kSectionGap;   // tamaño
     points += kSection + kChip + kHintGap;                                                // resolución
-    points += kSectionGap + kSection + kBackgroundChip;                                   // fondo
+    points += kSectionGap;
+    points += kSection + kBackgroundChip;                                                 // fondo
     if (colorOptions) {
         points += kColorOptions;
     }
-    return pt(points) + hint;
+    return pt(points) + hint + profileOptionsHeight(width) + pt(kSectionGap);            // perfil
 }
 
 void Ui::numberField(ImDrawList* dl, const char* id, const ImRect& rect, Field field, const char* caption,
@@ -789,10 +808,57 @@ void Ui::canvasSettings(ImDrawList* dl, float left, float right, float y, bool i
     }
     y += pt(kSectionGap);
 
-    // Fondo: blanco, un color o transparente (en Capas se puede cambiar después).
+    // Perfil de color: sRGB o Display P3 (en Propiedades se puede cambiar después).
+    form.profile = profileOptions(dl, left, right, y, form.profile);
+    y += profileOptionsHeight(width) + pt(kSectionGap);
+
+    // Fondo: blanco, un color o transparente (en Capas se puede cambiar después). El color
+    // es del perfil elegido.
     section(dl, left, right, y, "FONDO");
     y += pt(kSection);
-    backgroundOptions(dl, left, right, y, &form.background, form.color, interactive);
+    backgroundOptions(dl, left, right, y, &form.background, form.color, form.profile, interactive);
+}
+
+float Ui::profileOptionsHeight(float width) const {
+    // Sitio para la explicación más larga: elegir el otro perfil no mueve lo de debajo.
+    float hint = 0.0f;
+    for (int i = 0; i < kColorProfileCount; ++i) {
+        hint = std::max(hint, ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f), width,
+                                            Align::Left, 0,
+                                            profileHint(static_cast<ColorProfile>(i), m_status.wideGamutScreen),
+                                            1.4f));
+    }
+    return pt(kSection + kProfileChip + kHintGap) + hint;
+}
+
+ColorProfile Ui::profileOptions(ImDrawList* dl, float left, float right, float y, ColorProfile current) {
+    section(dl, left, right, y, "PERFIL DE COLOR");
+    y += pt(kSection);
+    const char* captions[kColorProfileCount] = {"Estándar", "Gama amplia"};
+    ColorProfile chosen = current;
+    const float gap = pt(8.0f);
+    const float chipWidth = (right - left - gap) * 0.5f;
+    for (int i = 0; i < kColorProfileCount; ++i) {
+        const auto profile = static_cast<ColorProfile>(i);
+        const float x0 = left + (chipWidth + gap) * static_cast<float>(i);
+        const ImRect chip(ImVec2(x0, y), ImVec2(x0 + chipWidth, y + pt(kProfileChip)));
+        ImGui::PushID(i);
+        const ui::Choice c = ui::choice("##profile", chip, current == profile);
+        ImGui::PopID();
+        const float cx = chip.GetCenter().x;
+        ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(cx, chip.Min.y + pt(20.0f)), Align::Center,
+                  ui::mix(IM_COL32(235, 235, 245, 191), th::kLabel, c.on), colorspace::name(profile),
+                  chipWidth - pt(8.0f));
+        ui::label(dl, Weight::Regular, th::kCaption, ImVec2(cx, chip.Max.y - pt(16.0f)), Align::Center,
+                  ui::mix(IM_COL32(235, 235, 245, 128), th::kAccentText, c.on), captions[i], chipWidth - pt(8.0f));
+        if (c.press.clicked && profile != current) {
+            chosen = profile;
+        }
+    }
+    y += pt(kProfileChip + kHintGap);
+    ui::paragraph(dl, Weight::Regular, th::kFootnote, ImVec2(left, y), right - left, Align::Left, th::kSecondaryLabel,
+                  profileHint(current, m_status.wideGamutScreen), 1.4f);
+    return chosen;
 }
 
 bool Ui::ppiChips(ImDrawList* dl, float left, float right, float y, CanvasForm& form, ImRect* fieldRect) {
@@ -844,7 +910,7 @@ float Ui::backgroundOptionsHeight(bool colorOptions) const {
 }
 
 bool Ui::backgroundOptions(ImDrawList* dl, float left, float right, float y, FormBackground* kind, float color[3],
-                           bool interactive) {
+                           ColorProfile profile, bool interactive) {
     const float width = right - left;
     bool changed = false;
     {
@@ -861,7 +927,7 @@ bool Ui::backgroundOptions(ImDrawList* dl, float left, float right, float y, For
             const ImVec2 center(chip.GetCenter().x, chip.Min.y + pt(21.0f));
             const ImRect sample(ImVec2(center.x - pt(11.0f), center.y - pt(11.0f)),
                                 ImVec2(center.x + pt(11.0f), center.y + pt(11.0f)));
-            backgroundFill(dl, sample, pt(5.0f), option, color);
+            backgroundFill(dl, sample, pt(5.0f), option, color, profile);
             ui::outline(dl, sample, pt(5.0f), IM_COL32(255, 255, 255, 46), ui::hairline());
             ui::label(dl, Weight::SemiBold, th::kMicro, ImVec2(chip.GetCenter().x, chip.Max.y - pt(13.0f)),
                       Align::Center, ui::mix(IM_COL32(235, 235, 245, 166), th::kAccentText, c.on), labels[i],
@@ -891,6 +957,7 @@ bool Ui::backgroundOptions(ImDrawList* dl, float left, float right, float y, For
             float rgb[3];
             ui::toFloat(kBackgroundSwatches[i], rgb);
             ImGui::PushID(i);
+            const ui::gamut::Scope scope(dl, profile);
             if (ui::swatch("##swatch", ImRect(ImVec2(x0, y0), ImVec2(x0 + cell, y0 + pt(kSwatch))), kBackgroundSwatches[i],
                            ui::sameColor(rgb, color))) {
                 std::copy(rgb, rgb + 3, color);
@@ -1018,6 +1085,10 @@ Ui::CanvasSummary Ui::canvasSummary() const {
         detail += " · " + canvasspec::formatSize(form.width(), form.height(), form.unit()) + " a " +
                   canvasspec::formatPpi(form.ppi());
     }
+    if (form.profile != ColorProfile::Srgb) {
+        detail += " · ";
+        detail += colorspace::name(form.profile);
+    }
     summary.detail = detail;
 
     // Las capas que caben o por qué no se puede crear.
@@ -1068,7 +1139,7 @@ void Ui::canvasSummaryBlock(ImDrawList* dl, const CanvasSummary& summary, float 
     const float inner = preview - pt(16.0f);
     const float fit = std::min(inner / w, inner / h);
     const ImRect shape = frameRect(box.GetCenter(), ImVec2(std::max(w * fit, pt(4.0f)), std::max(h * fit, pt(4.0f))));
-    backgroundFill(dl, shape, pt(2.0f), form.background, form.color);
+    backgroundFill(dl, shape, pt(2.0f), form.background, form.color, form.profile);
     ui::outline(dl, shape, pt(2.0f), IM_COL32(255, 255, 255, 64), ui::hairline());
 
     // Tres líneas: píxeles, qué tamaño es y las capas (o el aviso).
@@ -1594,6 +1665,7 @@ float Ui::propertiesHeight(const Canvas& canvas, float width) const {
               pt(kSectionGap);
     height += pt(kSection) + backgroundOptionsHeight(backgroundKind(canvas.background()) == FormBackground::Color) +
               pt(kSectionGap);                                // fondo
+    height += profileOptionsHeight(inner) + pt(kSectionGap);  // perfil
     height += pt(kSection + kFact * 3.0f + kPagePad);         // información
     return height;
 }
@@ -1656,7 +1728,8 @@ void Ui::propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool
             dl->AddImageRounded(ImTextureRef(ui::parts::textureId(texture)), shape.Min, shape.Max, ImVec2(0.0f, 0.0f),
                                 ImVec2(1.0f, 1.0f), IM_COL32_WHITE, shapeRadius);
         } else {
-            backgroundFill(dl, shape, shapeRadius, backgroundKind(canvas.background()), canvas.background().color);
+            backgroundFill(dl, shape, shapeRadius, backgroundKind(canvas.background()), canvas.background().color,
+                           info.profile);
         }
         ui::outline(dl, shape, shapeRadius, IM_COL32(255, 255, 255, 46), ui::hairline());
 
@@ -1738,7 +1811,7 @@ void Ui::propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool
         FormBackground kind = backgroundKind(background);
         float color[3];
         std::copy(m_propertiesColor, m_propertiesColor + 3, color);
-        if (backgroundOptions(dl, left, right, y, &kind, color, interactive)) {
+        if (backgroundOptions(dl, left, right, y, &kind, color, info.profile, interactive)) {
             CanvasBackground next = background;
             next.visible = kind != FormBackground::Transparent;
             if (kind == FormBackground::White) {
@@ -1753,6 +1826,16 @@ void Ui::propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool
         }
     }
     y += backgroundOptionsHeight(colorOptions) + pt(kSectionGap);
+
+    // Perfil de color: elegir el otro pide confirmación y convierte los colores del dibujo.
+    {
+        const ColorProfile chosen = profileOptions(dl, left, right, y, info.profile);
+        if (chosen != info.profile && interactive) {
+            stopPropertiesEdit(canvas, true);
+            askConvertProfile(canvas, chosen);
+        }
+    }
+    y += profileOptionsHeight(inner) + pt(kSectionGap);
 
     // Datos del lienzo, en una tira de dos columnas.
     section(dl, left, right, y, "INFORMACIÓN");

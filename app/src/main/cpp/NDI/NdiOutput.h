@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Gfx/ColorSpace.h"
 #include "Gfx/GLObjects.h"
+#include "Gfx/Shader.h"
 #include "NDI/FrameSink.h"
 
 #include <array>
@@ -20,6 +22,8 @@
 // - El hilo de envío no toca GL: quita el premultiplicado y envía. Si el lienzo no
 //   cambia, reenvía el último frame cada segundo para que un receptor que se conecte
 //   reciba imagen.
+// - Los receptores esperan sRGB (Rec. 709): un lienzo en otro perfil se convierte en la GPU
+//   antes de leerlo.
 class NdiOutput {
 public:
     static constexpr int kMaxFps = 30;
@@ -34,8 +38,9 @@ public:
     void stop();
     bool running() const { return m_running; }
 
-    // Hilo de GL, una vez por frame, después de actualizar el compuesto.
-    void capture(GLuint compositeFbo, uint64_t version);
+    // Hilo de GL, una vez por frame, después de actualizar el compuesto. `toSrgb`: del
+    // perfil del lienzo a sRGB.
+    void capture(const gfx::RenderTarget& composite, uint64_t version, const colorspace::Transform& toSrgb = {});
     // Hay lecturas en curso o un cambio sin capturar: el bucle no debe dormirse.
     bool busy() const;
 
@@ -57,6 +62,9 @@ private:
     };
 
     bool createPbos();
+    // El compuesto pasado a sRGB en m_converted. False si no se pudo (sin memoria).
+    bool convert(const gfx::RenderTarget& composite, const colorspace::Transform& toSrgb);
+    void destroyConversion();
     void collect();
     void releaseFence(Slot& slot);
     void senderLoop();
@@ -69,7 +77,18 @@ private:
     std::array<Slot, 2> m_slots;
     uint64_t m_latestVersion = 0;     // última versión del lienzo que se vio
     uint64_t m_capturedVersion = 0;   // última versión que se mandó leer
+    int m_latestGamut = 0;            // lo mismo con colorspace::Transform::key()
+    int m_capturedGamut = 0;
     uint64_t m_lastCaptureMs = 0;
+
+    // Conversión a sRGB (solo con un lienzo en otro perfil).
+    gfx::Program m_convertProgram;
+    GLint m_uConvertSource = -1;
+    gfx::GamutUniforms m_uConvertGamut;
+    gfx::VertexArray m_vao;
+    gfx::Buffer m_vbo;
+    gfx::RenderTarget m_converted;
+    bool m_convertFailed = false;     // ya se avisó en el log
 
     // Traspaso de frames al hilo de envío. Tres buffers rotan sin copias: el que llena
     // el hilo de GL, el pendiente y el que tiene el hilo de envío.

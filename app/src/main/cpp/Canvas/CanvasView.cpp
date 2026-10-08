@@ -1,7 +1,5 @@
 #include "Canvas/CanvasView.h"
 
-#include "Gfx/Shader.h"
-
 #include <algorithm>
 #include <cmath>
 
@@ -84,14 +82,15 @@ void main() {
 }
 )";
 
-// Lo transparente del lienzo se ve sobre un damero, como en cualquier editor.
+// Lo transparente del lienzo se ve sobre un damero, como en cualquier editor. Los colores
+// pasan del perfil del lienzo al de la pantalla (colorspace::kGlsl va delante).
 constexpr const char* kCanvasFragment = R"(
 in vec2 vUV;
 uniform sampler2D uCanvas;
 uniform float uCell;
 out vec4 fragColor;
 void main() {
-    vec4 color = texture(uCanvas, vUV);
+    vec4 color = gamutConvertPremultiplied(texture(uCanvas, vUV));
     vec2 cell = floor(gl_FragCoord.xy / uCell);
     float checker = mix(0.8, 1.0, mod(cell.x + cell.y, 2.0));
     fragColor = vec4(color.rgb + vec3(checker) * (1.0 - color.a), 1.0);
@@ -146,7 +145,7 @@ bool CanvasView::init() {
     destroy();
 
     m_shadowProgram = gfx::makeProgram("canvas shadow", kShadowVertex, kShadowFragment);
-    m_canvasProgram = gfx::makeProgram("canvas view", kCanvasVertex, kCanvasFragment);
+    m_canvasProgram = gfx::makeProgram("canvas view", kCanvasVertex, kCanvasFragment, colorspace::kGlsl);
     m_selectionProgram = gfx::makeProgram("canvas selection", kCanvasVertex, kSelectionFragment);
     if (!m_shadowProgram || !m_canvasProgram || !m_selectionProgram) {
         destroy();
@@ -165,6 +164,7 @@ bool CanvasView::init() {
     m_uViewport = glGetUniformLocation(m_canvasProgram.id(), "uViewport");
     m_uCanvas = glGetUniformLocation(m_canvasProgram.id(), "uCanvas");
     m_uCell = glGetUniformLocation(m_canvasProgram.id(), "uCell");
+    m_uGamut.locate(m_canvasProgram);
     const GLuint selection = m_selectionProgram.id();
     m_uSelectionOrigin = glGetUniformLocation(selection, "uOrigin");
     m_uSelectionAxes = glGetUniformLocation(selection, "uAxes");
@@ -252,6 +252,7 @@ void CanvasView::draw(const Camera& camera, GLuint compositeTexture, GLuint fbo,
     glUniform2f(m_uViewport, viewport.x, viewport.y);
     glUniform1i(m_uCanvas, 0);
     glUniform1f(m_uCell, std::max(8.0f * scale, 1.0f));
+    m_uGamut.set(m_gamut);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, compositeTexture);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

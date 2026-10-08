@@ -6,6 +6,7 @@
 
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
+#include "UI/ColorManage.h"
 #include "UI/Icons.h"
 #include "UI/PanelParts.h"
 
@@ -216,8 +217,13 @@ bool colorPill(ImDrawList* dl, float right, float cy, const float current[3], co
     const ImRect pill(ImVec2(right - pt(56.0f), cy - pt(13.0f)), ImVec2(right, cy + pt(13.0f)));
     const float mid = pill.GetCenter().x;
     const float radius = pt(8.0f);
-    dl->AddRectFilled(pill.Min, ImVec2(mid, pill.Max.y), ui::fromFloat(current), radius, ImDrawFlags_RoundCornersLeft);
-    dl->AddRectFilled(ImVec2(mid, pill.Min.y), pill.Max, ui::fromFloat(previous), radius, ImDrawFlags_RoundCornersRight);
+    {
+        const ui::gamut::Scope scope(dl);
+        dl->AddRectFilled(pill.Min, ImVec2(mid, pill.Max.y), ui::fromFloat(current), radius,
+                          ImDrawFlags_RoundCornersLeft);
+        dl->AddRectFilled(ImVec2(mid, pill.Min.y), pill.Max, ui::fromFloat(previous), radius,
+                          ImDrawFlags_RoundCornersRight);
+    }
     ui::outline(dl, pill, radius, IM_COL32(255, 255, 255, 46), ui::hairline());
     return ui::pressable("##previous", ImRect(ImVec2(mid, pill.Min.y), pill.Max)).clicked;
 }
@@ -1058,6 +1064,7 @@ void Ui::backgroundRow(Canvas& canvas, ImDrawList* dl, const ImRect& row, float 
     const ImRect thumb(thumbMin, ImVec2(thumbMin.x + pt(thumbWidth), thumbMin.y + pt(thumbHeight)));
     const float thumbRadius = pt(6.0f);
     if (background.visible) {
+        const ui::gamut::Scope scope(dl);
         dl->AddRectFilled(thumb.Min, thumb.Max, ui::fromFloat(background.color), thumbRadius);
     } else {
         ui::checkerboard(dl, thumb, thumbRadius, std::max(pt(4.0f), ui::hairline()));
@@ -1299,7 +1306,10 @@ void Ui::layerMenu(Canvas& canvas) {
         ImGui::PopID();
         if (rows[i].action == Fill) {
             const ImVec2 center(r.Max.x - pt(10.0f + 9.0f), r.GetCenter().y);
-            dl->AddCircleFilled(center, pt(8.0f), ui::fromFloat(canvas.brushSettings().color), 0);
+            {
+                const ui::gamut::Scope scope(dl);
+                dl->AddCircleFilled(center, pt(8.0f), ui::fromFloat(canvas.brushSettings().color), 0);
+            }
             dl->AddCircle(center, pt(8.0f), IM_COL32(255, 255, 255, 64), 0, ui::hairline());
         }
         top += item;
@@ -1480,20 +1490,25 @@ void Ui::colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float l
         targetColor(canvas, target, color);
     }
 
-    ui::hueRing(dl, center, inner, outer);
+    // La rueda, el cuadro y los tiradores son colores del lienzo.
     float hueRgb[3];
     ImGui::ColorConvertHSVtoRGB(m_hsv[0], 1.0f, 1.0f, hueRgb[0], hueRgb[1], hueRgb[2]);
     const ImU32 hueColor = ui::fromFloat(hueRgb);
     const float squareRadius = pt(10.0f);
-    ui::linearGradient(dl, square, squareRadius, ImVec2(square.Min.x, center.y), ImVec2(square.Max.x, center.y),
-                       IM_COL32_WHITE, hueColor);
-    ui::linearGradient(dl, square, squareRadius, ImVec2(center.x, square.Min.y), ImVec2(center.x, square.Max.y),
-                       IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 255));
+    {
+        const ui::gamut::Scope scope(dl);
+        ui::hueRing(dl, center, inner, outer);
+        ui::linearGradient(dl, square, squareRadius, ImVec2(square.Min.x, center.y), ImVec2(square.Max.x, center.y),
+                           IM_COL32_WHITE, hueColor);
+        ui::linearGradient(dl, square, squareRadius, ImVec2(center.x, square.Min.y), ImVec2(center.x, square.Max.y),
+                           IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 255));
+    }
     // Tiradores.
     auto knob = [&](ImVec2 at, float radius, ImU32 fill) {
         const ImRect bounds(ImVec2(at.x - radius, at.y - radius), ImVec2(at.x + radius, at.y + radius));
         ui::shadow(dl, bounds, radius, pt(6.0f), pt(1.5f), 0.4f);
         dl->AddCircleFilled(at, radius, IM_COL32_WHITE, 0);
+        const ui::gamut::Scope scope(dl);
         dl->AddCircleFilled(at, radius - pt(3.0f), fill, 0);
     };
     const float angle = m_hsv[0] * 2.0f * IM_PI;
@@ -1564,6 +1579,7 @@ void Ui::colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float l
     }
     for (int i = 0; i < m_recentCount; ++i) {
         ImGui::PushID(i);
+        const ui::gamut::Scope scope(dl);
         if (ui::swatch("##recent", cellRect(i, y), ui::fromFloat(m_recent[i]), ui::sameColor(m_recent[i], color))) {
             choose(m_recent[i]);
         }
@@ -1576,6 +1592,7 @@ void Ui::colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float l
         float rgb[3];
         ui::toFloat(kPalette[i], rgb);
         ImGui::PushID(100 + i);
+        const ui::gamut::Scope scope(dl);
         if (ui::swatch("##palette", cellRect(i % 6, y + (pt(kPickerSwatch) + gap) * static_cast<float>(i / 6)),
                        kPalette[i], ui::sameColor(rgb, color))) {
             choose(rgb);

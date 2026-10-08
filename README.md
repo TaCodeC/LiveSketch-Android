@@ -11,11 +11,12 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 - Pressure-sensitive brushes (four brush textures, each with a preview stroke), color wheel with hex input, recent colors and a palette. The brush and the eraser keep their own brush, size and opacity; the stylus eraser tip uses the eraser settings.
 - Undo and redo for strokes and layer changes.
 - Eyedropper, with a loupe that shows the color under it next to the current one.
-- New canvas card: sizes by category (video and NDI, screen, social media, paper, comics) and your own saved sizes, or a custom size in px, mm, cm or inches with its resolution in ppi; the canvas name and its background (white, any color or transparent), with a live summary of the print size and how many layers fit.
+- New canvas card: sizes by category (video and NDI, screen, social media, paper, comics) and your own saved sizes, or a custom size in px, mm, cm or inches with its resolution in ppi; the canvas name, its color profile and its background (white, any color or transparent), with a live summary of the print size and how many layers fit.
+- Color profiles: each canvas is sRGB (the default) or Display P3, which reaches more intense reds, greens and oranges. With a P3 canvas the screen switches to P3 where it can (Android 9 or later on a wide-gamut screen, and Chrome or Safari on a P3 display); elsewhere the view converts the colors. NDI always receives the colors converted to sRGB.
 - The background is a color of the canvas, not a layer: the "Color de fondo" row at the bottom of the Layers panel changes it without touching the drawing, or hides it for a transparent PNG and NDI with alpha.
-- Actions > Canvas > "Propiedades": rename the canvas, change its ppi without resampling and change its background, and see its size in pixels and on paper, layers, memory, dates, drawing time and strokes.
+- Actions > Canvas > "Propiedades": rename the canvas, change its ppi without resampling, change its background, convert it to the other color profile (the drawing keeps its look; it can be undone), and see its size in pixels and on paper, layers, memory, dates, drawing time and strokes.
 - NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom. The NDI capsule turns red while live and shows the number of receivers.
-- "Guardar PNG" saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file, so it prints at the canvas size. Hiding the background color makes it transparent.
+- "Guardar PNG" saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file (for Display P3, an ICC profile and the PNG `cICP` chunk), so it prints at the canvas size and shows its colors right. Hiding the background color makes it transparent.
 - The Android back button closes the open panel; with everything closed, it asks before exiting.
 - It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
 
@@ -96,10 +97,10 @@ With `-DLIVESKETCH_WEB_SINGLE_FILE=OFF` the build writes `LiveSketch.html`, `.js
 ```
 app/src/main/cpp/
   main.cpp     SDL entry points (main callbacks)
-  App/         lifecycle, GL context, frame pacing and input routing
+  App/         lifecycle, GL context, frame pacing, input routing and the screen's color profile
   Canvas/      layers, brush, compositing, camera and canvas view
-  Gfx/         OpenGL helpers (RAII objects, shaders, pixel conversion)
-  IO/          assets and PNG export
+  Gfx/         OpenGL helpers (RAII objects, shaders, pixel conversion) and color profiles
+  IO/          assets, PNG export and ICC profiles
   NDI/         NDI output (asynchronous readback and a sender thread)
   UI/          interface: iOS-style controls drawn with Dear ImGui, bars, panels,
                dialogs, animations and the blurred backdrop of the glass

@@ -42,6 +42,12 @@ struct UiStatus {
     float penPressure = -1.0f;    // presión del lápiz mientras toca la pantalla (0..1), o -1
     bool touchInput = false;      // lo último que tocó la interfaz fue un dedo o el lápiz (no el ratón)
 
+    // Perfil de color de la pantalla en este frame, el del lienzo (sRGB sin lienzo) y si la
+    // pantalla puede mostrar Display P3.
+    ColorProfile displayProfile = ColorProfile::Srgb;
+    ColorProfile canvasProfile = ColorProfile::Srgb;
+    bool wideGamutScreen = false;
+
     bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
     bool ndiRunning = false;
     int ndiConnections = 0;
@@ -167,7 +173,7 @@ private:
     enum class ActionsPage { Main, Properties };
     // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
     enum class ColorTarget { Brush, Background };
-    enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas };
+    enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas, ConvertProfile };
 
     struct Layout {
         ImVec2 display;
@@ -264,6 +270,9 @@ private:
     bool canUndo(const Canvas& canvas) const;
     void setColor(Canvas& canvas, const float rgb[3]);
     void pushRecent(const float rgb[3]);
+    // El lienzo cambió de perfil de color (otro lienzo, convertirlo o deshacerlo): el color
+    // del pincel, los recientes y los anteriores pasan a él y se ven igual.
+    void followCanvasProfile(Canvas& canvas);
     float ndiCapsuleWidth() const;
 
     void beginBar(const char* name, const ImRect& rect, float radius);
@@ -423,6 +432,8 @@ private:
     // --- UiDialogs.cpp ---
     void drawDialogs(Canvas* canvas, UiRequests& requests);
     void openDialog(Dialog dialog, const Canvas* canvas);
+    // Confirmación para pasar el lienzo a `profile` (dice si se podrá deshacer).
+    void askConvertProfile(Canvas& canvas, ColorProfile profile);
     void startScreen(UiRequests& requests);
 
     // --- UiCanvas.cpp ---
@@ -451,9 +462,14 @@ private:
     bool ppiChips(ImDrawList* dl, float left, float right, float y, CanvasForm& form, ImRect* fieldRect);
     // Fichas del fondo (blanco, un color o transparente) y, con Color, las muestras y el
     // hexadecimal, desde `y`. Devuelve si se cambió `kind` o `color`.
+    // `color` es de `profile`.
     float backgroundOptionsHeight(bool colorOptions) const;
     bool backgroundOptions(ImDrawList* dl, float left, float right, float y, CanvasForm::Background* kind,
-                           float color[3], bool interactive);
+                           float color[3], ColorProfile profile, bool interactive);
+    // Fichas del perfil de color (sRGB o Display P3) desde `y`, y debajo lo que se explica
+    // del perfil `current`. Devuelve el que se tocó (o `current`).
+    float profileOptionsHeight(float width) const;
+    ColorProfile profileOptions(ImDrawList* dl, float left, float right, float y, ColorProfile current);
     // Qué tamaño es: "A4 vertical", "Full HD horizontal" o "Horizontal a medida". Con
     // `category` e `index`, mejor ese tamaño de la tarjeta si aún lo es.
     std::string sizeName(int width, int height, float ppi, int category, int index) const;
@@ -530,6 +546,7 @@ private:
     float m_recent[6][3] = {};
     int m_recentCount = 0;
     float m_previousColor[3] = {0, 0, 0};
+    ColorProfile m_colorProfile = ColorProfile::Srgb;   // el de esos colores (el del lienzo)
     bool m_hexEditing = false;
     int m_hexFocusFrames = 0;       // frames en los que el campo aún está cogiendo el foco
     char m_hexBuffer[16] = {};
@@ -633,6 +650,8 @@ private:
     Dialog m_dialogShown = Dialog::None;   // el que se dibuja (sigue al cerrarse)
     uint32_t m_dialogLayerId = 0;
     std::string m_dialogTitle;
+    std::string m_dialogMessage;
+    ColorProfile m_dialogProfile = ColorProfile::Srgb;   // ConvertProfile: al que se pasa
     char m_renameBuffer[64] = {};
     bool m_dialogFocus = false;
 

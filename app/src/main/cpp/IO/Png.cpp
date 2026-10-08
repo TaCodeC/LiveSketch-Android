@@ -1,5 +1,7 @@
 #include "IO/Png.h"
 
+#include "IO/Icc.h"
+
 #include <SDL3/SDL_error.h>
 #include <libdeflate.h>
 
@@ -53,6 +55,49 @@ bool noMemory() {
     return false;
 }
 
+// Comprime `data` con zlib. Vacío si no hay memoria.
+std::vector<uint8_t> zlibCompress(const uint8_t* data, size_t size, int level) {
+    std::vector<uint8_t> out;
+    libdeflate_compressor* compressor = libdeflate_alloc_compressor(level);
+    if (!compressor) {
+        return out;
+    }
+    try {
+        out.resize(libdeflate_zlib_compress_bound(compressor, size));
+    } catch (const std::bad_alloc&) {
+        libdeflate_free_compressor(compressor);
+        return {};
+    }
+    const size_t compressed = libdeflate_zlib_compress(compressor, data, size, out.data(), out.size());
+    libdeflate_free_compressor(compressor);
+    out.resize(compressed);
+    return out;
+}
+
+// El chunk iCCP de un perfil: su nombre, la compresión (0, deflate) y el perfil ICC
+// comprimido. Vacío si no hay memoria.
+std::vector<uint8_t> iccChunk(ColorProfile profile) {
+    const std::vector<uint8_t>& icc = icc::profile(profile);
+    const std::vector<uint8_t> compressed = zlibCompress(icc.data(), icc.size(), 9);
+    if (compressed.empty()) {
+        return {};
+    }
+    std::vector<uint8_t> out;
+    append(out, colorspace::name(profile));
+    out.push_back(0);
+    out.insert(out.end(), compressed.begin(), compressed.end());
+    return out;
+}
+
+// cHRM: el blanco y los primarios rojo, verde y azul (x e y por 100000).
+bool chromaticities(const Sink& sink, const uint32_t (&values)[8]) {
+    uint8_t data[32];
+    for (int i = 0; i < 8; ++i) {
+        put32(data + i * 4, values[i]);
+    }
+    return chunk(sink, "cHRM", data, sizeof(data));
+}
+
 } // namespace
 
 uint32_t pixelsPerMeter(float ppi) {
@@ -99,25 +144,11 @@ bool write(const std::vector<uint8_t>& filtered, int width, int height, const In
     }
 
     // Comprimir primero: si no hay memoria, no se escribe nada.
-    std::vector<uint8_t> compressed;
-    {
-        libdeflate_compressor* compressor = libdeflate_alloc_compressor(kLevel);
-        if (!compressor) {
-            return noMemory();
-        }
-        try {
-            compressed.resize(libdeflate_zlib_compress_bound(compressor, filtered.size()));
-        } catch (const std::bad_alloc&) {
-            libdeflate_free_compressor(compressor);
-            return noMemory();
-        }
-        const size_t size =
-            libdeflate_zlib_compress(compressor, filtered.data(), filtered.size(), compressed.data(), compressed.size());
-        libdeflate_free_compressor(compressor);
-        if (size == 0) {
-            return noMemory();
-        }
-        compressed.resize(size);
+    const std::vector<uint8_t> compressed = zlibCompress(filtered.data(), filtered.size(), kLevel);
+    const bool displayP3 = info.profile == ColorProfile::DisplayP3;
+    const std::vector<uint8_t> profile = displayP3 ? iccChunk(info.profile) : std::vector<uint8_t>();
+    if (compressed.empty() || (displayP3 && profile.empty())) {
+        return noMemory();
     }
 
     if (!sink(kSignature, sizeof(kSignature))) {
@@ -135,24 +166,31 @@ bool write(const std::vector<uint8_t>& filtered, int width, int height, const In
         return false;
     }
 
-    // sRGB con intención perceptual, y gAMA y cHRM con los valores de sRGB para quien no
-    // lea el chunk sRGB (lo que recomienda la especificación).
-    {
+    // El perfil de color. sRGB: el chunk sRGB (intención perceptual). Display P3: cICP
+    // (primarios P3, curva de sRGB, RGB y rango completo), que leen los programas recientes,
+    // y el perfil ICC (iCCP) para los demás; con iCCP no puede ir el chunk sRGB. Además, gAMA
+    // y cHRM con la curva y los primarios para quien no lea nada de eso (lo que recomienda
+    // la especificación).
+    if (displayP3) {
+        const uint8_t cicp[4] = {12, 13, 0, 1};
+        if (!chunk(sink, "cICP", cicp, sizeof(cicp)) || !chunk(sink, "iCCP", profile)) {
+            return false;
+        }
+    } else {
         const uint8_t intent = 0;
         if (!chunk(sink, "sRGB", &intent, 1)) {
             return false;
         }
+    }
+    {
         uint8_t gamma[4];
         put32(gamma, 45455);
         if (!chunk(sink, "gAMA", gamma, sizeof(gamma))) {
             return false;
         }
-        constexpr uint32_t kChromaticities[8] = {31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000};
-        uint8_t chromaticities[32];
-        for (int i = 0; i < 8; ++i) {
-            put32(chromaticities + i * 4, kChromaticities[i]);
-        }
-        if (!chunk(sink, "cHRM", chromaticities, sizeof(chromaticities))) {
+        constexpr uint32_t kSrgb[8] = {31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000};
+        constexpr uint32_t kDisplayP3[8] = {31270, 32900, 68000, 32000, 26500, 69000, 15000, 6000};
+        if (!chromaticities(sink, displayP3 ? kDisplayP3 : kSrgb)) {
             return false;
         }
     }

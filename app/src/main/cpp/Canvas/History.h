@@ -40,6 +40,7 @@ struct HistoryStep {
         Background,   // el color de fondo o si se ve
         Selection,    // la selección: una zona de la máscara (puede no haber) y su estado
         Group,        // varios pasos que se deshacen juntos (p. ej. transformar)
+        Profile,      // el perfil de color: los píxeles de cada capa (hijos Pixels) y el fondo
     };
 
     Kind kind = Kind::Pixels;
@@ -54,9 +55,11 @@ struct HistoryStep {
     LayerProperties after;
     SelectionState selectionBefore;   // Selection
     SelectionState selectionAfter;
-    CanvasBackground backgroundBefore;   // Background
+    CanvasBackground backgroundBefore;   // Background y Profile
     CanvasBackground backgroundAfter;
-    std::vector<HistoryStep> children;   // Group, en el orden en que se hicieron
+    ColorProfile profileBefore = ColorProfile::Srgb;   // Profile
+    ColorProfile profileAfter = ColorProfile::Srgb;
+    std::vector<HistoryStep> children;   // Group y Profile, en el orden en que se hicieron
     size_t bytes = 0;              // memoria de GPU que puede ocupar el paso
 };
 
@@ -71,6 +74,8 @@ public:
     bool canRedo() const { return m_cursor < m_steps.size(); }
     int undoCount() const { return static_cast<int>(m_cursor); }
     size_t bytes() const { return m_bytes; }
+    // Lo más que puede ocupar un paso (uno más grande vacía el historial).
+    size_t maxBytes() const { return m_maxBytes; }
 
     // Añade un paso ya hecho. Lo que se podía rehacer se descarta.
     void push(HistoryStep step);

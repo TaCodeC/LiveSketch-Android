@@ -11,7 +11,7 @@
 // PNG RGBA de 8 bits comprimido con libdeflate. Cada fila va con el filtro Up (la
 // diferencia con la de arriba): en pintura comprime casi como elegir el mejor filtro fila a
 // fila y cuesta mucho menos. Lleva la resolución (pHYs: se imprime al tamaño del lienzo), el
-// espacio de color y, si lo tiene, el nombre del lienzo.
+// perfil de color (sRGB, o Display P3 con su perfil ICC) y, si lo tiene, el nombre del lienzo.
 namespace png {
 
 struct Info {

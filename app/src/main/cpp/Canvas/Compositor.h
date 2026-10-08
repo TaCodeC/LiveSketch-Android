@@ -3,7 +3,9 @@
 #include "Canvas/CanvasSpec.h"
 #include "Canvas/LayerStack.h"
 #include "Canvas/Rect.h"
+#include "Gfx/ColorSpace.h"
 #include "Gfx/GLObjects.h"
+#include "Gfx/Shader.h"
 
 // Grano del papel de un trazo: multiplica su alfa, fijo al lienzo (se ve igual en todos
 // los trazos que pasan por el mismo sitio).
@@ -88,6 +90,10 @@ public:
     // transparente en `rect`.
     void filter(const gfx::RenderTarget& target, Filter filter, GLuint mask, const gfx::RenderTarget& scratch,
                 const IRect& rect);
+    // Pasa los colores de `target` en `rect` de un perfil de color a otro (lo que el destino
+    // no tiene se recorta a su borde). `scratch` como en filter().
+    void convertColors(const gfx::RenderTarget& target, const colorspace::Transform& transform,
+                       const gfx::RenderTarget& scratch, const IRect& rect);
 
     const gfx::RenderTarget& composite() const { return m_composite; }
 
@@ -112,6 +118,9 @@ private:
     void drawColor(const float rgba[4], GLuint mask = 0);
     void finishPass();
     bool ensureScratch();
+    // filter() y convertColors(): `kind` es el uFilter del shader.
+    void runFilter(const gfx::RenderTarget& target, int kind, GLuint mask, const gfx::RenderTarget& scratch,
+                   const IRect& rect, const colorspace::Transform& gamut);
 
     gfx::Program m_program;
     GLint m_uLayer = -1;
@@ -140,6 +149,7 @@ private:
     GLint m_uFilterMask = -1;
     GLint m_uFilterMaskOn = -1;
     GLint m_uFilterKind = -1;
+    gfx::GamutUniforms m_uFilterGamut;
     gfx::VertexArray m_vao;
     gfx::Buffer m_vbo;
     gfx::RenderTarget m_composite;

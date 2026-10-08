@@ -249,6 +249,105 @@ TEST_CASE(canvas_background_color_is_undoable) {
     CHECK_EQ(canvas.history().undoCount(), before);
 }
 
+TEST_CASE(canvas_profile_conversion_keeps_the_look_and_undoes) {
+    Canvas canvas;
+    REQUIRE(canvas.init(32, 32));
+    fillLayer(canvas, 0, {2, 2, 14, 30}, 1.0f, 0.0f, 0.0f, 1.0f);    // rojo
+    REQUIRE(canvas.addLayer());
+    fillLayer(canvas, 1, {18, 2, 30, 30}, 0.0f, 0.25f, 0.5f, 0.5f);  // azul claro a medias
+    REQUIRE(canvas.addLayer());                                       // vacía
+    CanvasBackground background;
+    background.color[0] = 0.9f;
+    background.color[1] = 0.2f;
+    background.color[2] = 0.1f;
+    canvas.setBackground(background);
+    const std::vector<uint8_t> before0 = test::readTarget(canvas.layers().at(0).target);
+    const std::vector<uint8_t> before1 = test::readTarget(canvas.layers().at(1).target);
+    const Pixel translucent = layerAt(canvas, 1, 24, 24);
+    const int steps = canvas.history().undoCount();
+    const int active = canvas.layers().activeIndex();
+
+    CHECK(canvas.profileChangeUndoable());
+    REQUIRE(canvas.convertProfile(ColorProfile::DisplayP3));
+    CHECK(!canvas.convertProfile(ColorProfile::DisplayP3));
+    CHECK(canvas.info().profile == ColorProfile::DisplayP3);
+    CHECK_EQ(canvas.history().undoCount(), steps + 1);
+    CHECK_EQ(canvas.layers().activeIndex(), active);
+
+    // Otros números que se ven igual: los de Display P3.
+    const colorspace::Transform toP3 = colorspace::between(ColorProfile::Srgb, ColorProfile::DisplayP3);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{234, 51, 35, 255}), 1);
+    float color[3] = {translucent[0] / static_cast<float>(translucent[3]),
+                      translucent[1] / static_cast<float>(translucent[3]),
+                      translucent[2] / static_cast<float>(translucent[3])};
+    colorspace::convert(toP3, color);
+    CHECK_PIXEL(layerAt(canvas, 1, 24, 24),
+                (Pixel{static_cast<int>(std::lround(color[0] * translucent[3])),
+                       static_cast<int>(std::lround(color[1] * translucent[3])),
+                       static_cast<int>(std::lround(color[2] * translucent[3])), translucent[3]}),
+                1);
+    CHECK_PIXEL(layerAt(canvas, 0, 24, 24), kClear, 0);
+    CHECK_PIXEL(layerAt(canvas, 2, 8, 8), kClear, 0);
+    float expected[3] = {0.9f, 0.2f, 0.1f};
+    colorspace::convert(toP3, expected);
+    for (int i = 0; i < 3; ++i) {
+        CHECK_NEAR(canvas.background().color[i], expected[i], 1e-6);
+    }
+    CHECK_PIXEL(compositeAt(canvas, 0, 0),
+                (Pixel{static_cast<int>(std::lround(expected[0] * 255.0f)),
+                       static_cast<int>(std::lround(expected[1] * 255.0f)),
+                       static_cast<int>(std::lround(expected[2] * 255.0f)), 255}),
+                1);
+    const std::vector<uint8_t> after0 = test::readTarget(canvas.layers().at(0).target);
+    const std::vector<uint8_t> after1 = test::readTarget(canvas.layers().at(1).target);
+
+    // Deshacer devuelve los píxeles exactos, el fondo y el perfil; rehacer, lo convertido.
+    REQUIRE(canvas.undo());
+    CHECK(canvas.info().profile == ColorProfile::Srgb);
+    CHECK(canvas.background() == background);
+    CHECK_EQ(test::maxDifference(test::readTarget(canvas.layers().at(0).target), before0), 0);
+    CHECK_EQ(test::maxDifference(test::readTarget(canvas.layers().at(1).target), before1), 0);
+    CHECK_PIXEL(compositeAt(canvas, 0, 0), (Pixel{230, 51, 26, 255}), 1);
+    CHECK_EQ(canvas.layers().activeIndex(), active);
+    REQUIRE(canvas.redo());
+    CHECK(canvas.info().profile == ColorProfile::DisplayP3);
+    CHECK_EQ(test::maxDifference(test::readTarget(canvas.layers().at(0).target), after0), 0);
+    CHECK_EQ(test::maxDifference(test::readTarget(canvas.layers().at(1).target), after1), 0);
+    CHECK_NEAR(canvas.background().color[0], expected[0], 1e-6);
+
+    // Y de vuelta a sRGB, casi como al principio: lo que se pierde con 8 bits (a medias, y
+    // en un canal casi a cero, algo más).
+    REQUIRE(canvas.convertProfile(ColorProfile::Srgb));
+    CHECK(canvas.info().profile == ColorProfile::Srgb);
+    CHECK_PIXEL(layerAt(canvas, 0, 8, 8), (Pixel{255, 0, 0, 255}), 1);
+    CHECK_PIXEL(layerAt(canvas, 1, 24, 24), translucent, 3);
+    for (int i = 0; i < 3; ++i) {
+        CHECK_NEAR(canvas.background().color[i], background.color[i], 1e-4);
+    }
+    CHECK_EQ(canvas.history().undoCount(), steps + 2);
+}
+
+TEST_CASE(canvas_profile_conversion_that_does_not_fit_clears_history) {
+    // Siete capas llenas no caben en el historial (guarda unas seis).
+    Canvas canvas;
+    REQUIRE(canvas.init(1536, 1536));
+    const IRect all = IRect::ofSize(canvas.width(), canvas.height());
+    fillLayer(canvas, 0, all, 1.0f, 0.0f, 0.0f, 1.0f);
+    for (int i = 1; i < 7; ++i) {
+        REQUIRE(canvas.addLayer());
+        fillLayer(canvas, canvas.layers().activeIndex(), all, 0.0f, 0.0f, 1.0f, 1.0f);
+    }
+    REQUIRE(canvas.layers().count() == 7);
+    CHECK(canvas.canUndo());
+    CHECK(!canvas.profileChangeUndoable());
+    REQUIRE(canvas.convertProfile(ColorProfile::DisplayP3));
+    CHECK(canvas.info().profile == ColorProfile::DisplayP3);
+    CHECK(!canvas.canUndo());
+    CHECK_EQ(canvas.history().undoCount(), 0);
+    CHECK_PIXEL(layerAt(canvas, 0, 700, 700), (Pixel{234, 51, 35, 255}), 1);
+    CHECK_PIXEL(layerAt(canvas, 6, 10, 1500), (Pixel{0, 0, 245, 255}), 1);
+}
+
 TEST_CASE(canvas_composite_order_visibility_opacity) {
     Canvas canvas;
     REQUIRE(canvas.init(32, 32));
