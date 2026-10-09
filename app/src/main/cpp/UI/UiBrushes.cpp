@@ -3,6 +3,7 @@
 // tamaño y la opacidad que tenía cada uno y los ajustes que cambió el usuario.
 #include "UI/Ui.h"
 
+#include "IO/Storage.h"
 #include "UI/Anim.h"
 #include "UI/Icons.h"
 #include "UI/PanelParts.h"
@@ -241,6 +242,8 @@ void Ui::saveBrushes() {
     }
     std::ofstream file(path, std::ios::trunc);
     file << out.str();
+    file.close();
+    io::persist();
 }
 
 void Ui::scheduleBrushSave() { m_brushSaveAt = SDL_GetTicks() + kSaveDelayMs; }

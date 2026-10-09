@@ -117,6 +117,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/App/App.cpp
         ${SRC_DIR}/App/AppInput.cpp
         ${SRC_DIR}/App/AppProjects.cpp
+        ${SRC_DIR}/App/CanvasProject.cpp
         ${SRC_DIR}/App/DisplayGamut.cpp
         ${SRC_DIR}/Canvas/Bounds.cpp
         ${SRC_DIR}/Canvas/Brush.cpp
@@ -146,12 +147,15 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/Gfx/Pixels.cpp
         ${SRC_DIR}/Gfx/Shader.cpp
         ${SRC_DIR}/IO/Assets.cpp
+        ${SRC_DIR}/IO/FileChooser.cpp
         ${SRC_DIR}/IO/Icc.cpp
         ${SRC_DIR}/IO/ImageExport.cpp
         ${SRC_DIR}/IO/Json.cpp
+        ${SRC_DIR}/IO/Library.cpp
         ${SRC_DIR}/IO/Png.cpp
         ${SRC_DIR}/IO/Project.cpp
         ${SRC_DIR}/IO/ProjectFile.cpp
+        ${SRC_DIR}/IO/Storage.cpp
         ${SRC_DIR}/IO/Tasks.cpp
         ${SRC_DIR}/IO/Zip.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
@@ -174,6 +178,7 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/UI/UiGuide.cpp
         ${SRC_DIR}/UI/UiPanels.cpp
         ${SRC_DIR}/UI/UiPen.cpp
+        ${SRC_DIR}/UI/UiProjects.cpp
         ${SRC_DIR}/UI/UiTools.cpp
 )
 target_include_directories(livesketch_core PUBLIC ${SRC_DIR} ${EXTERNALS_DIR}/glm)
@@ -225,9 +230,12 @@ if(EMSCRIPTEN)
     # sin servidor; si no, van al lado LiveSketch.js y LiveSketch.wasm.
     option(LIVESKETCH_WEB_SINGLE_FILE "Web: un solo .html que se abre sin servidor" ON)
     set(WEB_SHELL ${CMAKE_CURRENT_SOURCE_DIR}/src/web/shell.html)
+    # Los datos de la app (proyectos, preferencias...) en el navegador, con IDBFS.
+    set(WEB_STORAGE ${CMAKE_CURRENT_SOURCE_DIR}/src/web/storage.js)
     set_target_properties(livesketch PROPERTIES OUTPUT_NAME LiveSketch SUFFIX ".html")
-    set_property(TARGET livesketch APPEND PROPERTY LINK_DEPENDS ${WEB_SHELL})
-    target_link_options(livesketch PRIVATE "SHELL:--shell-file \"${WEB_SHELL}\"")
+    set_property(TARGET livesketch APPEND PROPERTY LINK_DEPENDS ${WEB_SHELL} ${WEB_STORAGE})
+    target_link_options(livesketch PRIVATE "SHELL:--shell-file \"${WEB_SHELL}\""
+            "SHELL:--pre-js \"${WEB_STORAGE}\"" -lidbfs.js)
     if(LIVESKETCH_WEB_SINGLE_FILE)
         # En base64: el archivo queda en texto ASCII y sobrevive a cualquier copia o correo.
         target_link_options(livesketch PRIVATE -sSINGLE_FILE=1 -sSINGLE_FILE_BINARY_ENCODE=0)
@@ -257,6 +265,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/HistoryTests.cpp
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
+            ${TESTS_DIR}/LibraryTests.cpp
             ${TESTS_DIR}/PenTests.cpp
             ${TESTS_DIR}/ProjectTests.cpp
             ${TESTS_DIR}/QuickShapeTests.cpp

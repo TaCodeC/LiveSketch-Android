@@ -3,7 +3,10 @@
 #include "Gfx/GL.h"
 #include "UI/Kit.h"
 
-// Piezas que comparten los paneles (UiPanels.cpp y UiBrushes.cpp).
+#include <cstdint>
+#include <string>
+
+// Piezas que comparten los paneles y las pantallas de la interfaz.
 namespace ui::parts {
 
 inline ImTextureID textureId(GLuint texture) { return static_cast<ImTextureID>(texture); }
@@ -27,5 +30,12 @@ void tag(ImDrawList* dl, float right, float cy, const char* text, ImU32 fill, Im
 
 // Fila con un interruptor a la derecha.
 bool toggleRow(ImDrawList* dl, const char* id, const ImRect& row, const char* glyph, const char* title, bool* value);
+
+// La marca de la app: un cuadrado rojo y «LIVESKETCH». `cy`: su centro vertical.
+void brand(ImDrawList* dl, float left, float cy);
+
+// Una fecha (SDL_Time) en la hora local, para mostrarla: «Hoy, 14:32», «3 oct, 9:05» o «3 oct
+// 2025». «—» si no se sabe (0).
+std::string dateText(int64_t when);
 
 } // namespace ui::parts

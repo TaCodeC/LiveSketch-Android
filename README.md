@@ -16,9 +16,10 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 - The background is a color of the canvas, not a layer: the "Color de fondo" row at the bottom of the Layers panel changes it without touching the drawing, or hides it for a transparent PNG and NDI with alpha.
 - Actions > Canvas > "Propiedades": rename the canvas, change its ppi without resampling, change its background, convert it to the other color profile (the drawing keeps its look; it can be undone), and see its size in pixels and on paper, layers, memory, dates, drawing time and strokes.
 - NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom. The NDI capsule turns red while live and shows the number of receivers.
-- Projects (`.lvskt`): "Guardar proyecto" (Actions > Share) saves the whole document to Downloads: every layer with its name, visibility, opacity, blend mode, alpha lock, clipping and reference, plus the background, color profile, drawing guide, view and brush color. It compresses in the background, so you can keep drawing. "Abrir proyecto…" (Actions > Canvas or the new canvas card), or dropping the file on the window, opens it with every layer exactly as it was. A damaged layer opens empty with a warning and the rest opens normally; a file from a newer version opens with a warning, or asks to update the app if it can't be read. The file is an OpenRaster ZIP, so renamed to `.ora` it opens in Krita with its layers, opacities and blend modes.
-- "Guardar PNG" saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file (for Display P3, an ICC profile and the PNG `cICP` chunk), so it prints at the canvas size and shows its colors right. Hiding the background color makes it transparent.
-- The Android back button closes the open panel; with everything closed, it asks before exiting.
+- Projects: every canvas is a project that saves itself a few seconds after you stop drawing, when the app goes to the background and before another canvas is opened or created, so leaving never loses anything. The Save button in the top bar saves at once and shows when there are unsaved changes. The Projects screen (at start, and Actions > Canvas > "Proyectos") lists them newest first with a thumbnail, name, size and date; tapping one opens it, and its menu renames, duplicates, exports or deletes it. "Nuevo lienzo" and "Abrir archivo" are at the top; with no projects yet, it starts on the new canvas card.
+- Project files (`.lvskt`) keep every layer with its name, visibility, opacity, blend mode, alpha lock, clipping and reference, plus the background, color profile, drawing guide, view and brush color. Saving runs in the background, so you can keep drawing, and recompresses only the layers that changed. Export a project to back it up or move it to another device: on Android to Downloads, or anywhere with "Exportar a…" (cloud drives too); on the web as a download; on desktop with a save dialog. "Abrir archivo", dropping the file on the window (web and desktop) or tapping it in an Android file manager opens it and keeps a copy in Projects. A damaged layer opens empty with a warning and the rest opens normally; a file from a newer version opens with a warning, or asks to update the app if it can't be read. The file is an OpenRaster ZIP, so renamed to `.ora` it opens in Krita with its layers, opacities and blend modes.
+- "Guardar PNG" (Actions > Share) saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file (for Display P3, an ICC profile and the PNG `cICP` chunk), so it prints at the canvas size and shows its colors right. Hiding the background color makes it transparent.
+- The Android back button closes the open panel; with everything closed, it goes back to Projects, and from Projects it exits (everything is already saved).
 - It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
 
 ### Gestures and shortcuts
@@ -28,7 +29,7 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 | Draw | Stylus, or one finger if "Dibujar con el dedo" is on | Left button |
 | Move and zoom | Two fingers (one finger moves when finger drawing is off) | Right or middle button; wheel |
 | Undo / redo | Tap with two / three fingers, or the sidebar buttons (hold to repeat) | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
-| Save / open a project | Actions menu | Ctrl+S / Ctrl+O |
+| Save / open / new canvas | Save button in the top bar; Actions menu | Ctrl+S / Ctrl+O / Ctrl+N |
 | Eyedropper | Sidebar button, or hold a finger still when finger drawing is on | Alt+click, or the sidebar button |
 | Brush / eraser | Top-right bar; tap the selected tool again for its brushes | B / E |
 | Brush size | Sidebar slider | [ and ] |
@@ -78,7 +79,7 @@ The tests create a real OpenGL ES 3.0 context and also run without a display (SD
 
 ### Web (browser)
 
-The same code builds for the web with [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and runs on WebGL 2. A browser cannot send NDI, so that option is off, and "Guardar PNG" and "Guardar proyecto" download the file.
+The same code builds for the web with [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and runs on WebGL 2. A browser cannot send NDI, so that option is off, and the PNG and exported projects are downloads. Projects, preferences and brush settings are kept in the browser's storage (IndexedDB) and survive reloading the page; if the browser can't keep them (a private window, blocked site data or no space left), the app says so. It works in one tab at a time: opening LiveSketch in another tab saves the previous one and covers it with a notice, whose "Usar aquí" button reloads it with the latest changes.
 
 ```sh
 # Emscripten SDK, once
@@ -102,21 +103,18 @@ app/src/main/cpp/
   App/         lifecycle, GL context, frame pacing, input routing and the screen's color profile
   Canvas/      layers, brush, compositing, camera and canvas view
   Gfx/         OpenGL helpers (RAII objects, shaders, pixel conversion) and color profiles
-  IO/          assets, PNG export, ICC profiles and project files (ZIP, JSON, background save and open)
+  IO/          assets, PNG export, ICC profiles, project files (ZIP, JSON, background save and open),
+               the project library and the save dialogs
   NDI/         NDI output (asynchronous readback and a sender thread)
   UI/          interface: iOS-style controls drawn with Dear ImGui, bars, panels,
                dialogs, animations and the blurred backdrop of the glass
 app/src/main/assets/ brush textures and interface fonts
-app/src/main/java/   MainActivity (extends SDL's SDLActivity)
-app/src/web/         page for the web version
+app/src/main/java/   MainActivity (extends SDL's SDLActivity; opens .lvskt files and the export picker)
+app/src/web/         page for the web version and its browser storage
 app/tests/           desktop tests
 app/externals/       SDL3, glm, Dear ImGui
 tools/fonts/         script that builds the font subsets and UI/Icons.h
 ```
-
-## Planned
-
-- Autosave, a Save button and a Projects screen with the recent projects in place of the start card.
 
 ## Requirements / Credits
 

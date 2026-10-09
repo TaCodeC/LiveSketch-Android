@@ -13,6 +13,9 @@ extern Uint32 projectSaved;   // terminó un guardado de proyecto
 // El selector de archivos respondió. code: 0, se eligió el archivo de data1; 1, se canceló;
 // -1, falló, con el motivo en data1. data1 es de SDL_strdup: lo libera quien lo recibe.
 extern Uint32 fileChosen;
+// Se eligió dónde exportar. code: 0, el archivo de data1; 1, se canceló; -1, falló, con el
+// motivo en data1 (que, como en fileChosen, libera quien lo recibe).
+extern Uint32 saveFileChosen;
 
 // Se puede llamar desde cualquier hilo. `data` pasa a ser del evento (se libera con SDL_free
 // si no se pudo encolar).

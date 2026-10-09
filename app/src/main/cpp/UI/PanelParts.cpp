@@ -1,7 +1,10 @@
 #include "UI/PanelParts.h"
 
+#include "Canvas/CanvasSpec.h"
 #include "UI/Anim.h"
 #include "UI/Icons.h"
+
+#include <SDL3/SDL_time.h>
 
 #include <algorithm>
 
@@ -67,6 +70,35 @@ bool toggleRow(ImDrawList* dl, const char* id, const ImRect& row, const char* gl
     label(dl, Weight::Regular, th::kSubhead, ImVec2(x, cy), Align::Left, th::kLabel, title,
           std::max(pt(40.0f), toggleX - pt(10.0f) - x));
     return toggle(id, ImVec2(toggleX, cy - size.y * 0.5f), value);
+}
+
+void brand(ImDrawList* dl, float left, float cy) {
+    dl->AddRectFilled(ImVec2(left, cy - pt(4.0f)), ImVec2(left + pt(8.0f), cy + pt(4.0f)), th::kRed, pt(2.0f));
+    tracked(dl, Weight::Bold, th::kMicro, ImVec2(left + pt(16.0f), cy), IM_COL32(235, 235, 245, 140), "LIVESKETCH",
+            0.12f);
+}
+
+namespace {
+
+bool localDate(int64_t when, canvasspec::LocalTime* out) {
+    SDL_DateTime date;
+    if (when == 0 || !SDL_TimeToDateTime(when, &date, true)) {
+        return false;
+    }
+    *out = {date.year, date.month, date.day, date.hour, date.minute};
+    return true;
+}
+
+} // namespace
+
+std::string dateText(int64_t when) {
+    canvasspec::LocalTime date;
+    canvasspec::LocalTime today;
+    SDL_Time now = 0;
+    if (!localDate(when, &date) || !SDL_GetCurrentTime(&now) || !localDate(now, &today)) {
+        return "—";
+    }
+    return canvasspec::formatDate(date, today);
 }
 
 } // namespace ui::parts

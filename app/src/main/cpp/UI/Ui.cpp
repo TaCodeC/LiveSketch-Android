@@ -3,6 +3,7 @@
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
+#include "IO/Storage.h"
 #include "UI/Anim.h"
 #include "UI/ColorManage.h"
 #include "UI/Icons.h"
@@ -99,11 +100,15 @@ bool Ui::init() {
         loadPrefs();
         initBrushes();
     }
+    // Las miniaturas de los proyectos se vuelven a subir (tras perder el contexto, las de
+    // antes ya no existen).
+    m_projectThumbs.clear();
     return m_previews.init();
 }
 
 void Ui::destroy() {
     saveBrushesIfDue(true);
+    m_projectThumbs.clear();
     m_previews.destroy();
 }
 
@@ -122,6 +127,10 @@ void Ui::loadPrefs() {
             std::string points;
             std::getline(fields, points);
             m_prefs.pressure = PressureCurve::fromText(points);
+            continue;
+        }
+        if (key == "ultimo-proyecto") {
+            fields >> m_prefs.lastProject;
             continue;
         }
         // Tarjeta de lienzo nuevo: el último tamaño y el último fondo que se usaron.
@@ -195,6 +204,11 @@ void Ui::savePrefs() const {
         << m_canvasForm.color[1] << ' ' << m_canvasForm.color[2] << '\n'
         << "lienzo-candado " << (m_canvasForm.locked() ? 1 : 0) << '\n'
         << "lienzo-categoria " << m_canvasForm.category << '\n';
+    if (!m_prefs.lastProject.empty()) {
+        out << "ultimo-proyecto " << m_prefs.lastProject << '\n';
+    }
+    out.close();
+    io::persist();
 }
 
 void Ui::beginFrame(const UiStatus& status) {
@@ -208,27 +222,44 @@ void Ui::beginFrame(const UiStatus& status) {
 void Ui::build(Canvas* canvas, UiRequests& requests) {
     computeLayout();
     saveBrushesIfDue(false);
+    // Los diálogos de un lienzo no siguen sin él, ni los de la pantalla de Proyectos con él.
+    auto keepDialog = [canvas](Dialog dialog) {
+        switch (dialog) {
+        case Dialog::DeleteLayer:
+        case Dialog::RenameLayer:
+        case Dialog::ConvertProfile:
+        case Dialog::Leave:
+            return canvas != nullptr;
+        case Dialog::RenameProject:
+        case Dialog::DeleteProject:
+            return canvas == nullptr;
+        default:
+            return true;
+        }
+    };
+    if (!keepDialog(m_dialog)) {
+        m_dialog = Dialog::None;
+    }
+    if (!keepDialog(m_dialogShown)) {
+        m_dialogShown = Dialog::None;
+    }
     if (!canvas) {
         m_panel = Panel::None;
         m_layerMenu = false;
         m_eyedropperArmed = false;
         m_picker.active = false;
-        // Sin lienzo solo puede haber alertas (no se pudo abrir un proyecto).
-        if (m_dialog != Dialog::Alert) {
-            m_dialog = Dialog::None;
-        }
-        if (m_dialogShown != Dialog::Alert) {
-            m_dialogShown = Dialog::None;
-        }
-        startScreen(requests);
+        projectsScreen(requests);
         drawDialogs(nullptr, requests);
+        drawBusy();
         drawToast();
         return;
     }
+    m_projectMenu.clear();
     followCanvasProfile(*canvas);
     syncBrush(*canvas);
-    // Mientras se abre un proyecto, el teclado no hace nada (lo de abajo está tapado).
-    if (m_status.openProgress < 0.0f) {
+    // Mientras se abre un proyecto o se guarda para dejarlo, el teclado no hace nada (lo de
+    // abajo está tapado).
+    if (m_status.busy == Busy::None) {
         handleKeys(*canvas, requests);
     }
     toolFrame(*canvas);
@@ -245,7 +276,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     drawPicker(*canvas);
     drawDrop(*canvas);
     drawDialogs(canvas, requests);
-    drawOpening();
+    drawBusy();
     drawCapsules(*canvas);
     drawToast();
     m_previews.pruneThumbnails(canvas->layers());
@@ -589,11 +620,18 @@ void Ui::showUndo(bool redo, bool done) {
 }
 
 uint64_t Ui::wakeDeadline() const {
-    const uint64_t toast = m_toast.text.empty() ? 0 : m_toast.until;
-    if (m_brushSaveAt == 0 || (toast != 0 && toast < m_brushSaveAt)) {
-        return toast;
+    uint64_t deadline = m_toast.text.empty() ? 0 : m_toast.until;
+    auto earliest = [&deadline](uint64_t at) {
+        if (at != 0 && (deadline == 0 || at < deadline)) {
+            deadline = at;
+        }
+    };
+    earliest(m_brushSaveAt);
+    // Guardando para dejar el lienzo: cuándo se empieza a ver.
+    if (m_status.busy == Busy::Saving && m_busyShown != Busy::Saving) {
+        earliest(m_status.busySinceMs + 250);
     }
-    return m_brushSaveAt;
+    return deadline;
 }
 
 void Ui::undo(Canvas& canvas, bool redo) { showUndo(redo, undoStep(canvas, redo)); }
@@ -607,9 +645,10 @@ void Ui::handleKeys(Canvas& canvas, UiRequests& requests) {
             cancelDrop(canvas);
             return;
         }
-        // El botón atrás cierra lo último que se abrió; con todo cerrado, pregunta si salir.
+        // El botón atrás cierra lo último que se abrió; con todo cerrado, vuelve a Proyectos
+        // (el lienzo se guarda).
         if (!closeTopmost(&canvas) && back) {
-            askExit();
+            requests.showProjects = true;
         }
         return;
     }
@@ -623,6 +662,8 @@ void Ui::handleKeys(Canvas& canvas, UiRequests& requests) {
             requests.saveProject = true;
         } else if (ImGui::IsKeyPressed(ImGuiKey_O, false)) {
             requests.openProject = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
+            openDialog(Dialog::NewCanvas, &canvas);
         } else if (ImGui::IsKeyPressed(ImGuiKey_Z, true)) {
             undo(canvas, io.KeyShift);
         } else if (ImGui::IsKeyPressed(ImGuiKey_Y, true)) {
@@ -712,8 +753,8 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
         return ImRect(x, y, x + width, y + height);
     };
 
-    // Izquierda: acciones, guardar, centrar, ajustes, selección y transformar (en un
-    // teléfono, acciones, NDI y Modificar, que abre las tres últimas).
+    // Izquierda: acciones, guardar el proyecto, centrar, ajustes, selección y transformar (en
+    // un teléfono, acciones, NDI y Modificar, que abre las tres últimas).
     beginBar("##bar-left", L.leftBar, L.leftBar.GetHeight() * 0.5f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (barButton("##actions", slot(L.leftBar, 0), icon::kWrench, m_panel == Panel::Actions, false)) {
@@ -740,13 +781,31 @@ void Ui::drawTopBars(Canvas& canvas, UiRequests& requests) {
             togglePanel(Panel::Modify);
         }
     } else {
+        // Guardar: con un punto si hay cambios que aún no están en el archivo (se guardan solos
+        // enseguida) y en naranja si no se pudo guardar.
         const ImRect save = slot(L.leftBar, 1);
-        if (m_status.exporting) {
+        if (m_status.projectSave == ProjectSave::Saving) {
             ui::pressable("##save", save, false);
             ui::spinner(dl, save.GetCenter(), pt(9.0f), th::kSecondaryLabel);
-        } else if (barButton("##save", save, icon::kImageDown, false, false)) {
-            requests.savePng = true;
-            closePanels();
+        } else {
+            const bool failed = m_status.projectSave == ProjectSave::Failed;
+            const ImGuiID id = ImGui::GetID("##save");
+            const Press press = ui::pressable(id, save);
+            ui::highlight(dl, id, save, save.GetHeight() * 0.5f, false, press);
+            const ImVec2 center = save.GetCenter();
+            ui::icon(dl, icon::kSave, center, th::kIconSize, failed ? th::kOrange : th::kLabel);
+            const float dot = ui::anim::follow(id + 3u, m_status.projectSave == ProjectSave::Unsaved || failed ? 1.0f : 0.0f,
+                                               14.0f);
+            if (dot > 0.002f) {
+                const ImVec2 at(center.x + pt(9.0f), center.y - pt(9.0f));
+                dl->AddCircleFilled(at, pt(4.5f) * dot, ui::withAlpha(IM_COL32(28, 28, 32, 255), dot), 0);
+                dl->AddCircleFilled(at, pt(3.0f) * dot, ui::withAlpha(failed ? th::kOrange : th::kAccentText, dot), 0);
+            }
+            // Si no se pudo guardar, se vuelve a intentar (y si falla, se dice por qué).
+            if (press.clicked) {
+                requests.saveProject = true;
+                closePanels();
+            }
         }
         if (barButton("##fit", slot(L.leftBar, 2), icon::kScan, false, false)) {
             requests.fitView = true;

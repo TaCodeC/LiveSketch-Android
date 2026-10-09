@@ -16,6 +16,8 @@
     --muted: rgb(235 235 245 / 0.6);
     --live: #ff3b30;
     --error: #ff453a;
+    --accent: #0a84ff;
+    --accent-text: #5ab0ff;
   }
   html, body { height: 100%; margin: 0; }
   body {
@@ -65,6 +67,46 @@
   #status { margin: 0; color: var(--muted); max-width: 32em; text-wrap: balance; }
   #splash.error .spinner { display: none; }
   #splash.error #status { color: var(--error); }
+  /* Aviso de la pestaña que se queda atrás (src/web/storage.js): tapa el lienzo, que ya no
+     guarda nada, hasta que se vuelve a cargar con «Usar aquí». */
+  #other-tab {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(12 12 14 / 0.72);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  #other-tab[hidden] { display: none; }
+  #other-tab .card {
+    box-sizing: border-box;
+    width: min(100%, 400px);
+    padding: 24px;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 20px;
+    background: rgb(28 28 30 / 0.94);
+    box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+  }
+  #other-tab h1 { margin: 12px 0 8px; font-size: 21px; line-height: 1.25; font-weight: 700; text-wrap: balance; }
+  #other-tab p.text { margin: 0; color: var(--muted); }
+  #other-tab button {
+    display: block;
+    width: 100%;
+    height: 46px;
+    margin-top: 22px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #other-tab button:hover { filter: brightness(1.08); }
+  #other-tab button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 </style>
@@ -86,6 +128,16 @@
   </svg>
   <p id="status" role="status">Cargando el lienzo…</p>
   <noscript><p>LiveSketch necesita JavaScript.</p></noscript>
+</div>
+<div id="other-tab" role="alertdialog" aria-modal="true" aria-labelledby="other-tab-title"
+     aria-describedby="other-tab-text" hidden>
+  <div class="card">
+    <p class="brand">LIVESKETCH</p>
+    <h1 id="other-tab-title">LiveSketch se abrió en otra pestaña</h1>
+    <p class="text" id="other-tab-text">Se usa en una pestaña a la vez, para que una no guarde encima de lo
+      que cambió la otra. Lo de esta pestaña ya está guardado.</p>
+    <button type="button" id="other-tab-use">Usar aquí</button>
+  </div>
 </div>
 <canvas id="canvas" tabindex="-1"></canvas>
 <script>

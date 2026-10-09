@@ -124,5 +124,9 @@ inline constexpr const char* kBackspace          = "\xee\x82\xae"; // delete U+E
 inline constexpr const char* kTriangleAlert      = "\xee\x86\x93"; // triangle-alert U+E193
 inline constexpr const char* kSave               = "\xee\x85\x8d"; // save U+E14D
 inline constexpr const char* kFolderOpen         = "\xee\x89\x87"; // folder-open U+E247
+inline constexpr const char* kGallery            = "\xee\x83\xbf"; // layout-grid U+E0FF
+inline constexpr const char* kDownload           = "\xee\x82\xb2"; // download U+E0B2
+inline constexpr const char* kFileOutput         = "\xee\x83\x88"; // file-output U+E0C8
+inline constexpr const char* kFileX              = "\xee\x83\x8e"; // file-x-2 U+E0CE
 
 } // namespace icon

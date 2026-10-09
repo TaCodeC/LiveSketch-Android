@@ -20,6 +20,16 @@ using Sink = std::function<bool(const uint8_t* data, size_t size)>;
 
 enum class Method : uint16_t { Stored = 0, Deflate = 8 };
 
+// Una entrada del ZIP, como la describe su índice (el directorio central).
+struct Entry {
+    std::string name;
+    Method method = Method::Stored;
+    uint32_t crc = 0;               // de los datos sin comprimir
+    uint64_t compressedSize = 0;
+    uint64_t size = 0;
+    uint64_t headerOffset = 0;      // de su cabecera local
+};
+
 class Writer {
 public:
     // `time`: fecha de las entradas (SDL_Time; se guarda en hora local, como hace todo ZIP).
@@ -32,17 +42,10 @@ public:
     bool finish();
     // Bytes escritos hasta ahora.
     uint64_t size() const { return m_offset; }
+    // Las entradas escritas hasta ahora, en orden.
+    const std::vector<Entry>& entries() const { return m_entries; }
 
 private:
-    struct Entry {
-        std::string name;
-        uint16_t method = 0;
-        uint16_t flags = 0;
-        uint32_t crc = 0;
-        uint32_t compressedSize = 0;
-        uint32_t size = 0;
-        uint32_t offset = 0;
-    };
     bool write(const void* data, size_t size);
 
     Sink m_sink;
@@ -89,15 +92,6 @@ public:
 private:
     SDL_IOStream* m_io = nullptr;
     uint64_t m_size = 0;
-};
-
-struct Entry {
-    std::string name;
-    Method method = Method::Stored;
-    uint32_t crc = 0;
-    uint64_t compressedSize = 0;
-    uint64_t size = 0;
-    uint64_t headerOffset = 0;   // de su cabecera local
 };
 
 class Reader {

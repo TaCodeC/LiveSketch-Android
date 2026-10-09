@@ -1,15 +1,15 @@
-// Diálogos: confirmaciones (eliminar y renombrar capa, salir, convertir el perfil de color
-// del lienzo, abrir un proyecto sobre cambios sin guardar) y alertas, con la tarjeta de
-// lienzo nuevo (UiCanvas.cpp) por encima de lo que haya, la pantalla de inicio y lo que se
-// ve mientras se abre un proyecto. Las confirmaciones son tarjetas alineadas a la
-// izquierda: un icono, el título, la explicación y botones abajo a la derecha.
+// Diálogos: confirmaciones (eliminar y renombrar una capa o un proyecto, convertir el perfil
+// de color del lienzo, dejar el lienzo sin guardar) y alertas, con la tarjeta de lienzo nuevo
+// (UiCanvas.cpp) por encima de lo que haya, la pantalla de inicio y lo que se ve mientras se
+// abre un proyecto o se guarda el lienzo para dejarlo. Las confirmaciones son tarjetas
+// alineadas a la izquierda: un icono, el título, la explicación y botones abajo a la derecha.
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
 #include "UI/Anim.h"
 #include "UI/Icons.h"
 
-#include <SDL3/SDL_platform_defines.h>
+#include <SDL3/SDL_timer.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +26,9 @@ namespace {
 
 // Opacidad del oscurecido de detrás de los diálogos.
 constexpr float kDimAlpha = static_cast<float>((th::kDim >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
+
+// Guardando el lienzo para dejarlo: si tarda menos que esto, no se ve nada.
+constexpr uint64_t kBusyDelayMs = 250;
 
 std::string trimmed(const char* text) {
     std::string s(text);
@@ -110,13 +113,12 @@ void Ui::openDialog(Dialog dialog, const Canvas* canvas) {
             }
         }
         break;
-    case Dialog::Exit:
-        m_dialogTitle = "¿Salir de LiveSketch?";
-        break;
     case Dialog::ConvertProfile:
-    case Dialog::OpenProject:
+    case Dialog::Leave:
+    case Dialog::RenameProject:
+    case Dialog::DeleteProject:
     case Dialog::Alert:
-        // Quien la abre ya puso el título y la explicación.
+        // Quien la abre ya puso el título, la explicación y lo demás.
         break;
     case Dialog::NewCanvas:
         // Empieza sin nombre; el tamaño, el fondo y la categoría son los de la última vez.
@@ -150,13 +152,6 @@ void Ui::askConvertProfile(Canvas& canvas, ColorProfile profile) {
     openDialog(Dialog::ConvertProfile, &canvas);
 }
 
-void Ui::askOpenProject(const std::string& title) {
-    closePanels();
-    m_dialogTitle = title.empty() ? "¿Abrir el proyecto?" : "¿Abrir «" + title + "»?";
-    m_dialogMessage = "El dibujo actual tiene cambios que no has guardado como proyecto: se perderán.";
-    openDialog(Dialog::OpenProject, nullptr);
-}
-
 void Ui::showAlert(std::string title, std::string message, Notice kind) {
     if (m_dialog != Dialog::None && m_dialog != Dialog::Alert) {
         notify(title + ": " + message, kind, 8000);
@@ -166,15 +161,6 @@ void Ui::showAlert(std::string title, std::string message, Notice kind) {
     m_dialogMessage = std::move(message);
     m_dialogKind = kind;
     openDialog(Dialog::Alert, nullptr);
-}
-
-void Ui::askExit() {
-#ifndef SDL_PLATFORM_EMSCRIPTEN
-    // En el navegador no se sale de la app: se cierra la pestaña.
-    if (m_dialog == Dialog::None) {
-        openDialog(Dialog::Exit, nullptr);
-    }
-#endif
 }
 
 // -----------------------------------------------------------------------------
@@ -220,7 +206,7 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
     }
 
     // Cada confirmación lleva su icono, su explicación y el botón que la acepta.
-    const bool rename = m_dialogShown == Dialog::RenameLayer;
+    const bool rename = m_dialogShown == Dialog::RenameLayer || m_dialogShown == Dialog::RenameProject;
     const char* glyph = icon::kPencil;
     ImU32 tone = th::kAccent;
     const char* message = nullptr;
@@ -232,21 +218,23 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
         message = "La capa y su dibujo desaparecen. Puedes recuperarla con Deshacer.";
         confirmLabel = "Eliminar";
         confirmStyle = ui::ButtonStyle::Destructive;
-    } else if (m_dialogShown == Dialog::Exit) {
-        glyph = icon::kLogOut;
-        tone = th::kRed;
-        message = "Los cambios que no hayas guardado como proyecto se perderán.";
-        confirmLabel = "Salir";
-        confirmStyle = ui::ButtonStyle::Destructive;
     } else if (m_dialogShown == Dialog::ConvertProfile) {
         glyph = icon::kPalette;
         message = m_dialogMessage.c_str();
         confirmLabel = "Convertir";
-    } else if (m_dialogShown == Dialog::OpenProject) {
-        glyph = icon::kFolderOpen;
+    } else if (m_dialogShown == Dialog::Leave) {
+        glyph = icon::kCircleAlert;
         tone = th::kOrange;
         message = m_dialogMessage.c_str();
-        confirmLabel = "Abrir";
+        confirmLabel = m_dialogConfirm.c_str();
+        confirmStyle = ui::ButtonStyle::Destructive;
+    } else if (m_dialogShown == Dialog::RenameProject) {
+        confirmLabel = "Renombrar";
+    } else if (m_dialogShown == Dialog::DeleteProject) {
+        glyph = icon::kTrash;
+        tone = th::kRed;
+        message = m_dialogMessage.c_str();
+        confirmLabel = "Eliminar";
         confirmStyle = ui::ButtonStyle::Destructive;
     } else if (m_dialogShown == Dialog::Alert) {
         switch (m_dialogKind) {
@@ -317,8 +305,9 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
         top += pt(14.0f);
         const ImRect field(ImVec2(left, top), ImVec2(left + textWidth, top + fieldHeight));
         if (open) {
+            const bool project = m_dialogShown == Dialog::RenameProject;
             enter = ui::textField("##rename", field, m_renameBuffer, sizeof(m_renameBuffer), m_dialogFocus,
-                                  "Nombre de la capa");
+                                  project ? "Sin nombre" : "Nombre de la capa");
             m_dialogFocus = false;
         } else {
             staticField(dl, field, m_renameBuffer);
@@ -327,8 +316,9 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
 
     // Botones abajo a la derecha, la acción al final. Si no caben a su ancho, se reparten
     // la fila.
+    // Una capa necesita nombre; un proyecto puede no tenerlo.
     const std::string newName = rename ? trimmed(m_renameBuffer) : std::string();
-    const bool canConfirm = !rename || !newName.empty();
+    const bool canConfirm = !rename || !newName.empty() || m_dialogShown == Dialog::RenameProject;
     const float gap = pt(10.0f);
     auto buttonWidth = [](const char* text) {
         return std::max(pt(104.0f), ui::measure(Weight::SemiBold, th::kSubhead, text).x + pt(32.0f));
@@ -369,16 +359,19 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
                 canvas->renameLayer(index, newName);
             }
             break;
-        case Dialog::Exit:
-            requests.quit = true;
-            break;
         case Dialog::ConvertProfile:
             if (canvas) {
                 canvas->convertProfile(m_dialogProfile);
             }
             break;
-        case Dialog::OpenProject:
-            requests.openConfirmed = true;
+        case Dialog::Leave:
+            requests.leaveConfirmed = true;
+            break;
+        case Dialog::RenameProject:
+            requests.project = {UiRequests::ProjectAction::Kind::Rename, m_dialogProject, newName};
+            break;
+        case Dialog::DeleteProject:
+            requests.project = {UiRequests::ProjectAction::Kind::Remove, m_dialogProject, {}};
             break;
         default:
             break;
@@ -390,37 +383,47 @@ void Ui::drawDialogs(Canvas* canvas, UiRequests& requests) {
 }
 
 // -----------------------------------------------------------------------------
-// Abriendo un proyecto
+// Abriendo un proyecto o guardando el lienzo
 // -----------------------------------------------------------------------------
 
-void Ui::drawOpening() {
-    const bool open = m_status.openProgress >= 0.0f;
-    const float p = ui::anim::followFrom(ImHashStr("##opening"), 0.0f, open ? 1.0f : 0.0f, open ? 18.0f : 12.0f);
-    if (open) {
-        m_openingTitle = m_status.openTitle;
-    }
-    if (!open && p <= 0.002f) {
-        return;
+void Ui::drawBusy() {
+    const Busy busy = m_status.busy;
+    // Guardar para dejar el lienzo suele ser un momento: solo se ve si tarda.
+    const bool shown = busy == Busy::Opening ||
+                       (busy == Busy::Saving && SDL_GetTicks() >= m_status.busySinceMs + kBusyDelayMs);
+    const float p = ui::anim::followFrom(ImHashStr("##busy"), 0.0f, shown ? 1.0f : 0.0f, shown ? 18.0f : 12.0f);
+    if (shown) {
+        m_busyShown = busy;
+        m_busyTitle = m_status.busyTitle;
     }
     const Layout& L = m_layout;
-
-    // Oscurece todo y se queda con los toques: mientras suben las capas no se puede dibujar.
     const ImRect screen(ImVec2(0.0f, 0.0f), L.display);
-    ui::beginSurface("##opening-dim", screen, open, true);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(screen.Min, screen.Max, ui::withAlpha(th::kDim, p));
-    if (open) {
+    // Mientras tanto no se puede tocar nada (tampoco antes de que se vea).
+    if (busy != Busy::None) {
+        ui::beginSurface("##busy-block", screen, true, true);
         const ImGuiID outside = ImGui::GetID("##outside");
         ImGui::ItemAdd(screen, outside);
         bool hovered = false;
         bool held = false;
         ImGui::ButtonBehavior(screen, outside, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
+        ui::endSurface();
     }
+    if (p <= 0.002f || m_busyShown == Busy::None) {
+        return;
+    }
+    ui::beginSurface("##busy-dim", screen, false, true);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(screen.Min, screen.Max, ui::withAlpha(th::kDim, p));
     ui::endSurface();
 
-    // Tarjeta: el icono, «Abriendo…» y una barra con lo que lleva.
-    const std::string title =
-        m_openingTitle.empty() ? std::string("Abriendo el proyecto…") : "Abriendo «" + m_openingTitle + "»…";
+    // Tarjeta: el icono, «Abriendo…» o «Guardando…» y lo que lleva (una barra al abrir).
+    const bool opening = m_busyShown == Busy::Opening;
+    std::string title;
+    if (opening) {
+        title = m_busyTitle.empty() ? std::string("Abriendo el proyecto…") : "Abriendo «" + m_busyTitle + "»…";
+    } else {
+        title = m_busyTitle.empty() ? std::string("Guardando el dibujo…") : "Guardando «" + m_busyTitle + "»…";
+    }
     const float width = std::min(pt(320.0f), L.display.x - L.margin * 2.0f);
     const float pad = pt(20.0f);
     const float textWidth = width - pad * 2.0f;
@@ -428,14 +431,15 @@ void Ui::drawOpening() {
     const float titleHeight = ui::paragraph(nullptr, Weight::SemiBold, th::kHeadline, ImVec2(0.0f, 0.0f), textWidth,
                                             Align::Left, 0, title.c_str(), 1.25f);
     const float barHeight = pt(6.0f);
-    const float height = pad + badge + pt(14.0f) + titleHeight + pt(16.0f) + barHeight + pt(10.0f) +
-                         ui::fontSize(th::kFootnote) + pad;
+    const float detailHeight = opening ? pt(16.0f) + barHeight + pt(10.0f) + ui::fontSize(th::kFootnote)
+                                       : pt(8.0f) + ui::fontSize(th::kFootnote);
+    const float height = pad + badge + pt(14.0f) + titleHeight + detailHeight + pad;
     const float x = std::round((L.display.x - width) * 0.5f);
     const float y = std::round((L.display.y - height) * 0.5f);
     const ImRect rect(x, y, x + width, y + height);
     const float radius = pt(th::kDialogRadius);
 
-    ui::beginSurface("##opening", rect, false, true);
+    ui::beginSurface("##busy", rect, false, true);
     dl = ImGui::GetWindowDrawList();
     const ui::DrawMark mark = ui::mark(dl);
     ui::pushUnclipped(dl);
@@ -444,68 +448,65 @@ void Ui::drawOpening() {
     ui::glass(dl, rect, radius, th::kDialogTint, 0, kDimAlpha * p);
     const float left = rect.Min.x + pad;
     float top = rect.Min.y + pad;
-    ui::iconBadge(dl, ImRect(ImVec2(left, top), ImVec2(left + badge, top + badge)), th::kAccent, icon::kFolderOpen,
-                  20.0f);
+    const ImRect badgeRect(ImVec2(left, top), ImVec2(left + badge, top + badge));
+    ui::iconBadge(dl, badgeRect, th::kAccent, opening ? icon::kFolderOpen : icon::kSave, 20.0f);
     top += badge + pt(14.0f);
     ui::paragraph(dl, Weight::SemiBold, th::kHeadline, ImVec2(left, top), textWidth, Align::Left, th::kLabel,
                   title.c_str(), 1.25f);
-    top += titleHeight + pt(16.0f);
-    // La barra avanza suave aunque las capas lleguen de golpe.
-    const float progress =
-        ui::anim::follow(ImHashStr("##opening-progress"), open ? std::clamp(m_status.openProgress, 0.0f, 1.0f) : 1.0f,
-                         14.0f);
-    const ImRect track(ImVec2(left, top), ImVec2(left + textWidth, top + barHeight));
-    dl->AddRectFilled(track.Min, track.Max, IM_COL32(255, 255, 255, 31), barHeight * 0.5f);
-    if (progress > 0.0f) {
-        const float fill = std::max(barHeight, textWidth * progress);
-        dl->AddRectFilled(track.Min, ImVec2(track.Min.x + fill, track.Max.y), th::kAccent, barHeight * 0.5f);
+    top += titleHeight;
+    if (opening) {
+        top += pt(16.0f);
+        // La barra avanza suave aunque las capas lleguen de golpe.
+        const float target = busy == Busy::Opening ? std::clamp(m_status.busyProgress, 0.0f, 1.0f) : 1.0f;
+        const float progress = ui::anim::follow(ImHashStr("##busy-progress"), target, 14.0f);
+        const ImRect track(ImVec2(left, top), ImVec2(left + textWidth, top + barHeight));
+        dl->AddRectFilled(track.Min, track.Max, IM_COL32(255, 255, 255, 31), barHeight * 0.5f);
+        if (progress > 0.0f) {
+            const float fill = std::max(barHeight, textWidth * progress);
+            dl->AddRectFilled(track.Min, ImVec2(track.Min.x + fill, track.Max.y), th::kAccent, barHeight * 0.5f);
+        }
+        top += barHeight + pt(10.0f);
+        char percent[16];
+        std::snprintf(percent, sizeof(percent), "%d %%", static_cast<int>(std::lround(progress * 100.0f)));
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left, top + ui::fontSize(th::kFootnote) * 0.5f),
+                  Align::Left, th::kSecondaryLabel, percent);
+    } else {
+        top += pt(8.0f);
+        const float cy = top + ui::fontSize(th::kFootnote) * 0.5f;
+        ui::spinner(dl, ImVec2(left + pt(7.0f), cy), pt(7.0f), th::kSecondaryLabel);
+        ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left + pt(22.0f), cy), Align::Left, th::kSecondaryLabel,
+                  "Queda en Proyectos", textWidth - pt(22.0f));
     }
-    top += barHeight + pt(10.0f);
-    char percent[16];
-    std::snprintf(percent, sizeof(percent), "%d %%", static_cast<int>(std::lround(progress * 100.0f)));
-    ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left, top + ui::fontSize(th::kFootnote) * 0.5f), Align::Left,
-              th::kSecondaryLabel, percent);
     ui::anim::keepAlive();
 
     const float e = ui::anim::easeOutCubic(std::clamp(p, 0.0f, 1.0f));
     ui::transform(mark, rect.GetCenter(), 0.98f + 0.02f * e, ImVec2(0.0f, pt(12.0f) * (1.0f - e)), p);
     ui::endSurface();
+    if (busy == Busy::None && p <= 0.01f) {
+        m_busyShown = Busy::None;
+    }
 }
 
 // -----------------------------------------------------------------------------
 // Pantalla de inicio
 // -----------------------------------------------------------------------------
 
-void Ui::startScreen(UiRequests& requests) {
+void Ui::startBackground() {
     const Layout& L = m_layout;
-
-    // Fondo: casi negro con dos luces muy suaves detrás de la tarjeta, del azul de los
-    // controles y del rojo de la marca.
+    // Casi negro con dos luces muy suaves, del azul de los controles y del rojo de la marca.
     const ImRect screen(ImVec2(0.0f, 0.0f), L.display);
     ui::beginSurface("##start-background", screen, false, false);
+    ImGui::BringWindowToDisplayBack(ImGui::GetCurrentWindow());
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(screen.Min, screen.Max, IM_COL32(12, 12, 14, 255));
     const float extent = std::max(L.display.x, L.display.y);
     glow(dl, ImVec2(L.display.x * 0.34f, L.display.y * 0.2f), extent * 0.5f, th::kAccent, 0.2f);
     glow(dl, ImVec2(L.display.x * 0.72f, L.display.y * 0.9f), extent * 0.42f, th::kRed, 0.12f);
     ui::endSurface();
+}
 
-    // Escape o atrás dejan de escribir un número o un texto. Si no, atrás (Android) aquí no
-    // pierde nada: sale sin preguntar.
-    // Con una alerta abierta, atrás y Escape la cierran y la tarjeta espera.
-    const bool alert = m_dialog == Dialog::Alert;
-    const bool back = ImGui::IsKeyPressed(ImGuiKey_AppBack, false);
-    if (back || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        if (alert) {
-            m_dialog = Dialog::None;
-        } else if (!cancelCanvasEdit() && back) {
-            requests.quit = true;
-        }
-    }
-    const ImGuiIO& io = ImGui::GetIO();
-    if (!alert && (io.KeyCtrl || io.KeySuper) && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
-        requests.openProject = true;
-    }
+void Ui::startScreen(UiRequests& requests) {
+    // Con un diálogo abierto (una alerta), la tarjeta espera.
     const float p = ui::anim::followFrom(ImHashStr("##start-card"), 0.0f, 1.0f, 9.0f);
-    newCanvasCard(false, p, !alert, requests);
+    newCanvasCard(false, p, m_dialog == Dialog::None, requests);
 }

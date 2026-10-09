@@ -39,6 +39,12 @@ public:
     // Elemento de una lista, o un valor nulo.
     const Value& operator[](size_t index) const;
 
+    // Para cambiar un árbol leído y volver a escribirlo (ver write()).
+    static Value text(std::string text);
+    // El miembro `key` de un objeto, para cambiarlo (si no lo tiene, se añade al final, nulo).
+    // Null si no es un objeto.
+    Value* member(std::string_view key);
+
 private:
     friend class Parser;
 
@@ -98,6 +104,10 @@ private:
     std::vector<Level> m_levels;
     bool m_afterKey = false;
 };
+
+// Un árbol leído, otra vez como texto (como lo escribe Writer: las listas de números, en una
+// línea). Los miembros, en su orden; los números, con los dígitos justos para el mismo double.
+std::string write(const Value& value);
 
 // Texto JSON de una cadena, con comillas (escapa comillas, barras y caracteres de control).
 std::string quote(std::string_view text);

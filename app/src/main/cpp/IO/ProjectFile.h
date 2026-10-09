@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Guardar y abrir proyectos (.lvskt) sin parar la interfaz: las capas se comprimen y se
@@ -37,9 +38,10 @@ struct Target {
 };
 
 // Guarda un proyecto. La app, en su hilo y sin soltarlo: begin(), y por cada capa reserve()
-// y addLayer() con sus píxeles recién leídos de la GPU, y al final finish() con el dibujo
-// entero. Desde ahí sigue solo en segundo plano: lo que se guarda es como estaba el lienzo
-// en ese momento, aunque se siga dibujando.
+// y addLayer() con sus píxeles recién leídos de la GPU (o reuseLayer(), si no cambió desde el
+// archivo anterior), y al final finish() con el dibujo entero (o finishReusing()). Desde ahí
+// sigue solo en segundo plano: lo que se guarda es como estaba el lienzo en ese momento,
+// aunque se siga dibujando. El archivo se escribe en otro hilo, en orden.
 class Saver {
 public:
     struct Result {
@@ -47,6 +49,10 @@ public:
         std::string path;    // el archivo (o el que se intentó crear)
         std::string error;   // por qué falló
         uint64_t bytes = 0;  // lo que ocupa
+        // Se iba a copiar algo del archivo anterior: si falló, guardándolo todo puede salir.
+        bool reused = false;
+        // Las entradas del archivo escrito, para copiarlas tal cual la próxima vez.
+        std::vector<zip::Entry> entries;
     };
 
     Saver() = default;
@@ -56,17 +62,27 @@ public:
 
     // Empieza: crea el archivo y escribe lo que no son capas. False si ya hay un guardado en
     // curso o no se pudo crear el archivo (entonces el motivo queda en takeResult()).
-    // `app`: el programa y su versión, para document.json.
-    bool begin(Document document, const Target& target, std::string app);
+    // `app`: el programa y su versión, para document.json. `previous`: un archivo guardado
+    // antes (normalmente el mismo que se sustituye) del que copiar lo que no cambió; si no se
+    // puede leer, reusing() es false y hay que dar todas las capas.
+    bool begin(Document document, const Target& target, std::string app, const std::string& previous = {});
+    bool reusing() const { return m_canReuse; }
     // Antes de leer `bytes` de la GPU: espera (en la web, comprime aquí) a que quepan en
     // kMemoryBudget con lo que aún espera a comprimirse.
     void reserve(size_t bytes);
     // Los píxeles premultiplicados de la capa `index`, de su caja (vacío si no tiene nada).
     // Mejor con un byte más por fila reservado (ver project::encodeImage).
     void addLayer(int index, std::vector<uint8_t> pixels);
+    // La capa `index` no cambió desde el archivo anterior, donde es `entry` (como la describía
+    // su índice al escribirlo o al abrirlo): se copia sin volver a comprimirla. Su caja en el
+    // documento tiene que ser la de entonces. Si el archivo ya no la tiene así, falla.
+    void reuseLayer(int index, const zip::Entry& entry);
     // El dibujo entero, premultiplicado: con esto termina en segundo plano. `onFinished` se
     // llama desde otro hilo (o desde pump(), en la web) cuando haya resultado.
     void finish(std::vector<uint8_t> composite, std::function<void()> onFinished);
+    // Como finish(), pero no cambió lo que se ve: la miniatura y el dibujo entero se copian
+    // del archivo anterior.
+    void finishReusing(const zip::Entry& thumbnail, const zip::Entry& merged, std::function<void()> onFinished);
     // Algo falló antes de terminar (no se pudo leer la GPU): no se guarda nada.
     void abort(std::string reason, std::function<void()> onFinished);
 
@@ -85,16 +101,27 @@ private:
     struct Entry {
         std::string name;
         std::vector<uint8_t> data;
-        bool queued = false;   // ya se encargó su trabajo
-        bool ready = false;    // ya está (o falló)
+        std::optional<zip::Entry> copy;   // se copia esta del archivo anterior
+        size_t maxSize = 0;               // lo que puede ocupar esa, como mucho
+        bool queued = false;              // ya se encargó su trabajo
+        bool ready = false;               // ya está (o falló)
     };
     // La entrada `slot` está lista (o falló, con `error`): se escribe con las anteriores, en
     // orden, y si era la última se cierra el archivo.
     void complete(size_t slot, std::vector<uint8_t> data, const std::string& error);
-    // Con el cerrojo: escribe lo que esté listo y, si ya está todo, termina (devuelve true:
-    // hay que llamar a m_onFinished, ya sin el cerrojo).
-    bool flush();
-    void close();
+    // Con el cerrojo: si nadie está escribiendo, quien llama pasa a ser el que escribe y
+    // tiene que llamar a drain() (devuelve true).
+    bool claimWriter();
+    // Con el cerrojo, al terminar: una capa que no se dio haría esperar para siempre; se
+    // salta y el guardado falla. Devuelve si había alguna.
+    bool skipMissingLayers();
+    // Sin el cerrojo, solo quien escribe: escribe en orden lo que esté listo y, si ya está
+    // todo, cierra el archivo.
+    void drain();
+    // La copia o los datos de una entrada, al archivo.
+    bool writeEntry(Entry& entry, std::string* error);
+    // Termina el archivo (sin el cerrojo, solo quien escribe).
+    Result close(bool failed, std::string error);
     void release(size_t bytes);
 
     std::unique_ptr<io::TaskPool> m_pool;
@@ -113,10 +140,16 @@ private:
     std::unique_ptr<zip::Writer> m_zip;
     std::vector<Entry> m_entries;   // las capas, el fondo, la miniatura y el dibujo entero
     size_t m_written = 0;           // las que ya están en el archivo
+    bool m_writing = false;         // un hilo está escribiendo (solo uno cada vez)
     bool m_finishing = false;       // ya llegó el dibujo entero (o abort)
     bool m_failed = false;
     std::string m_error;
     size_t m_pending = 0;           // bytes de píxeles esperando a comprimirse
+    // El archivo anterior, para copiar lo que no cambió (solo lo lee quien escribe).
+    std::unique_ptr<zip::FileSource> m_previousSource;
+    zip::Reader m_previous;
+    bool m_canReuse = false;        // se pudo leer su índice
+    bool m_reused = false;          // se pidió copiar algo de él
 };
 
 // Abre un proyecto. open() lee el índice y document.json (en este hilo: es rápido) y
@@ -137,6 +170,9 @@ public:
     // Lo que no impide abrirlo (también las capas dañadas, según se leen).
     std::vector<std::string> warnings() const;
     const std::string& error() const { return m_error; }
+    // Cómo describe el índice del archivo la entrada `name`, si la tiene (para copiarla tal
+    // cual al guardarlo otra vez).
+    std::optional<zip::Entry> entry(std::string_view name) const;
 
     void start();
     // La siguiente capa, si ya está: su índice y sus píxeles premultiplicados, del tamaño de

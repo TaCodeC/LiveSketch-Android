@@ -130,24 +130,23 @@ bool Writer::add(std::string_view name, std::span<const uint8_t> data, Method me
 
     Entry entry;
     entry.name = std::string(name);
-    entry.method = static_cast<uint16_t>(method);
-    entry.flags = ascii(name) ? 0 : kUtf8Flag;
+    entry.method = method;
     entry.crc = libdeflate_crc32(0, data.data(), data.size());
-    entry.compressedSize = static_cast<uint32_t>(stored.size());
-    entry.size = static_cast<uint32_t>(data.size());
-    entry.offset = static_cast<uint32_t>(m_offset);
+    entry.compressedSize = stored.size();
+    entry.size = data.size();
+    entry.headerOffset = m_offset;
 
     std::vector<uint8_t> header;
     header.reserve(kLocalHeader + name.size());
     put32(header, kLocalSignature);
     put16(header, method == Method::Deflate ? 20 : 10);   // versión necesaria
-    put16(header, entry.flags);
-    put16(header, entry.method);
+    put16(header, ascii(name) ? 0 : kUtf8Flag);
+    put16(header, static_cast<uint16_t>(method));
     put16(header, m_dosTime);
     put16(header, m_dosDate);
     put32(header, entry.crc);
-    put32(header, entry.compressedSize);
-    put32(header, entry.size);
+    put32(header, static_cast<uint32_t>(entry.compressedSize));
+    put32(header, static_cast<uint32_t>(entry.size));
     put16(header, static_cast<uint16_t>(name.size()));
     put16(header, 0);   // sin campo extra (OpenRaster lo pide así para «mimetype»)
     header.insert(header.end(), name.begin(), name.end());
@@ -167,21 +166,21 @@ bool Writer::finish() {
     for (const Entry& entry : m_entries) {
         put32(directory, kCentralSignature);
         put16(directory, kMadeBy);
-        put16(directory, entry.method == static_cast<uint16_t>(Method::Deflate) ? 20 : 10);
-        put16(directory, entry.flags);
-        put16(directory, entry.method);
+        put16(directory, entry.method == Method::Deflate ? 20 : 10);
+        put16(directory, ascii(entry.name) ? 0 : kUtf8Flag);
+        put16(directory, static_cast<uint16_t>(entry.method));
         put16(directory, m_dosTime);
         put16(directory, m_dosDate);
         put32(directory, entry.crc);
-        put32(directory, entry.compressedSize);
-        put32(directory, entry.size);
+        put32(directory, static_cast<uint32_t>(entry.compressedSize));
+        put32(directory, static_cast<uint32_t>(entry.size));
         put16(directory, static_cast<uint16_t>(entry.name.size()));
         put16(directory, 0);   // extra
         put16(directory, 0);   // comentario
         put16(directory, 0);   // disco
         put16(directory, 0);   // atributos internos
         put32(directory, kFileAttributes);
-        put32(directory, entry.offset);
+        put32(directory, static_cast<uint32_t>(entry.headerOffset));
         directory.insert(directory.end(), entry.name.begin(), entry.name.end());
     }
     const size_t directorySize = directory.size();

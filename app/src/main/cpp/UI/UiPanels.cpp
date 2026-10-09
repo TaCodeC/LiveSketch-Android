@@ -123,8 +123,9 @@ constexpr HelpItem kShortcuts[] = {
     {"5", "Enderezar la vista", nullptr},
     {"M", "Voltear la vista", nullptr},
     {"MAYÚS", "Forma rápida perfecta", nullptr},
-    {"CTRL S", "Guardar el proyecto", nullptr},
-    {"CTRL O", "Abrir un proyecto", nullptr},
+    {"CTRL S", "Guardar", nullptr},
+    {"CTRL N", "Nuevo lienzo", nullptr},
+    {"CTRL O", "Abrir un archivo", nullptr},
     {"CTRL Z", "Deshacer", nullptr},
     {"CTRL Y", "Rehacer", nullptr},
     {"CTRL C / X", "Copiar o cortar", nullptr},
@@ -352,17 +353,32 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     const float panelWidth = L.narrow ? L.display.x - L.safe[1] - L.safe[3] : width;
     constexpr float kStrip = 8.0f + 54.0f + 8.0f;   // pestañas con su margen
 
+    // Exportar el proyecto: en la web se descarga; en Android va a Descargas (o, con otra fila,
+    // adonde se elija); en escritorio se elige dónde.
 #ifdef SDL_PLATFORM_EMSCRIPTEN
+    const char* exportTitle = "Descargar proyecto";
+    const char* exportGlyph = icon::kDownload;
+    constexpr bool kExportChooses = false;
     const char* shareWhere = "Los dos se descargan con el navegador con el nombre del lienzo.";
+    constexpr int kShareRows = 2;
 #elif defined(SDL_PLATFORM_ANDROID)
-    const char* shareWhere = "Los dos se guardan en Descargas con el nombre del lienzo.";
+    const char* exportTitle = "Exportar a Descargas";
+    const char* exportGlyph = icon::kDownload;
+    constexpr bool kExportChooses = false;
+    const char* shareWhere = "Se guardan en Descargas con el nombre del lienzo; con «Exportar a…» eliges dónde "
+                             "(también en la nube).";
+    constexpr int kShareRows = 3;
 #else
-    const char* shareWhere = "Los dos se guardan en la carpeta de descargas con el nombre del lienzo.";
+    const char* exportTitle = "Exportar proyecto…";
+    const char* exportGlyph = icon::kFileOutput;
+    constexpr bool kExportChooses = true;
+    const char* shareWhere = "El PNG se guarda en Descargas con el nombre del lienzo; el proyecto, donde elijas.";
+    constexpr int kShareRows = 2;
 #endif
     const std::string shareNote =
-        std::string("El proyecto (.lvskt) guarda las capas con sus ajustes para seguir dibujando después. El PNG es "
-                    "la imagen a tamaño completo, con sus ppp para imprimir; si ocultas el color de fondo (en "
-                    "Capas), queda transparente. ") +
+        std::string("El proyecto (.lvskt) lleva las capas con sus ajustes: sirve de copia de seguridad o para seguir "
+                    "en otro dispositivo (con Abrir archivo). El PNG es la imagen a tamaño completo, con sus ppp para "
+                    "imprimir; si ocultas el color de fondo (en Capas), queda transparente. ") +
         shareWhere;
     const float noteWidth = panelWidth - pt(8.0f + 10.0f) * 2.0f;
 
@@ -374,10 +390,10 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         body = propertiesHeight(canvas, panelWidth);
         break;
     case 0:
-        body = pt(8.0f + rowPoints * 7.0f + 2.0f * 6.0f + 8.0f);
+        body = pt(8.0f + rowPoints * 9.0f + 2.0f * 8.0f + 8.0f);
         break;
     case 1:
-        body = pt(8.0f + rowPoints * 2.0f + 2.0f + 10.0f) +
+        body = pt(8.0f + rowPoints * kShareRows + 2.0f * (kShareRows - 1) + 10.0f) +
                ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f), noteWidth, Align::Left, 0,
                              shareNote.c_str(), 1.4f) +
                pt(12.0f);
@@ -451,15 +467,41 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     char size[32];
     std::snprintf(size, sizeof(size), "%d × %d", canvas.width(), canvas.height());
     switch (tab) {
-    case 0:
+    case 0: {
+        if (menuRow(dl, "##projects", ImRect(left, y, right, y + row), icon::kGallery, "Proyectos", nullptr, true)) {
+            requests.showProjects = true;
+            closePanels();
+        }
+        y += row + pt(2.0f);
         if (menuRow(dl, "##new", ImRect(left, y, right, y + row), icon::kFilePlus, "Nuevo lienzo…", nullptr, true)) {
             openDialog(Dialog::NewCanvas, &canvas);
         }
         y += row + pt(2.0f);
-        if (menuRow(dl, "##open", ImRect(left, y, right, y + row), icon::kFolderOpen, "Abrir proyecto…", nullptr,
+        if (menuRow(dl, "##open", ImRect(left, y, right, y + row), icon::kFolderOpen, "Abrir archivo…", nullptr,
                     true)) {
             requests.openProject = true;
             closePanels();
+        }
+        y += row + pt(2.0f);
+        {
+            // Guardar, con el estado del proyecto (se guarda solo un momento después de cada
+            // cambio: esto lo guarda ya).
+            const ProjectSave state = m_status.projectSave;
+            const bool saving = state == ProjectSave::Saving;
+            const char* value = "Guardado";
+            if (state == ProjectSave::Unsaved) {
+                value = "Sin guardar";
+            } else if (state == ProjectSave::Failed) {
+                value = "No se pudo guardar";
+            } else if (saving) {
+                value = nullptr;
+            }
+            if (menuRow(dl, "##save-project", ImRect(left, y, right, y + row), icon::kSave,
+                        saving ? "Guardando…" : "Guardar", value, true, !saving,
+                        state == ProjectSave::Failed ? th::kOrange : th::kLabel)) {
+                requests.saveProject = true;
+                closePanels();
+            }
         }
         y += row + pt(2.0f);
         if (menuRow(dl, "##fit", ImRect(left, y, right, y + row), icon::kScan, "Centrar lienzo")) {
@@ -492,15 +534,24 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
             openProperties(canvas);
         }
         break;
+    }
 
     case 1: {
-        const bool saving = m_status.savingProject;
-        if (menuRow(dl, "##save-project", ImRect(left, y, right, y + row), icon::kSave,
-                    saving ? "Guardando proyecto…" : "Guardar proyecto", ".lvskt", true, !saving)) {
-            requests.saveProject = true;
+        const bool exportingProject = m_status.exportingProject;
+        if (menuRow(dl, "##export-project", ImRect(left, y, right, y + row), exportGlyph,
+                    exportingProject ? "Exportando…" : exportTitle, ".lvskt", true, !exportingProject)) {
+            (kExportChooses ? requests.exportProjectTo : requests.exportProject) = true;
             closePanels();
         }
         y += row + pt(2.0f);
+#ifdef SDL_PLATFORM_ANDROID
+        if (menuRow(dl, "##export-to", ImRect(left, y, right, y + row), icon::kFileOutput, "Exportar a…", ".lvskt",
+                    true, !exportingProject)) {
+            requests.exportProjectTo = true;
+            closePanels();
+        }
+        y += row + pt(2.0f);
+#endif
         const bool exporting = m_status.exporting;
         if (menuRow(dl, "##save", ImRect(left, y, right, y + row), icon::kImageDown,
                     exporting ? "Guardando PNG…" : "Guardar PNG", size, true, !exporting)) {

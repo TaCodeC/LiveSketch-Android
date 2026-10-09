@@ -3,6 +3,7 @@
 
 #include "Test.h"
 
+#include "App/CanvasProject.h"
 #include "Canvas/Camera.h"
 #include "Canvas/Canvas.h"
 #include "Gfx/Pixels.h"
@@ -407,84 +408,46 @@ void drawLine(Canvas& canvas, glm::vec2 from, glm::vec2 to) {
     canvas.update();
 }
 
-// Lo que guarda la app de un lienzo (App::projectDocument), con las cajas de lo pintado.
-project::Document documentOf(Canvas& canvas) {
-    project::Document document;
-    document.width = canvas.width();
-    document.height = canvas.height();
-    document.info = canvas.info();
-    document.background = canvas.background();
-    const LayerStack& layers = canvas.layers();
-    for (int i = 0; i < layers.count(); ++i) {
-        const Layer& layer = layers.at(i);
-        project::LayerInfo info;
-        info.name = layer.name;
-        info.visible = layer.visible;
-        info.opacity = layer.opacity;
-        info.blend = layer.blend;
-        info.alphaLock = layer.alphaLock;
-        info.clipping = layer.clipping;
-        info.reference = layer.reference;
-        info.rect = canvas.layerContent(i);
-        document.layers.push_back(std::move(info));
-    }
-    document.activeLayer = layers.activeIndex();
-    document.guide = canvas.guide();
-    return document;
-}
-
-// Guarda el lienzo como la app (App::saveProject): cada capa recortada a lo pintado y el
-// dibujo entero, leídos de la GPU. `meanwhile` se llama al entregar el último dato, mientras
-// se comprime en segundo plano.
+// Guarda el lienzo como la app (canvasproject::save): las capas que cambiaron desde
+// `previous` (todas, si no hay), recortadas a lo pintado y leídas de la GPU, las demás
+// copiadas del archivo anterior, y el dibujo entero. `meanwhile` se llama al entregar el
+// último dato, mientras se comprime en segundo plano. Deja en `pending` cómo se guardó y en
+// `record` lo que tiene el archivo nuevo.
 project::Saver::Result saveCanvas(Canvas& canvas, const project::Target& target, const project::ViewInfo& view,
-                                  const std::function<void()>& meanwhile = {}) {
+                                  const std::function<void()>& meanwhile = {},
+                                  const canvasproject::Record& previous = {},
+                                  canvasproject::Pending* pending = nullptr, canvasproject::Record* record = nullptr) {
     canvas.settle();
-    project::Document document = documentOf(canvas);
+    project::Document document = canvasproject::document(canvas);
     document.view = view;
-    std::vector<IRect> rects;
-    for (const project::LayerInfo& layer : document.layers) {
-        rects.push_back(layer.rect);
-    }
     project::Saver saver;
-    if (!saver.begin(std::move(document), target, "LiveSketch pruebas")) {
-        return saver.takeResult().value_or(project::Saver::Result{});
-    }
     std::atomic<int> finished{0};
-    const auto done = [&finished] { ++finished; };
-    auto read = [&](int index, const IRect& rect, std::vector<uint8_t>& pixels) {
-        const size_t row = static_cast<size_t>(rect.width()) * 4;
-        const size_t rows = static_cast<size_t>(rect.height());
-        saver.reserve((row + 1) * rows);
-        pixels.reserve((row + 1) * rows);
-        pixels.resize(row * rows);
-        return canvas.readRegion(index, rect, pixels.data());
-    };
-    for (size_t i = 0; i < rects.size(); ++i) {
-        std::vector<uint8_t> pixels;
-        if (!rects[i].empty() && !read(static_cast<int>(i), rects[i], pixels)) {
-            saver.abort("no se pudo leer la capa", done);
-            saver.wait();
-            return saver.takeResult().value_or(project::Saver::Result{});
-        }
-        saver.addLayer(static_cast<int>(i), std::move(pixels));
-    }
-    std::vector<uint8_t> composite;
-    if (!read(-1, IRect::ofSize(canvas.width(), canvas.height()), composite)) {
-        saver.abort("no se pudo leer el dibujo", done);
-    } else {
-        saver.finish(std::move(composite), done);
-    }
-    if (meanwhile) {
+    canvasproject::Pending started;
+    const bool ok = canvasproject::save(canvas, std::move(document), target, "LiveSketch pruebas", previous, saver,
+                                        [&finished] { ++finished; }, &started);
+    if (ok && meanwhile) {
         meanwhile();
     }
     saver.wait();
-    CHECK_EQ(finished.load(), 1);
-    return saver.takeResult().value_or(project::Saver::Result{});
+    const project::Saver::Result result = saver.takeResult().value_or(project::Saver::Result{});
+    if (ok) {
+        CHECK_EQ(finished.load(), 1);
+    }
+    if (pending) {
+        *pending = started;
+    }
+    if (record) {
+        *record = canvasproject::saved(started, result);
+    }
+    return result;
 }
 
 // Abre en `canvas` lo que leyó `loader` (ya abierto), como la app (App::startProjectOpen y
-// App::stepProjectOpen). Devuelve los avisos, o nada si no se pudo.
-std::optional<std::vector<std::string>> openCanvas(project::Loader& loader, Canvas& canvas) {
+// App::stepProjectOpen), y deja en `record` lo que tiene el archivo. Devuelve los avisos, o
+// nada si no se pudo.
+std::optional<std::vector<std::string>> openCanvas(project::Loader& loader, Canvas& canvas,
+                                                   canvasproject::Record* record = nullptr,
+                                                   const std::string& path = {}) {
     const project::Document& document = loader.document();
     CanvasSpec spec;
     spec.width = document.width;
@@ -508,6 +471,8 @@ std::optional<std::vector<std::string>> openCanvas(project::Loader& loader, Canv
     if (!canvas.open(spec, document.info, layers, document.activeLayer, document.guide)) {
         return std::nullopt;
     }
+    const uint64_t version = canvas.documentVersion();
+    std::vector<canvasproject::SavedLayer> saved;
     loader.start();
     const uint64_t start = SDL_GetTicks();
     int index = 0;
@@ -517,6 +482,11 @@ std::optional<std::vector<std::string>> openCanvas(project::Loader& loader, Canv
             const project::LayerInfo& layer = document.layers[static_cast<size_t>(index)];
             if (!pixels.empty() && !canvas.setLayerPixels(index, layer.rect, pixels.data())) {
                 return std::nullopt;
+            }
+            const bool loaded = layer.rect.empty() || !pixels.empty();
+            if (std::optional<canvasproject::SavedLayer> layerRecord =
+                    canvasproject::openedLayer(canvas, loader, index, loaded)) {
+                saved.push_back(*layerRecord);
             }
             pixels = {};
             continue;
@@ -530,6 +500,10 @@ std::optional<std::vector<std::string>> openCanvas(project::Loader& loader, Canv
 #endif
     }
     canvas.update();
+    if (record) {
+        const bool complete = saved.size() == document.layers.size() && canvas.documentVersion() == version;
+        *record = canvasproject::opened(canvas, loader, path, std::move(saved), complete);
+    }
     return loader.warnings();
 }
 
@@ -2050,6 +2024,401 @@ TEST_CASE(project_round_trip_without_background) {
     REQUIRE(again.open(saved.path, 0));
     REQUIRE(openCanvas(again, canvas).has_value());
     CHECK(canvas.documentVersion() > version);
+}
+
+// Las entradas de un archivo que no son document.json ni stack.xml, por nombre.
+std::vector<uint8_t> entryData(const std::vector<ZipEntry>& entries, std::string_view name) {
+    const ZipEntry* entry = findEntry(entries, name);
+    return entry ? entry->data : std::vector<uint8_t>();
+}
+
+// Las capas del lienzo, enteras.
+std::vector<std::vector<uint8_t>> layerPixels(const Canvas& canvas) {
+    std::vector<std::vector<uint8_t>> pixels;
+    for (int i = 0; i < canvas.layers().count(); ++i) {
+        pixels.push_back(test::readTarget(canvas.layers().at(i).target));
+    }
+    return pixels;
+}
+
+// Abre `path` en un lienzo nuevo y comprueba que sus capas y su dibujo son los de `canvas`.
+void checkSameAsFile(const Canvas& canvas, const std::string& path) {
+    project::Loader loader;
+    REQUIRE(loader.open(path, 0));
+    Canvas opened;
+    const std::optional<std::vector<std::string>> warnings = openCanvas(loader, opened);
+    REQUIRE(warnings.has_value());
+    CHECK(warnings->empty());
+    REQUIRE(opened.layers().count() == canvas.layers().count());
+    for (int i = 0; i < canvas.layers().count(); ++i) {
+        CHECK_EQ(test::maxDifference(test::readTarget(opened.layers().at(i).target),
+                                     test::readTarget(canvas.layers().at(i).target)),
+                 0);
+        CHECK_EQ(opened.layers().at(i).name, canvas.layers().at(i).name);
+        CHECK_EQ(opened.layers().at(i).opacity, canvas.layers().at(i).opacity);
+    }
+    CHECK_EQ(test::maxDifference(test::readTarget(opened.composite()), test::readTarget(canvas.composite())), 0);
+    // El dibujo entero que ven los demás programas también es el de ahora.
+    const std::vector<ZipEntry> entries = unzip(readFile(path));
+    png::Image image;
+    REQUIRE(png::decode(entryData(entries, project::kMergedEntry), image,
+                        static_cast<size_t>(canvas.width()) * static_cast<size_t>(canvas.height())));
+    std::vector<uint8_t> expected = test::readTarget(canvas.composite());
+    gfx::unpremultiply(expected.data(), expected.size() / 4);
+    CHECK_EQ(test::maxDifference(image.rgba, expected), 0);
+}
+
+// Un lienzo de 160 × 120 con cuatro capas: un trazo, píxeles al azar, un rectángulo y una
+// vacía.
+bool fourLayers(Canvas& canvas) {
+    if (!canvas.init(160, 120)) {
+        return false;
+    }
+    setBrush(canvas, 0.8f, 0.2f, 0.1f, 0.7f, 9.0f);
+    drawLine(canvas, {10.0f, 12.0f}, {140.0f, 90.0f});
+    if (!canvas.addLayer()) {
+        return false;
+    }
+    const std::vector<uint8_t> random = randomPremultiplied(60 * 50, 31);
+    if (!canvas.setLayerPixels(1, {30, 20, 90, 70}, random.data())) {
+        return false;
+    }
+    if (!canvas.addLayer()) {
+        return false;
+    }
+    test::fillRect(canvas.layers().at(2).target, {5, 60, 65, 115}, 0.0f, 0.5f, 0.25f, 1.0f);
+    ++canvas.layers().at(2).revision;
+    canvas.layers().markDirty({5, 60, 65, 115});
+    if (!canvas.addLayer()) {
+        return false;
+    }
+    canvas.update();
+    return true;
+}
+
+TEST_CASE(project_save_copies_what_did_not_change) {
+    Canvas canvas;
+    REQUIRE(fourLayers(canvas));
+    project::Target target;
+    target.path = test::tempFolder("project_incremental") + "dibujo.lvskt";
+
+    // La primera vez se comprime todo (la capa vacía no hace falta leerla).
+    canvasproject::Pending pending;
+    canvasproject::Record record;
+    project::Saver::Result saved = saveCanvas(canvas, target, {}, {}, {}, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 3);
+    CHECK_EQ(pending.copiedLayers, 0);
+    CHECK(!pending.copiedComposite);
+    CHECK(!saved.reused);
+    CHECK_EQ(record.path, target.path);
+    CHECK_EQ(record.layers.size(), size_t{4});
+    CHECK(record.composite != 0);
+    CHECK_EQ(record.merged.name, std::string(project::kMergedEntry));
+    const std::vector<ZipEntry> first = unzip(readFile(saved.path));
+    REQUIRE(!first.empty());
+
+    // Sin cambios, todo se copia tal cual.
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 0);
+    CHECK_EQ(pending.copiedLayers, 3);
+    CHECK(pending.copiedComposite);
+    CHECK(saved.reused);
+    const std::vector<ZipEntry> second = unzip(readFile(saved.path));
+    for (int i = 0; i < 4; ++i) {
+        CHECK(entryData(second, project::layerEntry(i)) == entryData(first, project::layerEntry(i)));
+    }
+    CHECK(entryData(second, project::kMergedEntry) == entryData(first, project::kMergedEntry));
+    CHECK(entryData(second, project::kThumbnailEntry) == entryData(first, project::kThumbnailEntry));
+    checkSameAsFile(canvas, saved.path);
+
+    // Con un trazo en la capa 2, solo se comprime esa (y el dibujo entero).
+    canvas.selectLayer(1);
+    setBrush(canvas, 0.1f, 0.3f, 0.9f, 1.0f, 6.0f);
+    drawLine(canvas, {20.0f, 100.0f}, {150.0f, 10.0f});
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 1);
+    CHECK_EQ(pending.copiedLayers, 2);
+    CHECK(!pending.copiedComposite);
+    const std::vector<ZipEntry> third = unzip(readFile(saved.path));
+    CHECK(entryData(third, project::layerEntry(0)) == entryData(first, project::layerEntry(0)));
+    CHECK(entryData(third, project::layerEntry(1)) != entryData(first, project::layerEntry(1)));
+    CHECK(entryData(third, project::layerEntry(2)) == entryData(first, project::layerEntry(2)));
+    checkSameAsFile(canvas, saved.path);
+
+    // Mover, borrar, añadir y cambiar propiedades no vuelve a comprimir ninguna capa: las
+    // copias van con su nombre nuevo.
+    REQUIRE(canvas.moveLayer(0, 3));
+    REQUIRE(canvas.removeLayer(1));
+    REQUIRE(canvas.addLayer());
+    canvas.setLayerOpacity(2, 0.5f);
+    canvas.renameLayer(0, "Fondo de color");
+    canvas.update();
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 0);
+    CHECK_EQ(pending.copiedLayers, 2);
+    CHECK(!pending.copiedComposite);
+    checkSameAsFile(canvas, saved.path);
+
+    // El nombre del lienzo solo va en document.json; los ppp, también en el PNG del dibujo
+    // entero (las capas no cambian).
+    canvas.setName("Otro nombre");
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 0);
+    CHECK(pending.copiedComposite);
+    CHECK(contains(textOf(entryData(unzip(readFile(saved.path)), project::kDocumentEntry)), "Otro nombre"));
+    canvas.setPpi(150.0f);
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK(!pending.copiedComposite);
+    checkSameAsFile(canvas, saved.path);
+
+    // Deshacer también es un cambio de píxeles: se vuelve a comprimir esa capa.
+    REQUIRE(canvas.undo());
+    REQUIRE(canvas.undo());
+    canvas.update();
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    checkSameAsFile(canvas, saved.path);
+}
+
+TEST_CASE(project_save_after_open_copies_layers) {
+    Canvas canvas;
+    REQUIRE(fourLayers(canvas));
+    project::Target target;
+    target.path = test::tempFolder("project_incremental_open") + "abierto.lvskt";
+    REQUIRE(saveCanvas(canvas, target, {}).ok);
+
+    // Recién abierto, el archivo ya tiene todo lo del lienzo.
+    project::Loader loader;
+    REQUIRE(loader.open(target.path, 0));
+    Canvas opened;
+    canvasproject::Record record;
+    REQUIRE(openCanvas(loader, opened, &record, target.path).has_value());
+    CHECK_EQ(record.path, target.path);
+    CHECK_EQ(record.layers.size(), size_t{4});
+    CHECK(record.composite == canvasproject::compositeKey(opened));
+    canvasproject::Pending pending;
+    project::Saver::Result saved = saveCanvas(opened, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 0);
+    CHECK_EQ(pending.copiedLayers, 3);
+    CHECK(pending.copiedComposite);
+    checkSameAsFile(canvas, saved.path);
+
+    // Al pintar en una, solo se comprime esa.
+    opened.selectLayer(3);
+    setBrush(opened, 0.9f, 0.9f, 0.1f, 1.0f, 5.0f);
+    drawLine(opened, {100.0f, 100.0f}, {20.0f, 30.0f});
+    saved = saveCanvas(opened, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.encodedLayers, 1);
+    CHECK_EQ(pending.copiedLayers, 3);
+    checkSameAsFile(opened, saved.path);
+}
+
+TEST_CASE(project_open_records_only_layers_that_loaded) {
+    // Una capa dañada se abre vacía: no se copia su PNG roto, se guarda como está (vacía), y
+    // el dibujo entero del archivo ya no vale.
+    Canvas canvas;
+    REQUIRE(fourLayers(canvas));
+    const std::string folder = test::tempFolder("project_incremental_damaged");
+    project::Target target;
+    target.path = folder + "dañado.lvskt";
+    REQUIRE(saveCanvas(canvas, target, {}).ok);
+    const std::vector<uint8_t> broken = rewriteZip(readFile(target.path), [](ZipEntry& entry) {
+        if (entry.name == project::layerEntry(1)) {
+            entry.data.resize(entry.data.size() / 2);
+        }
+        if (entry.name != "mimetype") {
+            entry.method = zip::Method::Stored;
+        }
+        return true;
+    });
+    REQUIRE(!broken.empty());
+    writeFile(target.path, broken);
+
+    project::Loader loader;
+    REQUIRE(loader.open(target.path, 0));
+    Canvas opened;
+    canvasproject::Record record;
+    const std::optional<std::vector<std::string>> warnings = openCanvas(loader, opened, &record, target.path);
+    REQUIRE(warnings.has_value());
+    CHECK_EQ(warnings->size(), size_t{1});
+    CHECK_EQ(record.layers.size(), size_t{3});
+    CHECK(record.find(opened.layers().at(1).id) == nullptr);
+    CHECK_EQ(record.composite, uint64_t{0});
+
+    canvasproject::Pending pending;
+    const project::Saver::Result saved = saveCanvas(opened, target, {}, {}, record, &pending, &record);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.copiedLayers, 2);
+    CHECK(!pending.copiedComposite);
+    checkSameAsFile(opened, saved.path);
+    project::Loader again;
+    REQUIRE(again.open(saved.path, 0));
+    CHECK(again.document().layers[1].rect.empty());
+}
+
+TEST_CASE(project_save_refuses_a_changed_previous_file) {
+    Canvas canvas;
+    REQUIRE(fourLayers(canvas));
+    const std::string folder = test::tempFolder("project_incremental_changed");
+    project::Target target;
+    target.path = folder + "dibujo.lvskt";
+    canvasproject::Record record;
+    REQUIRE(saveCanvas(canvas, target, {}, {}, {}, nullptr, &record).ok);
+
+    // Otro proyecto ocupa su sitio: lo que dice el registro ya no está, no se copia nada de
+    // él y el archivo se queda como estaba.
+    Canvas other;
+    REQUIRE(other.init(160, 120));
+    setBrush(other, 0.2f, 0.9f, 0.2f, 1.0f, 8.0f);
+    drawLine(other, {0.0f, 0.0f}, {160.0f, 120.0f});
+    REQUIRE(other.addLayer());
+    REQUIRE(other.addLayer());
+    test::fillRect(other.layers().at(2).target, {0, 0, 160, 120}, 0.5f, 0.0f, 0.0f, 0.5f);
+    ++other.layers().at(2).revision;
+    other.layers().markDirty({0, 0, 160, 120});
+    other.update();
+    REQUIRE(saveCanvas(other, target, {}).ok);
+    const std::vector<uint8_t> otherFile = readFile(target.path);
+    project::Saver::Result saved = saveCanvas(canvas, target, {}, {}, record);
+    CHECK(!saved.ok);
+    CHECK(saved.reused);
+    CHECK(contains(saved.error, "cambió"));
+    CHECK(readFile(target.path) == otherFile);
+    CHECK(filesIn(folder) == std::vector<std::string>{"dibujo.lvskt"});
+
+    // Guardándolo todo, sale bien.
+    saved = saveCanvas(canvas, target, {}, {}, {}, nullptr, &record);
+    REQUIRE(saved.ok);
+    checkSameAsFile(canvas, saved.path);
+
+    // Una capa que se estropeó en el disco (su CRC ya no cuadra) tampoco se copia.
+    std::vector<uint8_t> file = readFile(target.path);
+    {
+        zip::MemorySource source(file);
+        zip::Reader reader;
+        REQUIRE(reader.open(source));
+        const zip::Entry* entry = reader.find(project::layerEntry(2));
+        REQUIRE(entry != nullptr);
+        const size_t at = static_cast<size_t>(entry->headerOffset) + 30 +
+                          get16le(&file[static_cast<size_t>(entry->headerOffset) + 26]) + 40;
+        file[at] ^= 0x5a;
+    }
+    writeFile(target.path, file);
+    saved = saveCanvas(canvas, target, {}, {}, record);
+    CHECK(!saved.ok);
+    CHECK(saved.reused);
+    CHECK(readFile(target.path) == file);
+    CHECK(filesIn(folder) == std::vector<std::string>{"dibujo.lvskt"});
+
+    // Si no se puede leer el anterior, se guarda entero sin más.
+    std::filesystem::remove(target.path);
+    canvasproject::Pending pending;
+    saved = saveCanvas(canvas, target, {}, {}, record, &pending);
+    REQUIRE(saved.ok);
+    CHECK_EQ(pending.copiedLayers, 0);
+    CHECK_EQ(pending.encodedLayers, 3);
+    checkSameAsFile(canvas, saved.path);
+}
+
+TEST_CASE(project_saver_copies_entries_without_gpu) {
+    // El Saver solo: copia entradas de otro archivo a uno nuevo, con su nombre nuevo.
+    const std::string folder = test::tempFolder("project_saver_copies");
+    const SmallProject project = smallProject(folder);
+    REQUIRE(!project.path.empty());
+    std::vector<uint8_t> original = readFile(project.path);
+    zip::MemorySource source(original);
+    zip::Reader reader;
+    REQUIRE(reader.open(source));
+    const zip::Entry boceto = *reader.find(project::layerEntry(0));
+    const zip::Entry tinta = *reader.find(project::layerEntry(2));
+    const zip::Entry thumbnail = *reader.find(project::kThumbnailEntry);
+    const zip::Entry merged = *reader.find(project::kMergedEntry);
+
+    // Las capas al revés: la de arriba pasa abajo.
+    project::Document document = project.document;
+    std::swap(document.layers[0], document.layers[2]);
+    project::Saver saver;
+    project::Target target;
+    target.folder = folder;
+    target.stem = "copia";
+    REQUIRE(saver.begin(document, target, "x", project.path));
+    CHECK(saver.reusing());
+    saver.reuseLayer(0, tinta);
+    saver.addLayer(1, {});
+    saver.reuseLayer(2, boceto);
+    std::atomic<int> finished{0};
+    saver.finishReusing(thumbnail, merged, [&finished] { ++finished; });
+    saver.wait();
+    CHECK_EQ(finished.load(), 1);
+    std::optional<project::Saver::Result> result = saver.takeResult();
+    REQUIRE(result && result->ok);
+    CHECK(result->reused);
+    CHECK_EQ(result->path, folder + "copia.lvskt");
+    REQUIRE(result->entries.size() == size_t{9});
+    CHECK_EQ(result->entries.front().name, std::string("mimetype"));
+    CHECK_EQ(result->entries.back().name, std::string(project::kDocumentEntry));
+    const std::vector<ZipEntry> before = unzip(original);
+    const std::vector<ZipEntry> after = unzip(readFile(result->path));
+    CHECK(entryData(after, project::layerEntry(0)) == entryData(before, project::layerEntry(2)));
+    CHECK(entryData(after, project::layerEntry(2)) == entryData(before, project::layerEntry(0)));
+    CHECK(entryData(after, project::kMergedEntry) == entryData(before, project::kMergedEntry));
+    for (const zip::Entry& entry : result->entries) {
+        const ZipEntry* written = findEntry(after, entry.name);
+        REQUIRE(written != nullptr);
+        CHECK_EQ(entry.crc, libdeflate_crc32(0, written->data.data(), written->data.size()));
+        CHECK_EQ(entry.size, uint64_t{written->data.size()});
+    }
+    project::Loader loader;
+    REQUIRE(loader.open(result->path, 0));
+    const Loaded loaded = loadLayers(loader);
+    REQUIRE(loaded.ok);
+    CHECK(loaded.warnings.empty());
+    CHECK(loaded.pixels[0] == project.pixels[2]);
+    CHECK(loaded.pixels[2] == project.pixels[0]);
+
+    // Una entrada que el archivo ya no tiene así: falla y no deja nada.
+    zip::Entry wrong = boceto;
+    wrong.crc ^= 1;
+    target.stem = "mala";
+    REQUIRE(saver.begin(document, target, "x", project.path));
+    saver.reuseLayer(0, tinta);
+    saver.addLayer(1, {});
+    saver.reuseLayer(2, wrong);
+    saver.finishReusing(thumbnail, merged, {});
+    saver.wait();
+    result = saver.takeResult();
+    REQUIRE(result.has_value());
+    CHECK(!result->ok);
+    CHECK(result->reused);
+    CHECK(result->entries.empty());
+    CHECK(!std::filesystem::exists(folder + "mala.lvskt"));
+
+    // Sin archivo anterior que leer, no se puede copiar.
+    target.stem = "sin";
+    REQUIRE(saver.begin(document, target, "x", folder + "no-existe.lvskt"));
+    CHECK(!saver.reusing());
+    saver.abort("prueba", {});
+    saver.wait();
+    CHECK(!std::filesystem::exists(folder + "sin.lvskt"));
+
+    // Una capa que no se dio: el guardado termina (con error) en vez de esperar para siempre.
+    target.stem = "incompleto";
+    REQUIRE(saver.begin(document, target, "x"));
+    saver.addLayer(0, project.pixels[2]);
+    saver.finish(std::vector<uint8_t>(static_cast<size_t>(64 * 48 * 4), 255), {});
+    saver.wait();
+    result = saver.takeResult();
+    REQUIRE(result.has_value());
+    CHECK(!result->ok);
+    CHECK(!std::filesystem::exists(folder + "incompleto.lvskt"));
 }
 
 TEST_CASE(camera_placement_survives_another_window) {

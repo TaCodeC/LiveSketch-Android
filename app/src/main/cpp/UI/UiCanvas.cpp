@@ -17,6 +17,7 @@
 #include "UI/Ui.h"
 
 #include "Canvas/Canvas.h"
+#include "IO/Storage.h"
 #include "UI/Anim.h"
 #include "UI/ColorManage.h"
 #include "UI/Icons.h"
@@ -266,13 +267,6 @@ Press keyPress(ImGuiID id, const ImRect& rect, bool enabled) {
     return press;
 }
 
-// La marca de la app: un cuadrado rojo y "LIVESKETCH". `cy`: su centro vertical.
-void brand(ImDrawList* dl, float left, float cy) {
-    dl->AddRectFilled(ImVec2(left, cy - pt(4.0f)), ImVec2(left + pt(8.0f), cy + pt(4.0f)), th::kRed, pt(2.0f));
-    ui::tracked(dl, Weight::Bold, th::kMicro, ImVec2(left + pt(16.0f), cy), IM_COL32(235, 235, 245, 140), "LIVESKETCH",
-                0.12f);
-}
-
 bool closeButton(ImDrawList* dl, const ImRect& rect) {
     const Press press = ui::buttonFrame("##close", rect, ui::ButtonStyle::Secondary, true, pt(9.0f));
     ui::icon(dl, icon::kX, rect.GetCenter(), 16.0f, IM_COL32(235, 235, 245, 204));
@@ -314,14 +308,14 @@ float saveSizeWidth() {
     return pt(16.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, "Guardar tamaño").x + pt(18.0f);
 }
 
-// «Abrir proyecto» de la pantalla de inicio: con el texto si cabe; si no, solo el icono.
+// «Abrir archivo» de la pantalla de inicio: con el texto si cabe; si no, solo el icono.
 bool openProjectButton(ImDrawList* dl, const ImRect& rect, bool withText) {
     const Press press = ui::buttonFrame("##open-project", rect, ui::ButtonStyle::Secondary, true, pt(10.0f));
     const float cy = rect.GetCenter().y;
     if (withText) {
         ui::icon(dl, icon::kFolderOpen, ImVec2(rect.Min.x + pt(14.0f + 9.0f), cy), 18.0f, th::kLabel);
         ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(rect.Min.x + pt(14.0f + 18.0f + 8.0f), cy), Align::Left,
-                  th::kLabel, "Abrir proyecto", rect.GetWidth() - pt(14.0f + 18.0f + 8.0f + 10.0f));
+                  th::kLabel, "Abrir archivo", rect.GetWidth() - pt(14.0f + 18.0f + 8.0f + 10.0f));
     } else {
         ui::icon(dl, icon::kFolderOpen, rect.GetCenter(), 18.0f, th::kLabel);
     }
@@ -329,7 +323,7 @@ bool openProjectButton(ImDrawList* dl, const ImRect& rect, bool withText) {
 }
 
 float openProjectWidth() {
-    return pt(14.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, "Abrir proyecto").x + pt(16.0f);
+    return pt(14.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, "Abrir archivo").x + pt(16.0f);
 }
 
 } // namespace
@@ -364,6 +358,8 @@ void Ui::saveSavedSizes() const {
     for (const canvasspec::SavedSize& size : m_savedSizes) {
         out << canvasspec::toLine(size) << '\n';
     }
+    out.close();
+    io::persist();
 }
 
 void Ui::saveCanvasSize() {
@@ -1322,9 +1318,10 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
     bool save = false;
     bool openProject = false;
 
-    const char* description =
-        modal ? "El dibujo actual se cerrará: guárdalo antes como proyecto si quieres retomarlo."
-              : "NDI y el PNG usan el lienzo entero a este tamaño, sin importar el zoom.";
+    // Desde un lienzo, el de ahora no se pierde: se guarda en Proyectos.
+    const char* description = modal && m_status.projectSave != ProjectSave::None
+                                  ? "El dibujo actual queda guardado en Proyectos."
+                                  : "NDI y el PNG usan el lienzo entero a este tamaño, sin importar el zoom.";
     const char* surface = modal ? "##new-canvas" : "##start-card";
     const ImU32 tint = modal ? IM_COL32(24, 24, 28, 232) : IM_COL32(24, 24, 28, 176);
     const float e = ui::anim::easeOutCubic(std::clamp(presence, 0.0f, 1.0f));
@@ -1346,10 +1343,11 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
 
         const float titleHeight = ui::fontSize(th::kTitle);
         const float headerTop = L.safe[0] + pt(14.0f);
-        brand(dl, left, headerTop + pt(7.0f));
+        ui::parts::brand(dl, left, headerTop + pt(7.0f));
         const float titleCy = headerTop + pt(14.0f + 6.0f) + titleHeight * 0.5f;
         const float closeSize = pt(34.0f);
-        // A la derecha del título: cerrar (desde Acciones) o abrir un proyecto (al empezar).
+        // A la derecha del título: cerrar (desde Acciones o Proyectos) o abrir un archivo (al
+        // empezar, sin proyectos).
         const float titleWidth = ui::measure(Weight::Bold, th::kTitle, "Nuevo lienzo").x;
         const bool openText = width - titleWidth - pt(12.0f) >= openProjectWidth();
         const float buttonWidth = modal ? closeSize : (openText ? openProjectWidth() : closeSize);
@@ -1433,7 +1431,8 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         const float settingsWidth = std::max(pt(kMinSettings), (inner - gutter) * kSettingsShare);
         const float presetsWidth = inner - gutter - settingsWidth;
         const float closeSize = pt(32.0f);
-        // Arriba a la derecha: cerrar (desde Acciones) o abrir un proyecto (al empezar).
+        // Arriba a la derecha: cerrar (desde Acciones o Proyectos) o abrir un archivo (al
+        // empezar, sin proyectos).
         const float cornerWidth = modal ? closeSize : openProjectWidth();
         const float headerWidth = inner - cornerWidth - pt(12.0f);
         // Con poco alto (un teléfono en horizontal), la cabecera va en dos líneas cortas.
@@ -1487,7 +1486,7 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         } else {
             float top = rect.Min.y + pad;
             const float headerTop = top;
-            brand(dl, left, top + pt(7.0f));
+            ui::parts::brand(dl, left, top + pt(7.0f));
             top += pt(14.0f + 6.0f);
             ui::label(dl, Weight::Bold, th::kTitle, ImVec2(left, top + titleHeight * 0.5f), Align::Left, th::kLabel,
                       "Nuevo lienzo", headerWidth);
@@ -1599,26 +1598,6 @@ constexpr float kKeypadGap = 12.0f;       // entre las fichas de los ppp y el te
 
 constexpr const char* kPpiNote =
     "No reescala el dibujo: solo cambia el tamaño al imprimir, que también se guarda en el PNG.";
-
-// Fecha local de un SDL_Time (0: no se sabe).
-bool localDate(int64_t when, canvasspec::LocalTime* out) {
-    SDL_DateTime date;
-    if (when == 0 || !SDL_TimeToDateTime(when, &date, true)) {
-        return false;
-    }
-    *out = {date.year, date.month, date.day, date.hour, date.minute};
-    return true;
-}
-
-std::string dateText(int64_t when) {
-    canvasspec::LocalTime date;
-    canvasspec::LocalTime today;
-    SDL_Time now = 0;
-    if (!localDate(when, &date) || !SDL_GetCurrentTime(&now) || !localDate(now, &today)) {
-        return "—";
-    }
-    return canvasspec::formatDate(date, today);
-}
 
 // El nombre sin los espacios de los extremos.
 std::string trimmed(const char* text) {
@@ -1891,8 +1870,8 @@ void Ui::propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool
             {"MEMORIA", canvasspec::formatBytes(bytes)},
             {"TIEMPO DIBUJANDO", canvasspec::formatDuration(info.drawingSeconds)},
             {"TRAZOS", canvasspec::formatCount(info.strokes)},
-            {"CREADO", dateText(info.created)},
-            {"MODIFICADO", dateText(info.modified)},
+            {"CREADO", ui::parts::dateText(info.created)},
+            {"MODIFICADO", ui::parts::dateText(info.modified)},
         };
         const ImRect strip(ImVec2(left, y), ImVec2(right, y + pt(kFact * 3.0f)));
         const float radius = pt(12.0f);

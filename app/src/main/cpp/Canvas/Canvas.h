@@ -194,6 +194,9 @@ public:
     // propiedades, la selección automática, el difuminado, el relleno y el ajuste de imagen
     // (se guardan) y la transformación (se aplica).
     void settle();
+    // Hay algo a medias que settle() cerraría: el compuesto puede enseñar lo que aún no está
+    // en las capas (un trazo, una transformación, un relleno o un ajuste en vivo).
+    bool unsettled() const { return m_stroking || editPending() || livePending(); }
 
     // --- Selección (CanvasSelection.cpp) ---
     bool hasSelection() const { return m_selection.active(); }

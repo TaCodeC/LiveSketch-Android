@@ -1,10 +1,12 @@
 #pragma once
 
+#include "App/CanvasProject.h"
 #include "App/DisplayGamut.h"
 #include "Canvas/Camera.h"
 #include "Canvas/Canvas.h"
 #include "Canvas/CanvasView.h"
 #include "IO/ImageExport.h"
+#include "IO/Library.h"
 #include "IO/ProjectFile.h"
 #include "NDI/NdiOutput.h"
 #include "UI/Backdrop.h"
@@ -27,6 +29,9 @@ public:
     SDL_AppResult event(const SDL_Event& event);
     SDL_AppResult iterate();
     void quit();
+    // En la web, la página se oculta o se cierra: se guarda ya todo, como al pasar a segundo
+    // plano en Android. True si queda algo que se perdería al cerrarla.
+    bool suspendPage();
 
 private:
     // --- Ciclo de vida y contexto (App.cpp) ---
@@ -42,7 +47,7 @@ private:
     // Guardar en Descargas. En Android 10 o anterior hace falta el permiso de almacenamiento:
     // si aún no se sabe si está, se pide y devuelve false (lo de `task` se hace al llegar la
     // respuesta).
-    enum class StorageTask { None, Png, Project };
+    enum class StorageTask { None, Png, Export };
     bool storageReady(StorageTask task);
     void requestPngExport();
     void exportPng();
@@ -60,30 +65,84 @@ private:
     void wakeAt(uint64_t ticksMs);
 
     // --- Proyectos (AppProjects.cpp) ---
-    // El lienzo tiene cambios que no están en ningún proyecto guardado (o abierto).
-    bool canvasDirty() const { return m_canvas.ready() && m_canvas.documentVersion() != m_savedVersion; }
+    // Cada lienzo es un proyecto de la biblioteca (una carpeta de la app, con un archivo .lvskt
+    // por proyecto) que se guarda solo: un momento después de cada cambio, al pasar a segundo
+    // plano y antes de dejarlo (otro lienzo, otro proyecto, la pantalla de Proyectos o salir).
+    // Guardar otra vez solo comprime lo que cambió desde la última vez (ver canvasproject).
+    // Al arrancar: la carpeta de proyectos y el último que estaba abierto.
+    void openLibrary();
+    // El último proyecto que estaba abierto (vacío: ninguno), para volver a él al arrancar.
+    void setLastProject(const std::string& path);
     // Lo que se guarda del lienzo, la vista y el pincel (sin las cajas de las capas).
     project::Document projectDocument() const;
-    // Guardar proyecto: se avisa y, un momento después (para que el aviso ya se vea mientras
-    // se leen las capas), se guarda.
-    void requestProjectSave();
-    void scheduleProjectSave();
-    void saveProject();
+    // La vista, la capa activa y el color del pincel: no cambian el dibujo, pero se guardan
+    // con él al dejarlo o al pasar a segundo plano.
+    uint64_t projectMeta() const;
+    // El lienzo tiene algo que no está en su archivo. `meta`: también lo de projectMeta().
+    bool projectUnsaved(bool meta) const;
+    // Por qué se guarda: solo (un momento después de cambiar), porque lo pidió el usuario,
+    // para dejar el lienzo, al pasar a segundo plano o para exportarlo.
+    enum class SaveReason { Auto, User, Leave, Background, Export };
+    // Empieza a guardar el lienzo en su archivo de la biblioteca (`full`: sin copiar nada del
+    // anterior). El resultado llega a onProjectSaved().
+    void startSave(SaveReason reason, bool full = false);
     void onProjectSaved(const project::Saver::Result& result);
+    // Cada frame: la biblioteca, el guardado en marcha, guardar cuando toca y dejar el lienzo.
+    void updateProjects();
+    // Cuándo toca el guardado automático (SDL_GetTicks; 0 si no hay nada que guardar), para
+    // despertar el bucle a esa hora.
+    uint64_t autosaveDeadline() const;
+    // Guardar (el botón o Ctrl+S): se avisa y, un momento después (para que el aviso ya se vea
+    // mientras se leen las capas), se guarda.
+    void requestProjectSave();
+    // Pasa a segundo plano (o se oculta la página): se guarda lo que haya y se espera a que
+    // esté escrito (el sistema puede cerrar la app sin avisar).
+    void saveBeforeSuspend();
+    // En la web, si el navegador no guarda los datos de la app, se dice (una vez).
+    void checkStorage();
+
+    // Dejar el lienzo (ir a Proyectos, crear otro, abrir otro proyecto o salir): primero se
+    // guarda, mientras la interfaz lo dice y no deja dibujar; si no se puede, se pregunta si
+    // seguir sin guardar.
+    enum class Leave { None, Projects, NewCanvas, Open, Quit };
+    void requestLeave(Leave action, const CanvasSpec* spec = nullptr);
+    void stepLeave();
+    void performLeave();
+    // Cierra el lienzo (se ve la pantalla de Proyectos).
+    void closeCanvas();
+    // El lienzo de ahora pasa a ser otro (uno nuevo o el de un proyecto que se abre): su
+    // proyecto empieza de cero.
+    void resetProject();
+    // Lo que pide la pantalla de Proyectos y lo que hizo la biblioteca.
+    void applyProjectAction(const UiRequests::ProjectAction& action);
+    void onLibraryDone(const library::Library::Done& done);
+    // Exportar: una copia del archivo de un proyecto de la biblioteca en Descargas (en la web,
+    // una descarga) o donde se elija (Android y escritorio). `name`: el del lienzo, para el
+    // nombre de la copia. Con el lienzo, se guarda antes.
+    enum class ExportTo { None, Downloads, Choose };
+    void exportProject(const std::string& path, const std::string& name, ExportTo to);
+    void exportCanvasProject(ExportTo to);
+    // El sitio elegido para la copia (una ruta o, en Android, la URI de un documento).
+    void exportChosen(const std::string& source, const std::string& target);
+
     // Abrir proyecto: el selector de archivos del sistema (en la web, el del navegador). El
     // archivo elegido (o soltado en la ventana) llega como evento y se abre en iterate().
     void chooseProject();
     void fileChosen(std::string path);
-    // Lee el índice y la descripción del proyecto; si el lienzo tiene cambios, lo pregunta
-    // antes de empezar. `temporary`: una copia que se borra al terminar (en la web).
+    // Lee el índice y la descripción del proyecto (de la biblioteca o de fuera); si hay un
+    // lienzo, se deja antes. `temporary`: una copia que se borra al terminar (en la web).
     void openProjectFile(const std::string& path, bool temporary);
-    // Cambia el lienzo por el del proyecto (aún sin píxeles) y empieza a leer las capas.
+    // Cambia el lienzo por el del proyecto (aún sin píxeles) y empieza a leer las capas. Uno de
+    // fuera se guarda en la biblioteca al terminar de abrirlo.
     void startProjectOpen();
     // Cada frame mientras se abre: sube a la GPU las capas que ya están leídas.
     void stepProjectOpen();
     void finishProjectOpen();
     // Se descarta lo que se iba a abrir.
     void closeProjectFile();
+    // Se perdió el contexto gráfico y el dibujo con él: se vuelve a abrir el archivo del
+    // proyecto (o lo que se estaba abriendo). False si no tiene archivo o no se pudo abrir.
+    bool reloadProject();
 
     // --- Entrada (AppInput.cpp) ---
     bool routeEvent(const SDL_Event& event);   // true si la interfaz se queda con el evento
@@ -182,10 +241,57 @@ private:
     bool m_exportPending = false;        // permiso concedido: guardar en el próximo frame
 
     // Proyectos. Como el PNG, las capas se leen de la GPU en este hilo y se comprimen en otros.
+    static constexpr uint64_t kNoVersion = ~uint64_t{0};
+    library::Library m_library;
     project::Saver m_projectSaver;
-    uint64_t m_savedVersion = 0;         // documentVersion() de lo último guardado, creado o abierto
-    uint64_t m_savingVersion = 0;        // la que se está guardando
-    uint64_t m_saveAtMs = 0;             // cuándo empezar a guardar (SDL_GetTicks; 0: nada pendiente)
+    // El proyecto del lienzo.
+    struct ProjectState {
+        std::string path;                // su archivo en la biblioteca (vacío: aún no tiene)
+        bool stored = false;             // ese archivo existe y es este lienzo
+        canvasproject::Record record;    // lo que tiene el archivo, para copiar lo que no cambió
+        uint64_t savedVersion = 0;       // documentVersion() de lo que tiene
+        uint64_t savedMeta = 0;          // projectMeta() de lo que tiene
+        // Se abrió de fuera de la biblioteca: hay que guardarlo en ella (se copia de ahí).
+        bool import = false;
+        std::string source;              // el archivo de fuera
+        bool temporary = false;          // en la web, una copia que se borra después
+        uint64_t failedVersion = kNoVersion;   // no se pudo guardar esta versión: no se repite sola
+        std::string error;               // por qué (vacío: el último guardado salió bien)
+        uint64_t seenVersion = 0;        // documentVersion() del frame anterior
+        uint64_t changedMs = 0;          // cuándo cambió por última vez (SDL_GetTicks)
+    } m_project;
+    // Sube con cada lienzo: un guardado que termina después de cambiar de lienzo no es de este.
+    uint64_t m_canvasGeneration = 0;
+    // El guardado en marcha.
+    struct SaveState {
+        bool active = false;
+        SaveReason reason = SaveReason::Auto;
+        bool full = false;               // ya sin copiar nada del archivo anterior
+        uint64_t version = 0;            // documentVersion() y projectMeta() de lo que se guarda
+        uint64_t meta = 0;
+        uint64_t generation = 0;
+        canvasproject::Pending pending;
+    } m_saving;
+    uint64_t m_userSaveAtMs = 0;         // Guardar: cuándo empezar (SDL_GetTicks; 0: nada pendiente)
+    ExportTo m_exportCanvas = ExportTo::None;      // exportar el lienzo al terminar el guardado en marcha
+    ExportTo m_exportAfterSave = ExportTo::None;   // el guardado de SaveReason::Export: adónde después
+    struct LeaveState {
+        Leave action = Leave::None;
+        CanvasSpec spec;                 // NewCanvas: el lienzo que se crea
+        bool saved = false;              // ya se guardó (o se intentó)
+        bool asking = false;             // no se pudo guardar: se pregunta si seguir
+        uint64_t sinceMs = 0;            // desde cuándo se deja
+    } m_leave;
+    bool m_quit = false;                 // se sale en este frame
+    bool m_storageWarned = false;        // ya se dijo que el navegador no guarda los datos
+    bool m_ndiResume = false;            // NDI emitía al cerrar el lienzo: vuelve con el siguiente
+    // Exportar: el proyecto de la biblioteca que espera al permiso de almacenamiento.
+    struct PendingExport {
+        std::string path;
+        std::string name;
+    } m_pendingExport;
+    // Exportar donde se elija: el proyecto que se exporta mientras se elige dónde.
+    std::optional<std::string> m_exportChoosing;
     bool m_choosingFile = false;         // el selector de archivos del sistema está abierto
     struct ChosenFile {
         std::string path;
@@ -197,10 +303,11 @@ private:
         std::string path;
         std::string title;               // el nombre del lienzo o, si no tiene, el del archivo
         bool temporary = false;
-        bool confirming = false;         // se pregunta si perder los cambios del lienzo
+        bool library = false;            // es un proyecto de la biblioteca (si no, se importa)
         bool loading = false;            // ya es el lienzo: se suben sus capas
-        bool ndi = false;                // NDI emitía: vuelve al terminar
+        uint64_t version = 0;            // documentVersion() al empezar a subirlas
         int failedUploads = 0;           // capas que no se pudieron subir a la GPU
+        std::vector<canvasproject::SavedLayer> layers;   // las que quedaron como en el archivo
     } m_open;
 
     // Ritmo del bucle: a vsync mientras algo se mueve, dormido esperando eventos si no.

@@ -1,5 +1,6 @@
 #include "IO/Json.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -90,6 +91,26 @@ const Value& Value::operator[](std::string_view key) const {
 
 const Value& Value::operator[](size_t index) const {
     return index < m_items.size() ? m_items[index] : nullValue();
+}
+
+Value Value::text(std::string text) {
+    Value value;
+    value.m_type = Type::String;
+    value.m_string = std::move(text);
+    return value;
+}
+
+Value* Value::member(std::string_view key) {
+    if (!isObject()) {
+        return nullptr;
+    }
+    for (auto& [name, value] : m_members) {
+        if (name == key) {
+            return &value;
+        }
+    }
+    m_members.emplace_back(std::string(key), Value());
+    return &m_members.back().second;
 }
 
 // -----------------------------------------------------------------------------
@@ -602,6 +623,52 @@ Writer& Writer::null() {
     beforeValue();
     m_text += "null";
     return *this;
+}
+
+namespace {
+
+void writeValue(Writer& writer, const Value& value) {
+    switch (value.type()) {
+    case Value::Type::Null:
+        writer.null();
+        break;
+    case Value::Type::Bool:
+        writer.value(value.boolean());
+        break;
+    case Value::Type::Number:
+        writer.value(value.number());
+        break;
+    case Value::Type::String:
+        writer.value(value.string());
+        break;
+    case Value::Type::Array: {
+        const std::vector<Value>& items = value.items();
+        const bool numbers = !items.empty() && std::all_of(items.begin(), items.end(),
+                                                           [](const Value& item) { return item.isNumber(); });
+        writer.beginArray(numbers);
+        for (const Value& item : items) {
+            writeValue(writer, item);
+        }
+        writer.endArray();
+        break;
+    }
+    case Value::Type::Object:
+        writer.beginObject();
+        for (const auto& [name, member] : value.members()) {
+            writer.key(name);
+            writeValue(writer, member);
+        }
+        writer.endObject();
+        break;
+    }
+}
+
+} // namespace
+
+std::string write(const Value& value) {
+    Writer writer;
+    writeValue(writer, value);
+    return writer.text();
 }
 
 } // namespace json

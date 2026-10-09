@@ -1,10 +1,12 @@
 #include "IO/ProjectFile.h"
 
+#include "IO/FileChooser.h"
 #include "IO/ImageExport.h"
 #include "IO/Json.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_log.h>
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_time.h>
 
@@ -49,7 +51,7 @@ Saver::~Saver() {
     wait();
 }
 
-bool Saver::begin(Document document, const Target& target, std::string app) {
+bool Saver::begin(Document document, const Target& target, std::string app, const std::string& previous) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_busy) {
@@ -60,15 +62,19 @@ bool Saver::begin(Document document, const Target& target, std::string app) {
         m_onFinished = nullptr;
         m_entries.clear();
         m_written = 0;
+        m_writing = false;
         m_finishing = false;
         m_failed = false;
         m_error.clear();
         m_pending = 0;
+        m_reused = false;
     }
+    m_canReuse = false;
     m_document = std::move(document);
     m_app = std::move(app);
     m_path.clear();
     m_tempPath.clear();
+    m_previousSource.reset();
 
     if (!target.path.empty()) {
         m_path = target.path;
@@ -86,6 +92,18 @@ bool Saver::begin(Document document, const Target& target, std::string app) {
         m_busy = false;
         m_document = {};
         return false;
+    }
+
+    // El archivo anterior, si se puede leer su índice: de ahí se copia lo que no cambió.
+    if (!previous.empty()) {
+        auto source = std::make_unique<zip::FileSource>();
+        if (source->open(SDL_IOFromFile(previous.c_str(), "rb")) && m_previous.open(*source)) {
+            m_previousSource = std::move(source);
+            m_canReuse = true;
+        } else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "No se puede copiar nada de %s: se guarda entero",
+                        previous.c_str());
+        }
     }
 
     SDL_Time now = 0;
@@ -184,23 +202,51 @@ void Saver::addLayer(int index, std::vector<uint8_t> pixels) {
     });
 }
 
+void Saver::reuseLayer(int index, const zip::Entry& entry) {
+    if (!m_pool || index < 0 || static_cast<size_t>(index) >= m_document.layers.size()) {
+        return;
+    }
+    const size_t maxSize = maxLayerFile(m_document.layers[static_cast<size_t>(index)]);
+    bool write = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        Entry& slot = m_entries[static_cast<size_t>(index)];
+        slot.copy = entry;
+        slot.maxSize = maxSize;
+        slot.queued = true;
+        slot.ready = true;
+        m_reused = true;
+        write = claimWriter();
+    }
+    if (write) {
+        m_pool->submit([this] { drain(); });
+    }
+}
+
 void Saver::finish(std::vector<uint8_t> composite, std::function<void()> onFinished) {
     if (!m_pool) {
         return;
     }
     const size_t layers = m_document.layers.size();
     const size_t bytes = composite.capacity();
+    bool write = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_onFinished = std::move(onFinished);
         m_entries[layers + 1].queued = true;
         m_entries[layers + 2].queued = true;
         m_pending += bytes;
+        m_finishing = true;
+        write = skipMissingLayers() && claimWriter();
     }
+    if (write) {
+        m_pool->submit([this] { drain(); });
+    }
+    // Sin el nombre del lienzo (al contrario que el PNG que se exporta): así renombrar un
+    // proyecto solo cambia document.json.
     png::Info info;
     info.ppi = m_document.info.ppi;
     info.profile = m_document.info.profile;
-    info.title = m_document.info.name;
     m_pool->submit([this, layers, bytes, info, width = m_document.width, height = m_document.height,
                     composite = std::move(composite)]() mutable {
         // Primero la miniatura, que se hace con los colores premultiplicados.
@@ -234,21 +280,59 @@ void Saver::finish(std::vector<uint8_t> composite, std::function<void()> onFinis
         release(bytes);
         complete(layers + 2, std::move(file), error);
     });
-    std::function<void()> done;
+}
+
+void Saver::finishReusing(const zip::Entry& thumbnail, const zip::Entry& merged, std::function<void()> onFinished) {
+    if (!m_pool) {
+        return;
+    }
+    const size_t layers = m_document.layers.size();
+    LayerInfo small;
+    small.rect = IRect::ofSize(kThumbnailSide, kThumbnailSide);
+    LayerInfo whole;
+    whole.rect = IRect::ofSize(m_document.width, m_document.height);
+    bool write = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_finishing = true;
-        if (flush()) {
-            done = std::move(m_onFinished);
+        m_onFinished = std::move(onFinished);
+        const std::pair<const zip::Entry*, size_t> copies[2] = {{&thumbnail, maxLayerFile(small)},
+                                                                {&merged, maxLayerFile(whole)}};
+        for (size_t i = 0; i < 2; ++i) {
+            Entry& slot = m_entries[layers + 1 + i];
+            slot.copy = *copies[i].first;
+            slot.maxSize = copies[i].second;
+            slot.queued = true;
+            slot.ready = true;
         }
+        m_reused = true;
+        m_finishing = true;
+        skipMissingLayers();
+        write = claimWriter();
     }
-    if (done) {
-        done();
+    if (write) {
+        m_pool->submit([this] { drain(); });
     }
 }
 
+bool Saver::skipMissingLayers() {
+    bool skipped = false;
+    for (size_t i = 0; i < m_document.layers.size(); ++i) {
+        Entry& slot = m_entries[i];
+        if (!slot.queued) {
+            slot.queued = true;
+            slot.ready = true;
+            skipped = true;
+            if (!m_failed) {
+                m_failed = true;
+                m_error = "faltó una capa por guardar";
+            }
+        }
+    }
+    return skipped;
+}
+
 void Saver::abort(std::string reason, std::function<void()> onFinished) {
-    std::function<void()> done;
+    bool write = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_busy || m_finishing) {
@@ -267,17 +351,15 @@ void Saver::abort(std::string reason, std::function<void()> onFinished) {
             }
         }
         m_finishing = true;
-        if (flush()) {
-            done = std::move(m_onFinished);
-        }
+        write = claimWriter();
     }
-    if (done) {
-        done();
+    if (write) {
+        m_pool->submit([this] { drain(); });
     }
 }
 
 void Saver::complete(size_t slot, std::vector<uint8_t> data, const std::string& error) {
-    std::function<void()> done;
+    bool write = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_failed && (data.empty() || !error.empty())) {
@@ -286,67 +368,124 @@ void Saver::complete(size_t slot, std::vector<uint8_t> data, const std::string& 
         }
         m_entries[slot].data = std::move(data);
         m_entries[slot].ready = true;
-        if (flush()) {
-            done = std::move(m_onFinished);
-        }
+        write = claimWriter();
     }
+    if (write) {
+        drain();   // ya en otro hilo (o en pump(), en la web)
+    }
+}
+
+bool Saver::claimWriter() {
+    if (m_writing || !m_busy) {
+        return false;
+    }
+    m_writing = true;
+    return true;
+}
+
+void Saver::drain() {
+    std::function<void()> done;
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // En orden: el archivo sale igual aunque las capas terminen en otro orden. Mientras se
+    // escribe, el cerrojo queda libre (para la interfaz y los que terminan): lo que llegue
+    // se ve al volver a mirar.
+    while (m_written < m_entries.size() && m_entries[m_written].ready) {
+        Entry entry = std::move(m_entries[m_written]);
+        m_entries[m_written].data = {};
+        const bool skip = m_failed;
+        lock.unlock();
+        std::string error;
+        const bool ok = skip || writeEntry(entry, &error);
+        entry = {};
+        lock.lock();
+        if (!ok && !m_failed) {
+            m_failed = true;
+            m_error = std::move(error);
+        }
+        ++m_written;
+    }
+    if (m_finishing && m_written == m_entries.size() && m_busy) {
+        const bool failed = m_failed;
+        std::string error = m_error;
+        lock.unlock();
+        Result result = close(failed, std::move(error));
+        lock.lock();
+        m_result = std::move(result);
+        m_entries.clear();
+        m_busy = false;
+        done = std::move(m_onFinished);
+        m_onFinished = nullptr;
+    }
+    m_writing = false;
+    lock.unlock();
     if (done) {
         done();
     }
 }
 
-bool Saver::flush() {
-    // En orden: el archivo sale igual aunque las capas terminen en otro orden.
-    while (m_written < m_entries.size() && m_entries[m_written].ready) {
-        Entry& entry = m_entries[m_written];
-        if (!m_failed && !m_zip->add(entry.name, entry.data, zip::Method::Stored)) {
-            m_failed = true;
-            m_error = SDL_GetError();
+bool Saver::writeEntry(Entry& entry, std::string* error) {
+    if (entry.copy) {
+        // Del archivo anterior, si sigue como estaba (el índice lo dice) y se lee bien (su CRC
+        // lo dice).
+        const zip::Entry* stored = m_previousSource ? m_previous.find(entry.copy->name) : nullptr;
+        if (!stored || stored->crc != entry.copy->crc || stored->size != entry.copy->size) {
+            *error = "el archivo anterior cambió mientras tanto";
+            return false;
         }
-        entry.data = {};
-        ++m_written;
+        if (!m_previous.read(*stored, entry.data, entry.maxSize)) {
+            *error = "no se pudo copiar del archivo anterior: " + m_previous.error();
+            return false;
+        }
     }
-    if (!m_finishing || m_written < m_entries.size() || !m_busy) {
+    if (!m_zip->add(entry.name, entry.data, zip::Method::Stored)) {
+        *error = SDL_GetError();
         return false;
     }
-    close();
     return true;
 }
 
-void Saver::close() {
-    if (!m_failed) {
+Saver::Result Saver::close(bool failed, std::string error) {
+    if (!failed) {
         // Lo último, la descripción: un archivo cortado antes de llegar aquí no se abre a medias.
         const std::string stack = stackXml(m_document);
         const std::string document = documentJson(m_document, m_app);
         if (!m_zip->add(kStackEntry, bytesOf(stack), zip::Method::Deflate) ||
             !m_zip->add(kDocumentEntry, bytesOf(document), zip::Method::Deflate) || !m_zip->finish()) {
-            m_failed = true;
-            m_error = SDL_GetError();
+            failed = true;
+            error = SDL_GetError();
         }
     }
     const uint64_t size = m_zip ? m_zip->size() : 0;
-    if (m_io && !SDL_CloseIO(m_io) && !m_failed) {
-        m_failed = true;
-        m_error = SDL_GetError();
+    if (m_io && !SDL_CloseIO(m_io) && !failed) {
+        failed = true;
+        error = SDL_GetError();
     }
     m_io = nullptr;
-    if (!m_failed && !m_tempPath.empty() && !SDL_RenamePath(m_tempPath.c_str(), m_path.c_str())) {
-        m_failed = true;
-        m_error = SDL_GetError();
+    // El anterior se suelta antes de sustituirlo (en Windows no se podría con él abierto).
+    m_previous = {};
+    m_previousSource.reset();
+    if (!failed && !m_tempPath.empty() && !SDL_RenamePath(m_tempPath.c_str(), m_path.c_str())) {
+        failed = true;
+        error = SDL_GetError();
     }
-    if (m_failed) {
+    if (failed) {
         SDL_RemovePath((m_tempPath.empty() ? m_path : m_tempPath).c_str());
     }
     Result result;
-    result.ok = !m_failed;
+    result.ok = !failed;
     result.path = m_path;
-    result.error = m_error;
+    result.error = std::move(error);
     result.bytes = result.ok ? size : 0;
-    m_result = std::move(result);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        result.reused = m_reused;
+    }
+    if (result.ok && m_zip) {
+        result.entries = m_zip->entries();
+    }
     m_zip.reset();
-    m_entries.clear();
     m_document = {};
-    m_busy = false;
+    return result;
 }
 
 bool Saver::busy() const {
@@ -394,7 +533,7 @@ Loader::~Loader() {
 }
 
 bool Loader::open(const std::string& path, int maxSide) {
-    SDL_IOStream* io = SDL_IOFromFile(path.c_str(), "rb");
+    SDL_IOStream* io = io::openFile(path, "rb");
     if (!io) {
         m_error = "no se pudo leer el archivo";
         return false;
@@ -407,7 +546,7 @@ bool Loader::open(const std::string& path, int maxSide) {
     // No se puede ir de un sitio a otro del archivo (en Android, uno que llega por una
     // tubería): se lee entero.
     file.reset();
-    io = SDL_IOFromFile(path.c_str(), "rb");
+    io = io::openFile(path, "rb");
     size_t size = 0;
     void* data = io ? SDL_LoadFile_IO(io, &size, true) : nullptr;
     if (!data) {
@@ -477,6 +616,12 @@ bool Loader::readDocument(int maxSide) {
 std::vector<std::string> Loader::warnings() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_warnings;
+}
+
+std::optional<zip::Entry> Loader::entry(std::string_view name) const {
+    // El índice ya no cambia: se puede mirar mientras se leen las capas.
+    const zip::Entry* entry = m_zip.find(name);
+    return entry ? std::optional<zip::Entry>(*entry) : std::nullopt;
 }
 
 std::vector<size_t> Loader::queueMore() {

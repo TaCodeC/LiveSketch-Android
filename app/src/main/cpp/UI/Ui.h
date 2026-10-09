@@ -15,12 +15,25 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class Canvas;
+namespace library {
+class Library;
+struct Summary;
+} // namespace library
 
 // Con qué se dibuja el trazo en curso (la forma rápida explica cómo hacerla perfecta).
 enum class StrokePointer { None, Pen, Finger, Mouse };
+
+// El proyecto del lienzo, para el botón Guardar: todo está en su archivo, hay cambios que aún
+// no (se guardan solos enseguida), se está guardando porque se pidió o no se pudo guardar.
+enum class ProjectSave { None, Saved, Unsaved, Saving, Failed };
+
+// La app trabaja y la interfaz no deja tocar nada: abre un proyecto o guarda el lienzo para
+// dejarlo.
+enum class Busy { None, Opening, Saving };
 
 // Lo que la interfaz necesita saber de la app en cada frame.
 struct UiStatus {
@@ -53,25 +66,43 @@ struct UiStatus {
     int ndiConnections = 0;
     std::string ndiError;
     bool exporting = false;       // hay un PNG guardándose (o esperando el permiso)
-    bool savingProject = false;   // hay un proyecto guardándose (o esperando el permiso)
-    // Abriendo un proyecto: lo que lleva (de 0 a 1; -1 si no se abre ninguno) y su nombre
-    // (vacío si no tiene).
-    float openProgress = -1.0f;
-    std::string openTitle;
+    // El proyecto del lienzo y, si no se pudo guardar, por qué.
+    ProjectSave projectSave = ProjectSave::None;
+    std::string projectError;
+    bool exportingProject = false;   // se exporta el proyecto del lienzo (o se guarda para eso)
+    // Abriendo un proyecto o guardando el lienzo para dejarlo: lo que lleva (de 0 a 1; -1 si
+    // no se sabe), el nombre del lienzo (vacío si no tiene) y desde cuándo (SDL_GetTicks).
+    Busy busy = Busy::None;
+    float busyProgress = -1.0f;
+    std::string busyTitle;
+    uint64_t busySinceMs = 0;
+    // Los proyectos, para la pantalla de Proyectos (null: no hay dónde guardarlos).
+    const library::Library* library = nullptr;
 };
 
 // Lo que la interfaz pide a la app en este frame.
 struct UiRequests {
-    bool createCanvas = false;   // crear un lienzo nuevo como `canvas`
+    bool createCanvas = false;   // crear un lienzo nuevo como `canvas` (el de ahora se guarda antes)
     CanvasSpec canvas;
     bool fitView = false;   // centrar el lienzo (animado)
     int rotateView = 0;     // girar la vista de 15 en 15 grados (+: en el sentido de las agujas del reloj)
     bool straightenView = false;   // dejar la vista derecha
     bool flipView = false;  // voltear la vista en horizontal (o quitar el volteo)
     bool savePng = false;
-    bool saveProject = false;
-    bool openProject = false;     // elegir un proyecto para abrirlo
-    bool openConfirmed = false;   // abrir el proyecto aunque se pierdan los cambios (ver askOpenProject)
+    bool saveProject = false;     // Guardar (el proyecto del lienzo)
+    bool exportProject = false;   // exportar el proyecto del lienzo (a Descargas; en la web, descargarlo)
+    bool exportProjectTo = false; // exportarlo eligiendo dónde (Android y escritorio)
+    bool openProject = false;     // elegir un archivo de proyecto para abrirlo
+    bool showProjects = false;    // dejar el lienzo e ir a Proyectos
+    bool leaveConfirmed = false;  // dejar el lienzo aunque no se pudo guardar (ver askLeave)
+    // Lo que se pide en la pantalla de Proyectos para un proyecto de la biblioteca.
+    struct ProjectAction {
+        // Export: a Descargas (en la web, descargarlo); ExportTo: eligiendo dónde.
+        enum class Kind { None, Open, Rename, Duplicate, Export, ExportTo, Remove };
+        Kind kind = Kind::None;
+        std::string path;
+        std::string name;   // Rename: el nuevo; Duplicate: el de la copia; al exportar, el del proyecto
+    } project;
     bool quit = false;
     int ndi = -1;           // 1: encender NDI, 0: apagarlo
 };
@@ -98,7 +129,8 @@ enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
 // (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
 // (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
 // rellenar), UiPen.cpp (curva de presión y suavizado), UiCanvas.cpp (tarjeta de lienzo
-// nuevo y propiedades del lienzo) y UiDialogs.cpp (alertas y pantalla de inicio).
+// nuevo y propiedades del lienzo), UiDialogs.cpp (confirmaciones y alertas) y UiProjects.cpp
+// (la pantalla de Proyectos).
 class Ui {
 public:
     // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
@@ -112,8 +144,8 @@ public:
     // Escala y reloj de las animaciones. Después del NewFrame de los backends y antes de
     // ImGui::NewFrame().
     void beginFrame(const UiStatus& status);
-    // Toda la interfaz del frame. `canvas` es null hasta que se crea el lienzo: entonces
-    // se muestra la pantalla de inicio.
+    // Toda la interfaz del frame. `canvas` es null sin lienzo: entonces se muestra la
+    // pantalla de Proyectos.
     void build(Canvas* canvas, UiRequests& requests);
 
     // --- Para la entrada de la app ---
@@ -146,24 +178,20 @@ public:
     void dismissNotice(Notice kind);
     // Deshacer o rehacer desde un gesto o un atajo (ya hecho o no: `done`).
     void showUndo(bool redo, bool done);
-    // Diálogo de salir (botón atrás de Android con todo cerrado).
-    void askExit();
     // Alerta con un solo botón: por qué no se pudo guardar o abrir un proyecto, o lo que se
     // arregló al abrirlo. Si ya hay otra confirmación abierta, va como aviso.
     void showAlert(std::string title, std::string message, Notice kind = Notice::Error);
 
-    // --- Proyectos ---
-    // Confirmación para abrir un proyecto sobre un dibujo con cambios sin guardar. `title`:
-    // su nombre (vacío si no tiene). Mientras se ve, confirmingOpen(); al aceptarla, la
-    // interfaz pide openConfirmed.
-    void askOpenProject(const std::string& title);
-    bool confirmingOpen() const { return m_dialog == Dialog::OpenProject; }
-    // Quita esa confirmación: llegó otro proyecto que la sustituye.
-    void cancelOpenProject() {
-        if (m_dialog == Dialog::OpenProject) {
-            m_dialog = Dialog::None;
-        }
-    }
+    // --- Proyectos (UiProjects.cpp) ---
+    // No se pudo guardar el lienzo antes de dejarlo: se pregunta si dejarlo igualmente, con
+    // `confirm` en el botón. Mientras se ve, confirmingLeave(); al aceptarla, la interfaz pide
+    // leaveConfirmed.
+    void askLeave(std::string title, std::string message, std::string confirm);
+    bool confirmingLeave() const { return m_dialog == Dialog::Leave; }
+    // El proyecto que estaba abierto (su nombre de archivo en la carpeta de proyectos; vacío
+    // si ninguno), para volver a él al arrancar. Se guarda con las preferencias.
+    const std::string& lastProject() const { return m_prefs.lastProject; }
+    void setLastProject(std::string name);
     // Se abrió un proyecto (después de canvasCreated): el color del pincel que guardaba, en
     // el perfil del lienzo (null si no lo guardaba).
     void projectOpened(Canvas& canvas, const float* brushColor);
@@ -204,7 +232,17 @@ private:
     enum class ActionsPage { Main, Properties };
     // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
     enum class ColorTarget { Brush, Background };
-    enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas, ConvertProfile, OpenProject, Alert };
+    enum class Dialog {
+        None,
+        DeleteLayer,
+        RenameLayer,
+        NewCanvas,
+        ConvertProfile,
+        Leave,
+        RenameProject,
+        DeleteProject,
+        Alert
+    };
 
     struct Layout {
         ImVec2 display;
@@ -239,6 +277,7 @@ private:
         int size = 1;   // tamaño de la interfaz: 0 pequeña, 1 normal, 2 grande
         PressureCurve pressure;     // del lápiz
         float smoothing = 0.0f;     // suavizado de todos los trazos (0..1)
+        std::string lastProject;    // ver lastProject()
     };
 
     // Ajustes de cada herramienta: el pincel, difuminar y el borrador guardan los suyos.
@@ -316,8 +355,9 @@ private:
     void drawHud(Canvas& canvas);
     void drawPicker(Canvas& canvas);
     void drawToast();
-    // Mientras se abre un proyecto: tapa la interfaz con lo que lleva.
-    void drawOpening();
+    // Mientras la app abre un proyecto o guarda el lienzo para dejarlo: tapa la interfaz con lo
+    // que hace (al guardar, solo si tarda un poco).
+    void drawBusy();
     // Cápsula de arriba (donde salen los avisos) mientras se gira la vista o se ajusta una
     // forma rápida. Va antes que los avisos: mientras se ve, los oculta.
     void drawCapsules(const Canvas& canvas);
@@ -467,7 +507,23 @@ private:
     void openDialog(Dialog dialog, const Canvas* canvas);
     // Confirmación para pasar el lienzo a `profile` (dice si se podrá deshacer).
     void askConvertProfile(Canvas& canvas, ColorProfile profile);
+    // Fondo de la pantalla de Proyectos y de la tarjeta de inicio.
+    void startBackground();
+    // Sin proyectos: la tarjeta de lienzo nuevo, sola.
     void startScreen(UiRequests& requests);
+
+    // --- UiProjects.cpp ---
+    // Sin lienzo: los proyectos de la biblioteca (o, si no hay, la tarjeta de lienzo nuevo).
+    void projectsScreen(UiRequests& requests);
+    // Las fichas de los proyectos en `view`, que se desplaza.
+    void projectGrid(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests);
+    void projectCard(ImDrawList* dl, const library::Summary& item, const ImRect& rect, bool busy,
+                     UiRequests& requests);
+    // El menú de un proyecto (Renombrar, Duplicar, Exportar, Eliminar), junto a su botón.
+    void projectMenu(UiRequests& requests);
+    void openProjectMenu(const std::string& path, const ImRect& anchor);
+    // La miniatura del proyecto en una textura, en el perfil de la pantalla (0 si no tiene).
+    GLuint projectThumbnail(const library::Summary& item);
 
     // --- UiCanvas.cpp ---
     // Lo que dice el resumen de la tarjeta de lienzo nuevo.
@@ -684,11 +740,28 @@ private:
     uint32_t m_dialogLayerId = 0;
     std::string m_dialogTitle;
     std::string m_dialogMessage;
+    std::string m_dialogConfirm;    // Leave: el botón que deja el lienzo
+    std::string m_dialogProject;    // RenameProject y DeleteProject: el proyecto
     ColorProfile m_dialogProfile = ColorProfile::Srgb;   // ConvertProfile: al que se pasa
     Notice m_dialogKind = Notice::Error;                 // Alert: decide el icono
     char m_renameBuffer[64] = {};
     bool m_dialogFocus = false;
-    std::string m_openingTitle;     // el proyecto que se abre (sigue mientras se desvanece)
+    // Lo que tapa la interfaz (sigue mientras se desvanece).
+    Busy m_busyShown = Busy::None;
+    std::string m_busyTitle;
+
+    // Pantalla de Proyectos: el menú abierto (el proyecto y el botón que lo abrió) y las
+    // miniaturas en la GPU, por archivo.
+    std::string m_projectMenu;
+    ImRect m_projectMenuAnchor;
+    std::string m_projectMenuShown;   // el que se dibuja (sigue mientras se cierra)
+    struct ProjectThumb {
+        gfx::Texture texture;
+        int64_t fileTime = 0;         // la del archivo de la que se hizo
+        ColorProfile display = ColorProfile::Srgb;
+    };
+    std::unordered_map<std::string, ProjectThumb> m_projectThumbs;
+    uint64_t m_libraryLoadingSince = 0;   // desde cuándo se buscan los proyectos (0: no se buscan)
 
     // Lienzo nuevo: lo que se configura, «Mis tamaños» y el número que se escribe.
     CanvasForm m_canvasForm;

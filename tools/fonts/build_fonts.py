@@ -171,6 +171,10 @@ ICONS = {
     # Proyectos: guardar y abrir.
     "kSave": "save",
     "kFolderOpen": "folder-open",
+    "kGallery": "layout-grid",
+    "kDownload": "download",
+    "kFileOutput": "file-output",
+    "kFileX": "file-x-2",
 }
 
 
