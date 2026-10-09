@@ -14,7 +14,9 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
-#elif !defined(SDL_PLATFORM_EMSCRIPTEN)
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+#include <emscripten/em_asm.h>
+#else
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
 #endif
@@ -333,6 +335,35 @@ void setLaunchFileListener([[maybe_unused]] std::function<void()> listener) {
 #if defined(SDL_PLATFORM_ANDROID)
     std::lock_guard<std::mutex> lock(g_launchMutex);
     g_launchListener = std::move(listener);
+#endif
+}
+
+bool takeRestoredLaunch() {
+#if defined(SDL_PLATFORM_ANDROID)
+    bool restored = false;
+    // MainActivity.takeRestored()
+    withActivityClass([&restored](JNIEnv* env, jclass activityClass) {
+        jmethodID take = env->GetStaticMethodID(activityClass, "takeRestored", "()Z");
+        if (jniFailed(env) || !take) {
+            return false;
+        }
+        const jboolean value = env->CallStaticBooleanMethod(activityClass, take);
+        if (jniFailed(env)) {
+            return false;
+        }
+        restored = value == JNI_TRUE;
+        return true;
+    });
+    return restored;
+#elif defined(SDL_PLATFORM_EMSCRIPTEN)
+    static bool taken = false;
+    if (taken) {
+        return false;
+    }
+    taken = true;
+    return EM_ASM_INT({ return document.wasDiscarded ? 1 : 0; }) != 0;
+#else
+    return false;
 #endif
 }
 

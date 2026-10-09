@@ -1,8 +1,8 @@
-// Pantalla de Proyectos: lo que se ve sin lienzo. Una ficha por proyecto de la biblioteca (la
-// miniatura, el nombre, el tamaño, la fecha y lo que ocupa), del último que cambió al primero.
-// Tocar una lo abre; su botón «⋯» (o el clic derecho) da Renombrar, Duplicar, Exportar y
-// Eliminar. Arriba, «Abrir archivo» y «Nuevo lienzo». Sin proyectos se ve directamente la
-// tarjeta de lienzo nuevo, como al estrenar la app.
+// Pantalla de Proyectos: lo primero que se ve al abrir la app y lo que se ve sin lienzo. Una
+// ficha por proyecto de la biblioteca (la miniatura, el nombre, el tamaño, la fecha y lo que
+// ocupa), del último que cambió al primero. Tocar una lo abre; su botón «⋯» (o el clic
+// derecho) da Renombrar, Duplicar, Exportar y Eliminar. Arriba, «Abrir archivo» y «Nuevo
+// lienzo». Sin proyectos, en lugar de las fichas, qué es esta pantalla y esos dos botones.
 #include "UI/Ui.h"
 
 #include "Canvas/CanvasSpec.h"
@@ -43,6 +43,15 @@ constexpr float kMenuWidth = 236.0f;
 constexpr float kMenuRow = 44.0f;
 constexpr float kHeaderButton = 42.0f;
 
+// Sin proyectos (pt): la ilustración (tres fichas apiladas), el título y el ancho del texto.
+constexpr float kStackWidth = 148.0f;
+constexpr float kStackCardHeight = 128.0f;
+constexpr float kStackRise = 13.0f;        // lo que asoma cada ficha por encima de la siguiente
+constexpr float kStackHeight = kStackCardHeight + kStackRise * 2.0f;
+constexpr float kEmptyTitle = 20.0f;
+constexpr float kEmptyWidth = 400.0f;
+constexpr float kEmptyButtonMin = 156.0f;
+
 // Buscando los proyectos: si tarda, se dice.
 constexpr uint64_t kLoadingDelayMs = 300;
 
@@ -59,6 +68,9 @@ void copyText(const std::string& text, char* buffer, size_t size) {
 std::string displayName(const library::Summary& item) { return item.name.empty() ? "Sin nombre" : item.name; }
 
 std::string projectCount(const std::vector<library::Summary>& items) {
+    if (items.empty()) {
+        return "Sin proyectos";
+    }
     uint64_t bytes = 0;
     for (const library::Summary& item : items) {
         bytes += item.bytes;
@@ -93,6 +105,54 @@ bool headerButton(ImDrawList* dl, const char* id, const ImRect& rect, const char
 
 float headerButtonWidth(const char* text) {
     return pt(18.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, text).x + pt(20.0f);
+}
+
+// La ilustración de la pantalla sin proyectos, con su borde de arriba en `top`: tres fichas
+// apiladas como las de los proyectos; la de delante, con un «+» donde iría la miniatura y
+// dos rayas donde irían el nombre y los datos.
+void emptyStack(ImDrawList* dl, float cx, float top) {
+    const float width = pt(kStackWidth);
+    const float height = pt(kStackCardHeight);
+    const float rise = pt(kStackRise);
+    const float radius = pt(kCardRadius);
+    // De atrás adelante, cada una algo más ancha y más clara. Son opacas: tapan las de detrás.
+    struct Sheet {
+        float scale;
+        ImU32 fill;
+        ImU32 border;
+    };
+    const Sheet sheets[3] = {
+        {0.80f, IM_COL32(24, 24, 28, 255), IM_COL32(255, 255, 255, 16)},
+        {0.90f, IM_COL32(30, 30, 35, 255), IM_COL32(255, 255, 255, 22)},
+        {1.00f, IM_COL32(37, 37, 42, 255), th::kControlBorderStrong},
+    };
+    ImRect front;
+    for (int i = 0; i < 3; ++i) {
+        const float w = std::round(width * sheets[i].scale);
+        const float y = top + rise * static_cast<float>(i);
+        const ImRect rect(ImVec2(std::round(cx - w * 0.5f), y), ImVec2(std::round(cx - w * 0.5f) + w, y + height));
+        ui::shadow(dl, rect, radius, pt(i == 2 ? 30.0f : 18.0f), pt(i == 2 ? 10.0f : 4.0f), i == 2 ? 0.45f : 0.25f);
+        dl->AddRectFilled(rect.Min, rect.Max, sheets[i].fill, radius);
+        ui::outline(dl, rect, radius, sheets[i].border, ui::hairline());
+        front = rect;
+    }
+    // La caja de la miniatura, con el «+».
+    const float pad = pt(7.0f);
+    const ImRect box(ImVec2(front.Min.x + pad, front.Min.y + pad), ImVec2(front.Max.x - pad, front.Min.y + pad + pt(82.0f)));
+    dl->AddRectFilled(box.Min, box.Max, IM_COL32(0, 0, 0, 80), radius - pad * 0.5f);
+    const ImVec2 center = box.GetCenter();
+    dl->AddCircleFilled(center, pt(20.0f), IM_COL32(10, 132, 255, 40), 0);
+    dl->AddCircle(center, pt(20.0f), IM_COL32(61, 155, 255, 110), 0, pt(1.5f));
+    ui::icon(dl, icon::kPlus, center, 20.0f, th::kAccentText);
+    // El nombre y los datos, en gris.
+    const float textLeft = front.Min.x + pt(12.0f);
+    const float textWidth = front.GetWidth() - pt(24.0f);
+    const float line1 = box.Max.y + pt(14.0f);
+    const float line2 = line1 + pt(13.0f);
+    dl->AddRectFilled(ImVec2(textLeft, line1 - pt(3.5f)), ImVec2(textLeft + std::round(textWidth * 0.58f), line1 + pt(3.5f)),
+                      IM_COL32(255, 255, 255, 46), pt(3.5f));
+    dl->AddRectFilled(ImVec2(textLeft, line2 - pt(3.0f)), ImVec2(textLeft + std::round(textWidth * 0.36f), line2 + pt(3.0f)),
+                      IM_COL32(255, 255, 255, 24), pt(3.0f));
 }
 
 // Fila del menú de un proyecto.
@@ -208,8 +268,8 @@ GLuint Ui::projectThumbnail(const library::Summary& item) {
 void Ui::projectsScreen(UiRequests& requests) {
     const library::Library* library = m_status.library;
     const bool loading = library && library->loading();
-    // Sin proyectos (o sin dónde guardarlos), la tarjeta de lienzo nuevo.
-    const bool start = !library || (!loading && library->items().empty());
+    // Sin dónde guardar proyectos, la tarjeta de lienzo nuevo: se puede dibujar igual.
+    const bool start = !library;
 
     // Atrás y Escape cierran lo último que se abrió (o dejan de escribir en la tarjeta); con
     // todo cerrado, atrás sale de la app: aquí no se pierde nada.
@@ -273,6 +333,7 @@ void Ui::projectsScreen(UiRequests& requests) {
     const float right = L.display.x - L.safe[1] - padX;
     const float width = right - left;
     const std::vector<library::Summary>& items = library->items();
+    const bool empty = items.empty();
     const std::string count = projectCount(items);
     const float titleHeight = ui::fontSize(th::kTitle);
     const float footnote = ui::fontSize(th::kFootnote);
@@ -284,7 +345,9 @@ void Ui::projectsScreen(UiRequests& requests) {
     ImRect openRect;
     ImRect newRect;
     const float gap = pt(10.0f);
-    if (narrow) {
+    if (empty) {
+        // Sin proyectos, los botones van en el centro, con lo que se explica.
+    } else if (narrow) {
         const float buttonsTop = countCy + footnote * 0.5f + pt(14.0f);
         const float half = (width - gap) * 0.5f;
         openRect = ImRect(ImVec2(left, buttonsTop), ImVec2(left + half, buttonsTop + buttonHeight));
@@ -301,24 +364,29 @@ void Ui::projectsScreen(UiRequests& requests) {
     ui::beginSurface("##projects", screen, true, false);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ui::parts::brand(dl, left, top + pt(7.0f));
-    const float titleRight = narrow ? right : openRect.Min.x - pt(16.0f);
+    const float titleRight = narrow || empty ? right : openRect.Min.x - pt(16.0f);
     ui::label(dl, Weight::Bold, th::kTitle, ImVec2(left, titleCy), Align::Left, th::kLabel, "Proyectos",
               titleRight - left);
     ui::label(dl, Weight::Regular, th::kFootnote, ImVec2(left, countCy), Align::Left, th::kSecondaryLabel,
               count.c_str(), titleRight - left);
-    if (headerButton(dl, "##open-file", openRect, icon::kFolderOpen, "Abrir archivo", ui::ButtonStyle::Secondary)) {
+    if (!empty && headerButton(dl, "##open-file", openRect, icon::kFolderOpen, "Abrir archivo",
+                               ui::ButtonStyle::Secondary)) {
         m_projectMenu.clear();
         requests.openProject = true;
     }
-    if (headerButton(dl, "##new-canvas", newRect, icon::kPlus, "Nuevo lienzo", ui::ButtonStyle::Primary)) {
+    if (!empty && headerButton(dl, "##new-canvas", newRect, icon::kPlus, "Nuevo lienzo", ui::ButtonStyle::Primary)) {
         m_projectMenu.clear();
         openDialog(Dialog::NewCanvas, nullptr);
     }
     ui::separator(dl, 0.0f, L.display.x, headerBottom, th::kRule);
 
-    // Las fichas, en columnas que llenan el ancho.
+    // Las fichas, en columnas que llenan el ancho (o, sin proyectos, cómo empezar).
     const ImRect view(ImVec2(0.0f, headerBottom + ui::hairline()), L.display);
-    projectGrid(dl, view, left, right, requests);
+    if (empty) {
+        projectsEmpty(dl, view, left, right, requests);
+    } else {
+        projectGrid(dl, view, left, right, requests);
+    }
     ui::endSurface();
 
     projectMenu(requests);
@@ -327,6 +395,73 @@ void Ui::projectsScreen(UiRequests& requests) {
         for (auto it = m_projectThumbs.begin(); it != m_projectThumbs.end();) {
             it = library->find(it->first) ? std::next(it) : m_projectThumbs.erase(it);
         }
+    }
+}
+
+void Ui::projectsEmpty(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests) {
+    const Layout& L = m_layout;
+    const float width = std::min(right - left, pt(kEmptyWidth));
+    const float x0 = std::round((left + right - width) * 0.5f);
+    const float cx = x0 + width * 0.5f;
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    const char* text = "Cada lienzo se guarda solo en este navegador mientras dibujas. Crea uno nuevo o abre un "
+                       "archivo .lvskt.";
+#else
+    const char* text = "Cada lienzo se guarda solo mientras dibujas. Crea uno nuevo o abre un archivo .lvskt.";
+#endif
+    const float titleHeight = ui::fontSize(kEmptyTitle);
+    const float textHeight =
+        ui::paragraph(nullptr, Weight::Regular, th::kSubhead, ImVec2(x0, 0.0f), width, Align::Center, th::kSecondaryLabel, text);
+    const float buttonHeight = pt(kHeaderButton);
+    // La ilustración, si cabe con lo demás.
+    const float words = titleHeight + pt(10.0f) + textHeight + pt(24.0f) + buttonHeight;
+    const float padY = pt(L.narrow ? 20.0f : 32.0f);
+    const float room = view.GetHeight() - L.safe[2] - padY * 2.0f;
+    const float art = pt(kStackHeight) + pt(28.0f);
+    const bool illustrated = words + art <= room;
+    const float block = words + (illustrated ? art : 0.0f);
+    const float content = padY * 2.0f + block + L.safe[2];
+    const bool scrolls = content > view.GetHeight() + 0.5f;
+    const float scroll = scrolls ? ui::beginScroll("##projects-empty", view, content) : 0.0f;
+
+    // Aparece subiendo un poco; un poco por encima del centro.
+    const float p = ui::anim::followFrom(ImHashStr("##projects-empty"), 0.0f, 1.0f, 9.0f);
+    const float e = ui::anim::easeOutCubic(std::clamp(p, 0.0f, 1.0f));
+    const ui::DrawMark mark = ui::mark(dl);
+    float y = view.Min.y + padY + std::max(0.0f, room - block) * 0.42f - scroll + std::round(pt(12.0f) * (1.0f - e));
+    if (illustrated) {
+        emptyStack(dl, cx, y);
+        y += art;
+    }
+    ui::label(dl, Weight::SemiBold, kEmptyTitle, ImVec2(cx, y + titleHeight * 0.5f), Align::Center, th::kLabel,
+              "Aquí aparecerán tus proyectos", width);
+    y += titleHeight + pt(10.0f);
+    ui::paragraph(dl, Weight::Regular, th::kSubhead, ImVec2(x0, y), width, Align::Center, th::kSecondaryLabel, text);
+    y += textHeight + pt(24.0f);
+
+    // «Abrir archivo» y «Nuevo lienzo», como en la cabecera.
+    const float gap = pt(10.0f);
+    float openWidth = std::max(headerButtonWidth("Abrir archivo"), pt(kEmptyButtonMin));
+    float newWidth = std::max(headerButtonWidth("Nuevo lienzo"), pt(kEmptyButtonMin));
+    if (openWidth + gap + newWidth > width) {
+        openWidth = newWidth = std::floor((width - gap) * 0.5f);
+    }
+    const float bx = std::round(cx - (openWidth + gap + newWidth) * 0.5f);
+    const ImRect openRect(ImVec2(bx, y), ImVec2(bx + openWidth, y + buttonHeight));
+    const ImRect newRect(ImVec2(openRect.Max.x + gap, y), ImVec2(openRect.Max.x + gap + newWidth, y + buttonHeight));
+    if (headerButton(dl, "##open-file", openRect, icon::kFolderOpen, "Abrir archivo", ui::ButtonStyle::Secondary)) {
+        m_projectMenu.clear();
+        requests.openProject = true;
+    }
+    if (headerButton(dl, "##new-canvas", newRect, icon::kPlus, "Nuevo lienzo", ui::ButtonStyle::Primary)) {
+        m_projectMenu.clear();
+        openDialog(Dialog::NewCanvas, nullptr);
+    }
+    // Solo la transparencia; la subida ya va en `y` (mover lo dibujado movería también el
+    // recorte de la cabecera).
+    ui::transform(mark, ImVec2(cx, y), 1.0f, ImVec2(0.0f, 0.0f), p);
+    if (scrolls) {
+        ui::endScroll();
     }
 }
 

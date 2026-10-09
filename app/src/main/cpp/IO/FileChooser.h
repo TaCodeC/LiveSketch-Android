@@ -8,6 +8,7 @@
 
 // Lo que se elige o llega de fuera de la app: dónde exportar un archivo y, en Android, el
 // documento con el que se abrió la app desde otra («Abrir con»), y cómo abrir esos documentos.
+// También cómo se abrió la app (takeRestoredLaunch).
 namespace io {
 
 // Respuesta de chooseSaveFile, desde cualquier hilo: el archivo elegido (una ruta o, en
@@ -26,6 +27,12 @@ std::string takeLaunchFile();
 // En Android, `listener` se llama (desde el hilo de la interfaz de Android) cuando, con la app
 // ya abierta, se pide abrir otro documento desde otra app: se recoge con takeLaunchFile.
 void setLaunchFileListener(std::function<void()> listener);
+
+// Si la app vuelve después de que el sistema la cerrara para liberar memoria: en Android, la
+// actividad se restaura; en la web, el navegador descartó la pestaña y la recarga al volver a
+// ella. Entonces se sigue con el proyecto que estaba abierto, como si nunca se hubiera cerrado;
+// si no, se empieza en Proyectos. Solo la primera vez que se pregunta.
+bool takeRestoredLaunch();
 
 // Como SDL_IOFromFile con "rb" o "wb". En Android, un documento de otra app (una URI
 // content://) se abre a través de MainActivity: así, si ya no hay permiso, solo falla (con

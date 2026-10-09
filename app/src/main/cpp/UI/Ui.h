@@ -509,14 +509,17 @@ private:
     void askConvertProfile(Canvas& canvas, ColorProfile profile);
     // Fondo de la pantalla de Proyectos y de la tarjeta de inicio.
     void startBackground();
-    // Sin proyectos: la tarjeta de lienzo nuevo, sola.
+    // Sin dónde guardar proyectos: la tarjeta de lienzo nuevo, sola.
     void startScreen(UiRequests& requests);
 
     // --- UiProjects.cpp ---
-    // Sin lienzo: los proyectos de la biblioteca (o, si no hay, la tarjeta de lienzo nuevo).
+    // Al abrir la app y sin lienzo: los proyectos de la biblioteca (sin biblioteca, la
+    // tarjeta de lienzo nuevo).
     void projectsScreen(UiRequests& requests);
     // Las fichas de los proyectos en `view`, que se desplaza.
     void projectGrid(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests);
+    // Sin proyectos, en `view`: qué es esta pantalla, «Abrir archivo» y «Nuevo lienzo».
+    void projectsEmpty(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests);
     void projectCard(ImDrawList* dl, const library::Summary& item, const ImRect& rect, bool busy,
                      UiRequests& requests);
     // El menú de un proyecto (Renombrar, Duplicar, Exportar, Eliminar), junto a su botón.

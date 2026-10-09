@@ -96,7 +96,7 @@ bool parseNumber(std::string_view text, double* value);
 std::string formatSize(double width, double height, LengthUnit unit);
 // Tamaño en papel de un lienzo de píxeles: "21 × 29,7 cm".
 std::string paperSize(int width, int height, LengthUnit unit, double ppi);
-// "33 MB", "8,3 MB" o "1,2 GB".
+// "33 MB", "8,3 MB" o "1,2 GB"; por debajo de un mega, "48 KB".
 std::string formatBytes(size_t bytes);
 // "300 ppp", "72 ppp" o "96,5 ppp".
 std::string formatPpi(double ppi);

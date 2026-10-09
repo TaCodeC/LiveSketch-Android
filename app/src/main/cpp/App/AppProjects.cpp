@@ -246,15 +246,16 @@ void App::openLibrary() {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Sin carpeta de proyectos: los lienzos no se guardarán");
         m_ui.notify("No se pueden guardar proyectos en este dispositivo", Notice::Error, 8000);
     }
-    // Android: se abrió la app con un proyecto desde otra («Abrir con»). Si no, se vuelve al
-    // proyecto que estaba abierto.
+    // Android: se abrió la app con un proyecto desde otra («Abrir con»). Si no, se empieza en
+    // Proyectos; solo si el sistema la cerró para liberar memoria, se vuelve al proyecto que
+    // estaba abierto, como si nunca se hubiera ido.
     const std::string launch = io::takeLaunchFile();
     if (!launch.empty()) {
         SDL_Log("Abierto con LiveSketch: %s", launch.c_str());
         openProjectFile(launch, false);
         return;
     }
-    if (!opened) {
+    if (!opened || !io::takeRestoredLaunch()) {
         return;
     }
     const std::string last = m_ui.lastProject();

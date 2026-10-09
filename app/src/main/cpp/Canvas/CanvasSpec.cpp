@@ -253,6 +253,11 @@ std::string formatBytes(size_t bytes) {
     if (megabytes >= 1024.0) {
         return formatNumber(megabytes / 1024.0, 1) + " GB";
     }
+    // Un proyecto con pocos trazos ocupa unos kilobytes: mejor eso que "0 MB".
+    if (megabytes < 0.95) {
+        const double kilobytes = std::round(static_cast<double>(bytes) / 1024.0);
+        return formatNumber(bytes > 0 ? std::max(kilobytes, 1.0) : 0.0, 0) + " KB";
+    }
     return formatNumber(megabytes, megabytes < 10.0 ? 1 : 0) + " MB";
 }
 

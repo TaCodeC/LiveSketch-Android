@@ -72,6 +72,11 @@ TEST_CASE(canvas_spec_numbers_use_decimal_comma) {
     CHECK_EQ(formatBytes(size_t{2480} * 3508 * 4), std::string("33 MB"));
     CHECK_EQ(formatBytes(size_t{1280} * 720 * 4), std::string("3,5 MB"));
     CHECK_EQ(formatBytes(size_t{3} * 1024 * 1024 * 1024 / 2), std::string("1,5 GB"));
+    CHECK_EQ(formatBytes(size_t{48} * 1024 + 300), std::string("48 KB"));
+    CHECK_EQ(formatBytes(200), std::string("1 KB"));
+    CHECK_EQ(formatBytes(0), std::string("0 KB"));
+    CHECK_EQ(formatBytes(size_t{970} * 1024), std::string("970 KB"));
+    CHECK_EQ(formatBytes(size_t{990} * 1024), std::string("1 MB"));
 
     double value = 0.0;
     CHECK(parseNumber("29,7", &value));

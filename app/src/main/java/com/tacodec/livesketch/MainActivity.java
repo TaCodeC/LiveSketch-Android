@@ -42,6 +42,11 @@ public class MainActivity extends SDLActivity {
     // liblivesketch (takeOpenUri): al arrancar o, con la app ya abierta, cuando se le avisa.
     private static String sOpenUri;
 
+    // La actividad se restauró (el sistema cerró la app para liberar memoria y se ha vuelto a
+    // ella), hasta que lo recoge liblivesketch (takeRestored): sigue con el proyecto que estaba
+    // abierto en lugar de empezar en Proyectos.
+    private static boolean sRestored;
+
     // El selector de «Exportar a…» está abierto y la app espera su respuesta. Si la actividad
     // vuelve sin ella (por ejemplo, desde Recientes, con el selector aún abierto en otra tarea),
     // se da por cancelado; lo que el selector cree después se borra.
@@ -70,10 +75,11 @@ public class MainActivity extends SDLActivity {
         Intent intent = getIntent();
         String open = takeViewIntent(intent);
         boolean fromHistory = (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
-        if (open != null && savedInstanceState == null && !fromHistory) {
-            synchronized (MainActivity.class) {
+        synchronized (MainActivity.class) {
+            if (open != null && savedInstanceState == null && !fromHistory) {
                 sOpenUri = open;
             }
+            sRestored = savedInstanceState != null;
         }
 
         super.onCreate(savedInstanceState);
@@ -144,6 +150,16 @@ public class MainActivity extends SDLActivity {
     // Con la app ya abierta, llegó otro proyecto para abrir (takeOpenUri). En liblivesketch
     // (IO/FileChooser.cpp).
     private static native void nativeOpenRequested();
+
+    /**
+     * Lo llama liblivesketch (JNI), al arrancar: si la actividad se restauró después de que el
+     * sistema cerrara la app. Una sola vez.
+     */
+    public static synchronized boolean takeRestored() {
+        boolean restored = sRestored;
+        sRestored = false;
+        return restored;
+    }
 
     /**
      * Lo llama liblivesketch (JNI, desde su hilo): elegir dónde crear un archivo llamado
