@@ -53,6 +53,11 @@ struct UiStatus {
     int ndiConnections = 0;
     std::string ndiError;
     bool exporting = false;       // hay un PNG guardándose (o esperando el permiso)
+    bool savingProject = false;   // hay un proyecto guardándose (o esperando el permiso)
+    // Abriendo un proyecto: lo que lleva (de 0 a 1; -1 si no se abre ninguno) y su nombre
+    // (vacío si no tiene).
+    float openProgress = -1.0f;
+    std::string openTitle;
 };
 
 // Lo que la interfaz pide a la app en este frame.
@@ -64,6 +69,9 @@ struct UiRequests {
     bool straightenView = false;   // dejar la vista derecha
     bool flipView = false;  // voltear la vista en horizontal (o quitar el volteo)
     bool savePng = false;
+    bool saveProject = false;
+    bool openProject = false;     // elegir un proyecto para abrirlo
+    bool openConfirmed = false;   // abrir el proyecto aunque se pierdan los cambios (ver askOpenProject)
     bool quit = false;
     int ndi = -1;           // 1: encender NDI, 0: apagarlo
 };
@@ -134,10 +142,33 @@ public:
     // Aviso breve bajo las barras. Progress se queda hasta que otro aviso lo sustituye
     // (o hasta `durationMs`).
     void notify(std::string text, Notice kind = Notice::Info, uint32_t durationMs = 3000);
+    // Quita el aviso que se ve si es de ese tipo (un «Guardando…» que ya no sigue).
+    void dismissNotice(Notice kind);
     // Deshacer o rehacer desde un gesto o un atajo (ya hecho o no: `done`).
     void showUndo(bool redo, bool done);
     // Diálogo de salir (botón atrás de Android con todo cerrado).
     void askExit();
+    // Alerta con un solo botón: por qué no se pudo guardar o abrir un proyecto, o lo que se
+    // arregló al abrirlo. Si ya hay otra confirmación abierta, va como aviso.
+    void showAlert(std::string title, std::string message, Notice kind = Notice::Error);
+
+    // --- Proyectos ---
+    // Confirmación para abrir un proyecto sobre un dibujo con cambios sin guardar. `title`:
+    // su nombre (vacío si no tiene). Mientras se ve, confirmingOpen(); al aceptarla, la
+    // interfaz pide openConfirmed.
+    void askOpenProject(const std::string& title);
+    bool confirmingOpen() const { return m_dialog == Dialog::OpenProject; }
+    // Quita esa confirmación: llegó otro proyecto que la sustituye.
+    void cancelOpenProject() {
+        if (m_dialog == Dialog::OpenProject) {
+            m_dialog = Dialog::None;
+        }
+    }
+    // Se abrió un proyecto (después de canvasCreated): el color del pincel que guardaba, en
+    // el perfil del lienzo (null si no lo guardaba).
+    void projectOpened(Canvas& canvas, const float* brushColor);
+    // El color del pincel en el perfil del lienzo, para guardarlo con el proyecto.
+    void brushColor(const Canvas& canvas, float rgb[3]) const;
 
     // --- Selección, Transformar y Ajustes (UiTools.cpp) ---
     CanvasTool canvasTool() const { return m_canvasTool; }
@@ -173,7 +204,7 @@ private:
     enum class ActionsPage { Main, Properties };
     // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
     enum class ColorTarget { Brush, Background };
-    enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas, ConvertProfile };
+    enum class Dialog { None, DeleteLayer, RenameLayer, Exit, NewCanvas, ConvertProfile, OpenProject, Alert };
 
     struct Layout {
         ImVec2 display;
@@ -285,6 +316,8 @@ private:
     void drawHud(Canvas& canvas);
     void drawPicker(Canvas& canvas);
     void drawToast();
+    // Mientras se abre un proyecto: tapa la interfaz con lo que lleva.
+    void drawOpening();
     // Cápsula de arriba (donde salen los avisos) mientras se gira la vista o se ajusta una
     // forma rápida. Va antes que los avisos: mientras se ve, los oculta.
     void drawCapsules(const Canvas& canvas);
@@ -652,8 +685,10 @@ private:
     std::string m_dialogTitle;
     std::string m_dialogMessage;
     ColorProfile m_dialogProfile = ColorProfile::Srgb;   // ConvertProfile: al que se pasa
+    Notice m_dialogKind = Notice::Error;                 // Alert: decide el icono
     char m_renameBuffer[64] = {};
     bool m_dialogFocus = false;
+    std::string m_openingTitle;     // el proyecto que se abre (sigue mientras se desvanece)
 
     // Lienzo nuevo: lo que se configura, «Mis tamaños» y el número que se escribe.
     CanvasForm m_canvasForm;

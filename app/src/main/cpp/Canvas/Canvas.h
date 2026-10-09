@@ -50,18 +50,6 @@
 //
 // El fondo no es una capa: es un color que va debajo de todas (o nada, si está oculto).
 
-// Datos del documento que no son píxeles ni capas.
-struct CanvasInfo {
-    std::string name;
-    float ppi = 72.0f;                          // resolución de impresión
-    LengthUnit unit = LengthUnit::Pixels;       // en qué se midió al crearlo
-    ColorProfile profile = ColorProfile::Srgb;
-    int64_t created = 0;                        // SDL_Time: nanosegundos desde 1970 (UTC)
-    int64_t modified = 0;                       // último cambio del documento
-    double drawingSeconds = 0.0;                // tiempo dibujando (ver canvasspec::strokeSeconds)
-    uint64_t strokes = 0;                       // trazos terminados
-};
-
 class Canvas {
 public:
     // Crea el lienzo con una "Capa 1" transparente sobre el color de fondo.
@@ -315,6 +303,25 @@ public:
     // Lee el compuesto: RGBA8 premultiplicado, filas de arriba abajo.
     bool readComposite(std::vector<uint8_t>& pixels);
 
+    // --- Proyectos ---
+    // Caja de lo pintado de la capa (alfa > 0), medida en la GPU. Vacía si es transparente.
+    IRect layerContent(int index);
+    // Lee `rect` de la capa `index` o, con -1, del compuesto: RGBA8 premultiplicado, filas de
+    // arriba abajo, en `out` (rect.width() × rect.height() × 4 bytes).
+    bool readRegion(int index, const IRect& rect, uint8_t* out);
+    // Abre un documento: como init(), pero con las capas de `layers` (de abajo arriba, aún
+    // transparentes) en vez de «Capa 1», y con sus datos (`info`), su guía y su capa activa.
+    // Los píxeles de cada capa llegan después con setLayerPixels.
+    struct OpenLayer {
+        LayerProperties properties;
+        bool reference = false;
+    };
+    bool open(const CanvasSpec& spec, const CanvasInfo& info, std::span<const OpenLayer> layers, int active,
+              const DrawingGuide& guide);
+    // Los píxeles de una capa recién abierta (premultiplicados, del tamaño de `rect`). No es
+    // un paso de deshacer ni cambia documentVersion().
+    bool setLayerPixels(int index, const IRect& rect, const uint8_t* pixels);
+
     // Pérdida del contexto GL. takeSnapshot copia todas las capas a RAM si ocupan como
     // mucho `maxBytes`; recreateGpu crea de nuevo todos los objetos GL y restaura las
     // capas desde esa copia. Sin copia, las capas quedan vacías.
@@ -324,6 +331,8 @@ public:
     bool recreateGpu(bool* restored);
 
 private:
+    // Lo común de init() y open(): el lienzo vacío (sin capas) con sus objetos de GPU.
+    bool create(const CanvasSpec& spec);
     bool createGpuObjects();
     void destroyGpuObjects();
     // Máscara para las operaciones de píxeles: la de la selección o 0.

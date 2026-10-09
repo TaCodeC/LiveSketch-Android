@@ -41,6 +41,18 @@ public:
     View view() const { return {m_zoom, m_offset, m_angle, m_flipped, m_userMoved}; }
     void restoreView(const View& view);
 
+    // La vista sin depender de la ventana (se guarda con el proyecto): el zoom dividido por
+    // el del ajuste y el punto del lienzo que cae en el centro de la zona libre.
+    struct Placement {
+        float zoom = 1.0f;
+        glm::vec2 center{0.0f};
+        float angle = 0.0f;
+    };
+    Placement placement() const;
+    // Vuelve a ella en esta ventana (con el volteo que tenga ya la vista). Cuenta como
+    // movida por el usuario.
+    void setPlacement(const Placement& placement);
+
     glm::vec2 canvasToScreen(glm::vec2 p) const { return m_offset + orient(p) * m_zoom; }
     glm::vec2 screenToCanvas(glm::vec2 p) const { return unorient((p - m_offset) / m_zoom); }
     // Una dirección del lienzo en la pantalla (girada y volteada, sin el zoom), y al revés.

@@ -116,6 +116,7 @@ target_compile_options(libdeflate PRIVATE -O2 -w)
 add_library(livesketch_core STATIC
         ${SRC_DIR}/App/App.cpp
         ${SRC_DIR}/App/AppInput.cpp
+        ${SRC_DIR}/App/AppProjects.cpp
         ${SRC_DIR}/App/DisplayGamut.cpp
         ${SRC_DIR}/Canvas/Bounds.cpp
         ${SRC_DIR}/Canvas/Brush.cpp
@@ -147,7 +148,12 @@ add_library(livesketch_core STATIC
         ${SRC_DIR}/IO/Assets.cpp
         ${SRC_DIR}/IO/Icc.cpp
         ${SRC_DIR}/IO/ImageExport.cpp
+        ${SRC_DIR}/IO/Json.cpp
         ${SRC_DIR}/IO/Png.cpp
+        ${SRC_DIR}/IO/Project.cpp
+        ${SRC_DIR}/IO/ProjectFile.cpp
+        ${SRC_DIR}/IO/Tasks.cpp
+        ${SRC_DIR}/IO/Zip.cpp
         ${SRC_DIR}/NDI/NdiOutput.cpp
         ${SRC_DIR}/ThirdParty/stb_impl.cpp
         ${SRC_DIR}/Tools/SelectTool.cpp
@@ -252,6 +258,7 @@ if(LIVESKETCH_BUILD_TESTS AND NOT ANDROID)
             ${TESTS_DIR}/LayerOptionsTests.cpp
             ${TESTS_DIR}/LayerStackTests.cpp
             ${TESTS_DIR}/PenTests.cpp
+            ${TESTS_DIR}/ProjectTests.cpp
             ${TESTS_DIR}/QuickShapeTests.cpp
             ${TESTS_DIR}/SelectionTests.cpp
             ${TESTS_DIR}/WetMixTests.cpp

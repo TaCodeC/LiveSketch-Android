@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace th = ui::theme;
 using ui::Align;
@@ -122,6 +123,8 @@ constexpr HelpItem kShortcuts[] = {
     {"5", "Enderezar la vista", nullptr},
     {"M", "Voltear la vista", nullptr},
     {"MAYÚS", "Forma rápida perfecta", nullptr},
+    {"CTRL S", "Guardar el proyecto", nullptr},
+    {"CTRL O", "Abrir un proyecto", nullptr},
     {"CTRL Z", "Deshacer", nullptr},
     {"CTRL Y", "Rehacer", nullptr},
     {"CTRL C / X", "Copiar o cortar", nullptr},
@@ -350,15 +353,17 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
     constexpr float kStrip = 8.0f + 54.0f + 8.0f;   // pestañas con su margen
 
 #ifdef SDL_PLATFORM_EMSCRIPTEN
-    const char* shareNote = "Se descarga con el navegador con el nombre del lienzo, a tamaño completo y con sus ppp "
-                            "para imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
+    const char* shareWhere = "Los dos se descargan con el navegador con el nombre del lienzo.";
 #elif defined(SDL_PLATFORM_ANDROID)
-    const char* shareNote = "Se guarda en Descargas con el nombre del lienzo, a tamaño completo y con sus ppp para "
-                            "imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
+    const char* shareWhere = "Los dos se guardan en Descargas con el nombre del lienzo.";
 #else
-    const char* shareNote = "Se guarda en la carpeta de descargas con el nombre del lienzo, a tamaño completo y con "
-                            "sus ppp para imprimir. Si ocultas el color de fondo (en Capas), queda transparente.";
+    const char* shareWhere = "Los dos se guardan en la carpeta de descargas con el nombre del lienzo.";
 #endif
+    const std::string shareNote =
+        std::string("El proyecto (.lvskt) guarda las capas con sus ajustes para seguir dibujando después. El PNG es "
+                    "la imagen a tamaño completo, con sus ppp para imprimir; si ocultas el color de fondo (en "
+                    "Capas), queda transparente. ") +
+        shareWhere;
     const float noteWidth = panelWidth - pt(8.0f + 10.0f) * 2.0f;
 
     // Alto del contenido de la pestaña elegida (o de las propiedades del lienzo); al
@@ -369,12 +374,12 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         body = propertiesHeight(canvas, panelWidth);
         break;
     case 0:
-        body = pt(8.0f + rowPoints * 6.0f + 2.0f * 5.0f + 8.0f);
+        body = pt(8.0f + rowPoints * 7.0f + 2.0f * 6.0f + 8.0f);
         break;
     case 1:
-        body = pt(8.0f + rowPoints + 10.0f) +
+        body = pt(8.0f + rowPoints * 2.0f + 2.0f + 10.0f) +
                ui::paragraph(nullptr, Weight::Regular, th::kFootnote, ImVec2(0.0f, 0.0f), noteWidth, Align::Left, 0,
-                             shareNote, 1.4f) +
+                             shareNote.c_str(), 1.4f) +
                pt(12.0f);
         break;
     case 2:
@@ -451,6 +456,12 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
             openDialog(Dialog::NewCanvas, &canvas);
         }
         y += row + pt(2.0f);
+        if (menuRow(dl, "##open", ImRect(left, y, right, y + row), icon::kFolderOpen, "Abrir proyecto…", nullptr,
+                    true)) {
+            requests.openProject = true;
+            closePanels();
+        }
+        y += row + pt(2.0f);
         if (menuRow(dl, "##fit", ImRect(left, y, right, y + row), icon::kScan, "Centrar lienzo")) {
             requests.fitView = true;
             closePanels();
@@ -483,6 +494,13 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         break;
 
     case 1: {
+        const bool saving = m_status.savingProject;
+        if (menuRow(dl, "##save-project", ImRect(left, y, right, y + row), icon::kSave,
+                    saving ? "Guardando proyecto…" : "Guardar proyecto", ".lvskt", true, !saving)) {
+            requests.saveProject = true;
+            closePanels();
+        }
+        y += row + pt(2.0f);
         const bool exporting = m_status.exporting;
         if (menuRow(dl, "##save", ImRect(left, y, right, y + row), icon::kImageDown,
                     exporting ? "Guardando PNG…" : "Guardar PNG", size, true, !exporting)) {
@@ -491,7 +509,7 @@ void Ui::actionsPanel(Canvas& canvas, UiRequests& requests) {
         }
         y += row + pt(10.0f);
         ui::paragraph(dl, Weight::Regular, th::kFootnote, ImVec2(left + pt(10.0f), y), noteWidth, Align::Left,
-                      IM_COL32(235, 235, 245, 128), shareNote, 1.4f);
+                      IM_COL32(235, 235, 245, 128), shareNote.c_str(), 1.4f);
         break;
     }
 

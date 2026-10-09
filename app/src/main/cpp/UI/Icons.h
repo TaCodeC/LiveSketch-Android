@@ -122,5 +122,7 @@ inline constexpr const char* kUnlink             = "\xee\x84\x84"; // link-2-off
 inline constexpr const char* kBookmarkPlus       = "\xee\x88\xbd"; // bookmark-plus U+E23D
 inline constexpr const char* kBackspace          = "\xee\x82\xae"; // delete U+E0AE
 inline constexpr const char* kTriangleAlert      = "\xee\x86\x93"; // triangle-alert U+E193
+inline constexpr const char* kSave               = "\xee\x85\x8d"; // save U+E14D
+inline constexpr const char* kFolderOpen         = "\xee\x89\x87"; // folder-open U+E247
 
 } // namespace icon

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,13 +29,34 @@ using Sink = std::function<bool(const uint8_t* data, size_t size)>;
 // siguiente. Vacío si no hay memoria.
 std::vector<uint8_t> filterRows(const uint8_t* rgba, int width, int height, size_t stride);
 
+// Como filterRows, pero en el mismo buffer: `image` (RGBA sin premultiplicar, filas seguidas
+// de arriba abajo) pasa a ser las filas filtradas, que ocupan un byte más por fila (si se
+// reservó antes, no se copia nada). False si no hay memoria (la imagen queda como estaba).
+bool filterRowsInPlace(std::vector<uint8_t>& image, int width, int height);
+
 // Comprime las filas filtradas y entrega el PNG. Si falla, deja el motivo en SDL_GetError().
 bool write(const std::vector<uint8_t>& filtered, int width, int height, const Info& info, const Sink& sink);
+
+// PNG de un solo color opaco (el fondo de un proyecto, para otros programas): con paleta de un
+// bit por píxel, ocupa casi nada a cualquier tamaño.
+bool writeSolid(int width, int height, const uint8_t rgb[3], const Info& info, const Sink& sink);
 
 // filterRows y write.
 bool encode(const uint8_t* rgba, int width, int height, size_t stride, const Info& info, const Sink& sink);
 
 // Píxeles por metro del chunk pHYs para una resolución en ppp.
 uint32_t pixelsPerMeter(float ppi);
+
+// Imagen leída de un PNG: RGBA8 sin premultiplicar, con la fila 0 arriba.
+struct Image {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+// Lee un PNG comprobando el CRC de cada chunk. Lo que escribe LiveSketch (RGBA de 8 bits sin
+// entrelazar) se lee con libdeflate, varias veces más rápido; el resto de tipos, con
+// stb_image. Falla si está dañado o tiene más de `maxPixels` píxeles (motivo en `error`).
+bool decode(std::span<const uint8_t> data, Image& out, size_t maxPixels, std::string* error = nullptr);
 
 } // namespace png

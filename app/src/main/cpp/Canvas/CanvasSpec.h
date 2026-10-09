@@ -38,6 +38,18 @@ struct CanvasSpec {
     std::string name;
 };
 
+// Datos del documento que no son píxeles ni capas.
+struct CanvasInfo {
+    std::string name;
+    float ppi = 72.0f;                          // resolución de impresión
+    LengthUnit unit = LengthUnit::Pixels;       // en qué se midió al crearlo
+    ColorProfile profile = ColorProfile::Srgb;
+    int64_t created = 0;                        // SDL_Time: nanosegundos desde 1970 (UTC)
+    int64_t modified = 0;                       // último cambio del documento
+    double drawingSeconds = 0.0;                // tiempo dibujando (ver canvasspec::strokeSeconds)
+    uint64_t strokes = 0;                       // trazos terminados
+};
+
 namespace canvasspec {
 
 // --- Límites ---

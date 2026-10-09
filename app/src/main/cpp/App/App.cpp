@@ -1,5 +1,6 @@
 #include "App/App.h"
 
+#include "App/AppEvents.h"
 #include "Gfx/GL.h"
 #include "Gfx/GLObjects.h"
 #include "UI/Anim.h"
@@ -72,32 +73,40 @@ uint64_t floatBits(float value) {
     return bits;
 }
 
-// Eventos propios. Despiertan el bucle cuando está dormido esperando eventos; los
-// empujan un temporizador u otros hilos.
-Uint32 g_wakeEventType = 0;         // temporizador de App::wakeAt
-Uint32 g_exportEventType = 0;       // terminó un guardado de PNG
-Uint32 g_permissionEventType = 0;   // respuesta al permiso de almacenamiento (code: 1 si se concedió)
-
-void pushEvent(Uint32 type, Sint32 code = 0) {
-    SDL_Event event;
-    SDL_zero(event);
-    event.type = type;
-    event.user.code = code;
-    SDL_PushEvent(&event);
-}
 
 Uint32 SDLCALL pushWakeEvent(void*, SDL_TimerID, Uint32) {
-    pushEvent(g_wakeEventType);
+    appevents::push(appevents::wake);
     return 0;
 }
 
 #ifdef SDL_PLATFORM_ANDROID
 void SDLCALL onStoragePermission(void*, const char*, bool granted) {
-    pushEvent(g_permissionEventType, granted ? 1 : 0);
+    appevents::push(appevents::permission, granted ? 1 : 0);
 }
 #endif
 
 } // namespace
+
+namespace appevents {
+
+Uint32 wake = 0;
+Uint32 pngSaved = 0;
+Uint32 permission = 0;
+Uint32 projectSaved = 0;
+Uint32 fileChosen = 0;
+
+void push(Uint32 type, Sint32 code, char* data) {
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = type;
+    event.user.code = code;
+    event.user.data1 = data;
+    if (!SDL_PushEvent(&event)) {
+        SDL_free(data);
+    }
+}
+
+} // namespace appevents
 
 // -----------------------------------------------------------------------------
 // Arranque y cierre
@@ -122,14 +131,16 @@ SDL_AppResult App::init(int, char**) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    const Uint32 firstEvent = SDL_RegisterEvents(3);
+    const Uint32 firstEvent = SDL_RegisterEvents(5);
     if (firstEvent == 0) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_RegisterEvents: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    g_wakeEventType = firstEvent;
-    g_exportEventType = firstEvent + 1;
-    g_permissionEventType = firstEvent + 2;
+    appevents::wake = firstEvent;
+    appevents::pngSaved = firstEvent + 1;
+    appevents::permission = firstEvent + 2;
+    appevents::projectSaved = firstEvent + 3;
+    appevents::fileChosen = firstEvent + 4;
 
     if (!createWindow() || !initImGui()) {
         return SDL_APP_FAILURE;
@@ -233,8 +244,10 @@ void App::shutdownImGui() {
 }
 
 void App::quit() {
-    // Un PNG a medio guardar se termina antes de salir.
+    // Un PNG o un proyecto a medio guardar se terminan antes de salir; lo que se abría, no.
     m_exporter.wait();
+    m_projectSaver.wait();
+    closeProjectFile();
     if (m_wakeTimer) {
         SDL_RemoveTimer(m_wakeTimer);
         m_wakeTimer = 0;
@@ -308,23 +321,47 @@ SDL_AppResult App::event(const SDL_Event& event) {
         break;
     }
 
-    if (event.type == g_wakeEventType) {
+    if (event.type == appevents::wake) {
         m_wakeTimer = 0;
         m_redrawFrames = std::max(m_redrawFrames, 1);
         return SDL_APP_CONTINUE;
     }
-    if (event.type == g_exportEventType) {
+    if (event.type == appevents::pngSaved || event.type == appevents::projectSaved) {
         m_redrawFrames = std::max(m_redrawFrames, 1);   // iterate() recoge el resultado
         return SDL_APP_CONTINUE;
     }
-    if (event.type == g_permissionEventType) {
-        m_awaitingPermission = false;
-        if (event.user.code != 0) {
-            m_exportPending = true;   // se lee el lienzo en iterate(), con el contexto actual
-        } else {
+    if (event.type == appevents::permission) {
+        const StorageTask task = m_awaitingPermission;
+        m_awaitingPermission = StorageTask::None;
+        if (event.user.code == 0) {
             m_ui.notify("Sin el permiso de almacenamiento no se puede guardar en Descargas", Notice::Error, 5000);
+        } else if (task == StorageTask::Png) {
+            m_exportPending = true;   // se lee el lienzo en iterate(), con el contexto actual
+        } else if (task == StorageTask::Project) {
+            scheduleProjectSave();
         }
         m_redrawFrames = std::max(m_redrawFrames, 1);
+        return SDL_APP_CONTINUE;
+    }
+    if (event.type == appevents::fileChosen) {
+        char* data = static_cast<char*>(event.user.data1);
+        m_choosingFile = false;
+        if (event.user.code == 0 && data) {
+            fileChosen(data);
+        } else if (event.user.code < 0) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Selector de archivos: %s", data ? data : "");
+            m_ui.notify("No se pudo mostrar el selector de archivos", Notice::Error, 5000);
+        }
+        SDL_free(data);
+        m_redrawFrames = std::max(m_redrawFrames, 1);
+        return SDL_APP_CONTINUE;
+    }
+    // Un archivo soltado en la ventana: se abre como proyecto (el primero, si son varios).
+    if (event.type == SDL_EVENT_DROP_FILE) {
+        if (event.drop.data) {
+            fileChosen(event.drop.data);
+        }
+        m_redrawFrames = std::max(m_redrawFrames, kFramesAfterInput);
         return SDL_APP_CONTINUE;
     }
 
@@ -399,6 +436,7 @@ void App::updateWindowSize() {
 }
 
 void App::createCanvas(const CanvasSpec& spec) {
+    closeProjectFile();
     // NDI emite al tamaño del lienzo: con uno nuevo se vuelve a empezar.
     const bool ndi = m_ndi.running();
     m_ndi.stop();
@@ -411,6 +449,8 @@ void App::createCanvas(const CanvasSpec& spec) {
     }
     m_ui.canvasCreated();
     m_camera.setCanvasSize({static_cast<float>(spec.width), static_cast<float>(spec.height)});
+    // Un lienzo recién creado no tiene nada que perder.
+    m_savedVersion = m_canvas.documentVersion();
     SDL_Log("Lienzo de %dx%d a %.0f ppp (hasta %d capas)", spec.width, spec.height, static_cast<double>(spec.ppi),
             m_canvas.maxLayers());
     if (ndi) {
@@ -436,23 +476,33 @@ void App::setNdiEnabled(bool enabled) {
     }
 }
 
-void App::requestPngExport() {
-    if (!m_canvas.ready() || m_exporter.busy() || m_awaitingPermission || m_exportPending) {
-        return;
-    }
+bool App::storageReady([[maybe_unused]] StorageTask task) {
 #ifdef SDL_PLATFORM_ANDROID
     // Hasta Android 10 escribir en Descargas pide el permiso de almacenamiento. Si ya está
     // concedido, SDL responde enseguida y se guarda en el frame siguiente.
     if (SDL_GetAndroidSDKVersion() <= 29) {
-        m_awaitingPermission =
-            SDL_RequestAndroidPermission("android.permission.WRITE_EXTERNAL_STORAGE", onStoragePermission, nullptr);
-        if (!m_awaitingPermission) {
+        if (m_awaitingPermission != StorageTask::None) {
+            return false;   // ya se está pidiendo
+        }
+        m_awaitingPermission = task;
+        if (!SDL_RequestAndroidPermission("android.permission.WRITE_EXTERNAL_STORAGE", onStoragePermission,
+                                          nullptr)) {
+            m_awaitingPermission = StorageTask::None;
             m_ui.notify("No se pudo pedir el permiso de almacenamiento", Notice::Error);
         }
-        return;
+        return false;
     }
 #endif
-    exportPng();
+    return true;
+}
+
+void App::requestPngExport() {
+    if (!m_canvas.ready() || m_exporter.busy() || m_awaitingPermission == StorageTask::Png || m_exportPending) {
+        return;
+    }
+    if (storageReady(StorageTask::Png)) {
+        exportPng();
+    }
 }
 
 void App::exportPng() {
@@ -474,7 +524,7 @@ void App::exportPng() {
     png.profile = info.profile;
     png.title = info.name;
     if (!m_exporter.start(std::move(pixels), m_canvas.width(), m_canvas.height(), io::downloadsFolder(),
-                          io::fileStem(info.name), std::move(png), [] { pushEvent(g_exportEventType); })) {
+                          io::fileStem(info.name), std::move(png), [] { appevents::push(appevents::pngSaved); })) {
         m_ui.notify("No se pudo empezar a guardar el PNG", Notice::Error, 5000);
         return;
     }
@@ -520,6 +570,26 @@ SDL_AppResult App::iterate() {
     }
     if (std::optional<io::PngExporter::Result> saved = m_exporter.takeResult()) {
         onPngSaved(*saved);
+    }
+    // Proyectos: guardar cuando toca (después del trazo o el gesto en curso), lo que terminó
+    // de guardarse, el archivo que se eligió y las capas del que se abre.
+    if (m_saveAtMs != 0 && SDL_GetTicks() >= m_saveAtMs && !canvasInteractionActive()) {
+        m_saveAtMs = 0;
+        saveProject();
+    }
+    if (m_projectSaver.busy()) {
+        m_projectSaver.pump(8);   // en la web, comprime aquí
+    }
+    if (std::optional<project::Saver::Result> saved = m_projectSaver.takeResult()) {
+        onProjectSaved(*saved);
+    }
+    if (m_chosenFile) {
+        const ChosenFile file = std::move(*m_chosenFile);
+        m_chosenFile.reset();
+        openProjectFile(file.path, file.temporary);
+    }
+    if (m_open.loading) {
+        stepProjectOpen();
     }
     samplePick();
 
@@ -610,7 +680,12 @@ UiStatus App::uiStatus() const {
     status.ndiRunning = m_ndi.running();
     status.ndiConnections = m_ndi.connections();
     status.ndiError = m_ndi.error();
-    status.exporting = m_awaitingPermission || m_exportPending || m_exporter.busy();
+    status.exporting = m_awaitingPermission == StorageTask::Png || m_exportPending || m_exporter.busy();
+    status.savingProject = m_awaitingPermission == StorageTask::Project || m_saveAtMs != 0 || m_projectSaver.busy();
+    if (m_open.loading) {
+        status.openProgress = m_open.loader->progress();
+        status.openTitle = m_open.title;
+    }
     status.displayProfile = m_displayProfile;
     status.canvasProfile = canvasProfile();
     status.wideGamutScreen = m_display.wideAvailable();
@@ -634,6 +709,19 @@ void App::applyRequests(const UiRequests& requests) {
     }
     if (requests.savePng) {
         requestPngExport();
+    }
+    if (requests.saveProject) {
+        requestProjectSave();
+    }
+    if (m_open.confirming) {
+        if (requests.openConfirmed) {
+            startProjectOpen();
+        } else if (!m_ui.confirmingOpen()) {
+            closeProjectFile();   // se canceló
+        }
+    }
+    if (requests.openProject) {
+        chooseProject();
     }
     if (requests.ndi >= 0) {
         setNdiEnabled(requests.ndi == 1);
@@ -720,9 +808,15 @@ void App::schedulePacing() {
     const ImGuiContext& g = *ImGui::GetCurrentContext();
     // Entradas que ImGui todavía no ha procesado o el oscurecido de un diálogo a medias.
     const bool imguiPending = g.InputEventsQueue.Size > 0 || (g.DimBgRatio > 0.0f && g.DimBgRatio < 1.0f);
+    // Los proyectos: guardar dentro de un momento, abrir y, en la web (sin hilos), comprimir.
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    const bool projectWork = m_saveAtMs != 0 || m_open.loading || m_chosenFile || m_projectSaver.busy();
+#else
+    const bool projectWork = m_saveAtMs != 0 || m_open.loading || m_chosenFile;
+#endif
     const bool busy = m_redrawFrames > 0 || imguiPending || canvasInteractionActive() || io.WantTextInput ||
                       ImGui::IsAnyItemActive() || m_ndi.busy() || ui::anim::active() || m_fitAnimation.active ||
-                      m_pick.source != PickSource::None || SDL_GetTicks() < m_angleShownUntil;
+                      m_pick.source != PickSource::None || SDL_GetTicks() < m_angleShownUntil || projectWork;
     if (m_redrawFrames > 0) {
         --m_redrawFrames;
     }

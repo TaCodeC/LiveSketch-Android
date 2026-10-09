@@ -16,6 +16,7 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 - The background is a color of the canvas, not a layer: the "Color de fondo" row at the bottom of the Layers panel changes it without touching the drawing, or hides it for a transparent PNG and NDI with alpha.
 - Actions > Canvas > "Propiedades": rename the canvas, change its ppi without resampling, change its background, convert it to the other color profile (the drawing keeps its look; it can be undone), and see its size in pixels and on paper, layers, memory, dates, drawing time and strokes.
 - NDI output of the full canvas (source name `LiveSketch`), independent of the on-screen zoom. The NDI capsule turns red while live and shows the number of receivers.
+- Projects (`.lvskt`): "Guardar proyecto" (Actions > Share) saves the whole document to Downloads: every layer with its name, visibility, opacity, blend mode, alpha lock, clipping and reference, plus the background, color profile, drawing guide, view and brush color. It compresses in the background, so you can keep drawing. "Abrir proyecto…" (Actions > Canvas or the new canvas card), or dropping the file on the window, opens it with every layer exactly as it was. A damaged layer opens empty with a warning and the rest opens normally; a file from a newer version opens with a warning, or asks to update the app if it can't be read. The file is an OpenRaster ZIP, so renamed to `.ora` it opens in Krita with its layers, opacities and blend modes.
 - "Guardar PNG" saves the full canvas to Downloads, named after the canvas (`LiveSketch_YYYYMMDD_HHMMSS.png` if it has no name), with its resolution in ppi and its color profile inside the file (for Display P3, an ICC profile and the PNG `cICP` chunk), so it prints at the canvas size and shows its colors right. Hiding the background color makes it transparent.
 - The Android back button closes the open panel; with everything closed, it asks before exiting.
 - It also runs in a web browser (WebGL 2), without NDI: see [Web](#web-browser).
@@ -27,6 +28,7 @@ LiveSketch allows users to draw on a multi-layer canvas and stream the result in
 | Draw | Stylus, or one finger if "Dibujar con el dedo" is on | Left button |
 | Move and zoom | Two fingers (one finger moves when finger drawing is off) | Right or middle button; wheel |
 | Undo / redo | Tap with two / three fingers, or the sidebar buttons (hold to repeat) | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
+| Save / open a project | Actions menu | Ctrl+S / Ctrl+O |
 | Eyedropper | Sidebar button, or hold a finger still when finger drawing is on | Alt+click, or the sidebar button |
 | Brush / eraser | Top-right bar; tap the selected tool again for its brushes | B / E |
 | Brush size | Sidebar slider | [ and ] |
@@ -76,7 +78,7 @@ The tests create a real OpenGL ES 3.0 context and also run without a display (SD
 
 ### Web (browser)
 
-The same code builds for the web with [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and runs on WebGL 2. A browser cannot send NDI, so that option is off, and "Guardar PNG" downloads the image.
+The same code builds for the web with [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and runs on WebGL 2. A browser cannot send NDI, so that option is off, and "Guardar PNG" and "Guardar proyecto" download the file.
 
 ```sh
 # Emscripten SDK, once
@@ -100,7 +102,7 @@ app/src/main/cpp/
   App/         lifecycle, GL context, frame pacing, input routing and the screen's color profile
   Canvas/      layers, brush, compositing, camera and canvas view
   Gfx/         OpenGL helpers (RAII objects, shaders, pixel conversion) and color profiles
-  IO/          assets, PNG export and ICC profiles
+  IO/          assets, PNG export, ICC profiles and project files (ZIP, JSON, background save and open)
   NDI/         NDI output (asynchronous readback and a sender thread)
   UI/          interface: iOS-style controls drawn with Dear ImGui, bars, panels,
                dialogs, animations and the blurred backdrop of the glass
@@ -114,7 +116,7 @@ tools/fonts/         script that builds the font subsets and UI/Icons.h
 
 ## Planned
 
-- Saving and loading projects (`.lvskt`).
+- Autosave, a Save button and a Projects screen with the recent projects in place of the start card.
 
 ## Requirements / Credits
 
@@ -124,5 +126,5 @@ tools/fonts/         script that builds the font subsets and UI/Icons.h
 - [Inter](https://rsms.me/inter/) – interface font (SIL Open Font License 1.1, `app/src/main/assets/fonts/Inter-LICENSE.txt`).
 - [Lucide](https://lucide.dev/) – icons (ISC License, `app/src/main/assets/fonts/Lucide-LICENSE.txt`).
 - [glm](https://github.com/g-truc/glm) – math.
-- [stb_image](https://github.com/nothings/stb) – brush textures.
-- [libdeflate](https://github.com/ebiggers/libdeflate) – PNG compression (MIT License, `app/src/main/cpp/ThirdParty/libdeflate/COPYING`).
+- [stb_image](https://github.com/nothings/stb) – brush textures and PNGs from other programs.
+- [libdeflate](https://github.com/ebiggers/libdeflate) – PNG and ZIP compression (MIT License, `app/src/main/cpp/ThirdParty/libdeflate/COPYING`).

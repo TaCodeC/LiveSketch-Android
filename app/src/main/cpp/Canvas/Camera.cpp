@@ -113,6 +113,28 @@ void Camera::restoreView(const View& view) {
     }
 }
 
+Camera::Placement Camera::placement() const {
+    glm::vec2 origin;
+    glm::vec2 area;
+    fitArea(origin, area);
+    return {m_zoom / fitZoom(), screenToCanvas(origin + area * 0.5f), m_angle};
+}
+
+void Camera::setPlacement(const Placement& placement) {
+    if (!(placement.zoom > 0.0f) || !std::isfinite(placement.zoom) || !std::isfinite(placement.angle) ||
+        !std::isfinite(placement.center.x) || !std::isfinite(placement.center.y)) {
+        return;
+    }
+    glm::vec2 origin;
+    glm::vec2 area;
+    fitArea(origin, area);
+    m_zoom = std::clamp(placement.zoom * fitZoom(), minZoom(), maxZoom());
+    setAngle(placement.angle);
+    m_offset = origin + area * 0.5f - orient(placement.center) * m_zoom;
+    m_userMoved = true;
+    clampView();
+}
+
 glm::vec2 Camera::orient(glm::vec2 v) const {
     const float x = m_flipped ? -v.x : v.x;
     return {m_cos * x - m_sin * v.y, m_sin * x + m_cos * v.y};

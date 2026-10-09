@@ -5,6 +5,7 @@
 #include "Canvas/Canvas.h"
 #include "Canvas/CanvasView.h"
 #include "IO/ImageExport.h"
+#include "IO/ProjectFile.h"
 #include "NDI/NdiOutput.h"
 #include "UI/Backdrop.h"
 #include "UI/Ui.h"
@@ -13,6 +14,9 @@
 #include <glm/vec2.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 // La aplicación. SDL llama a init/event/iterate/quit desde su hilo principal, que es
@@ -35,6 +39,11 @@ private:
     void updateWindowSize();
     void createCanvas(const CanvasSpec& spec);
     void setNdiEnabled(bool enabled);
+    // Guardar en Descargas. En Android 10 o anterior hace falta el permiso de almacenamiento:
+    // si aún no se sabe si está, se pide y devuelve false (lo de `task` se hace al llegar la
+    // respuesta).
+    enum class StorageTask { None, Png, Project };
+    bool storageReady(StorageTask task);
     void requestPngExport();
     void exportPng();
     void onPngSaved(const io::PngExporter::Result& result);
@@ -49,6 +58,32 @@ private:
     void renderFrame();
     void schedulePacing();
     void wakeAt(uint64_t ticksMs);
+
+    // --- Proyectos (AppProjects.cpp) ---
+    // El lienzo tiene cambios que no están en ningún proyecto guardado (o abierto).
+    bool canvasDirty() const { return m_canvas.ready() && m_canvas.documentVersion() != m_savedVersion; }
+    // Lo que se guarda del lienzo, la vista y el pincel (sin las cajas de las capas).
+    project::Document projectDocument() const;
+    // Guardar proyecto: se avisa y, un momento después (para que el aviso ya se vea mientras
+    // se leen las capas), se guarda.
+    void requestProjectSave();
+    void scheduleProjectSave();
+    void saveProject();
+    void onProjectSaved(const project::Saver::Result& result);
+    // Abrir proyecto: el selector de archivos del sistema (en la web, el del navegador). El
+    // archivo elegido (o soltado en la ventana) llega como evento y se abre en iterate().
+    void chooseProject();
+    void fileChosen(std::string path);
+    // Lee el índice y la descripción del proyecto; si el lienzo tiene cambios, lo pregunta
+    // antes de empezar. `temporary`: una copia que se borra al terminar (en la web).
+    void openProjectFile(const std::string& path, bool temporary);
+    // Cambia el lienzo por el del proyecto (aún sin píxeles) y empieza a leer las capas.
+    void startProjectOpen();
+    // Cada frame mientras se abre: sube a la GPU las capas que ya están leídas.
+    void stepProjectOpen();
+    void finishProjectOpen();
+    // Se descarta lo que se iba a abrir.
+    void closeProjectFile();
 
     // --- Entrada (AppInput.cpp) ---
     bool routeEvent(const SDL_Event& event);   // true si la interfaz se queda con el evento
@@ -143,8 +178,30 @@ private:
 
     // Guardar PNG: la lectura del lienzo es en el hilo de GL; la compresión, en otro.
     io::PngExporter m_exporter;
-    bool m_awaitingPermission = false;   // Android 10 o anterior: permiso de almacenamiento
+    StorageTask m_awaitingPermission = StorageTask::None;   // lo que espera al permiso de almacenamiento
     bool m_exportPending = false;        // permiso concedido: guardar en el próximo frame
+
+    // Proyectos. Como el PNG, las capas se leen de la GPU en este hilo y se comprimen en otros.
+    project::Saver m_projectSaver;
+    uint64_t m_savedVersion = 0;         // documentVersion() de lo último guardado, creado o abierto
+    uint64_t m_savingVersion = 0;        // la que se está guardando
+    uint64_t m_saveAtMs = 0;             // cuándo empezar a guardar (SDL_GetTicks; 0: nada pendiente)
+    bool m_choosingFile = false;         // el selector de archivos del sistema está abierto
+    struct ChosenFile {
+        std::string path;
+        bool temporary = false;
+    };
+    std::optional<ChosenFile> m_chosenFile;   // elegido o soltado: se abre en el próximo frame
+    struct OpenState {
+        std::unique_ptr<project::Loader> loader;
+        std::string path;
+        std::string title;               // el nombre del lienzo o, si no tiene, el del archivo
+        bool temporary = false;
+        bool confirming = false;         // se pregunta si perder los cambios del lienzo
+        bool loading = false;            // ya es el lienzo: se suben sus capas
+        bool ndi = false;                // NDI emitía: vuelve al terminar
+        int failedUploads = 0;           // capas que no se pudieron subir a la GPU
+    } m_open;
 
     // Ritmo del bucle: a vsync mientras algo se mueve, dormido esperando eventos si no.
     int m_redrawFrames = 4;

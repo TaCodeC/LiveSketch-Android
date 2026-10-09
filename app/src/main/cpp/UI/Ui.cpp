@@ -213,15 +213,24 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
         m_layerMenu = false;
         m_eyedropperArmed = false;
         m_picker.active = false;
-        m_dialog = Dialog::None;
-        m_dialogShown = Dialog::None;
+        // Sin lienzo solo puede haber alertas (no se pudo abrir un proyecto).
+        if (m_dialog != Dialog::Alert) {
+            m_dialog = Dialog::None;
+        }
+        if (m_dialogShown != Dialog::Alert) {
+            m_dialogShown = Dialog::None;
+        }
         startScreen(requests);
+        drawDialogs(nullptr, requests);
         drawToast();
         return;
     }
     followCanvasProfile(*canvas);
     syncBrush(*canvas);
-    handleKeys(*canvas, requests);
+    // Mientras se abre un proyecto, el teclado no hace nada (lo de abajo está tapado).
+    if (m_status.openProgress < 0.0f) {
+        handleKeys(*canvas, requests);
+    }
     toolFrame(*canvas);
     if (m_panel != Panel::None) {
         drawScrim();
@@ -236,6 +245,7 @@ void Ui::build(Canvas* canvas, UiRequests& requests) {
     drawPicker(*canvas);
     drawDrop(*canvas);
     drawDialogs(canvas, requests);
+    drawOpening();
     drawCapsules(*canvas);
     drawToast();
     m_previews.pruneThumbnails(canvas->layers());
@@ -441,6 +451,22 @@ void Ui::followCanvasProfile(Canvas& canvas) {
     m_colorProfile = profile;
 }
 
+void Ui::projectOpened(Canvas& canvas, const float* brushColor) {
+    // Los recientes y los anteriores pasan al perfil del proyecto; el color, el suyo.
+    followCanvasProfile(canvas);
+    if (brushColor) {
+        setColor(canvas, brushColor);
+    }
+}
+
+void Ui::brushColor(const Canvas& canvas, float rgb[3]) const {
+    std::copy(canvas.brushSettings().color, canvas.brushSettings().color + 3, rgb);
+    // Si el lienzo acaba de cambiar de perfil, el color aún está en el de antes.
+    if (m_colorProfile != canvas.info().profile) {
+        colorspace::convert(colorspace::between(m_colorProfile, canvas.info().profile), rgb);
+    }
+}
+
 void Ui::showPicker(ImVec2 position, const float* rgb, bool touch) {
     m_picker.active = true;
     m_picker.touch = touch;
@@ -548,6 +574,12 @@ void Ui::notify(std::string text, Notice kind, uint32_t durationMs) {
     m_toast.until = SDL_GetTicks() + durationMs;
 }
 
+void Ui::dismissNotice(Notice kind) {
+    if (!m_toast.text.empty() && m_toast.kind == kind) {
+        m_toast.until = std::min(m_toast.until, SDL_GetTicks());
+    }
+}
+
 void Ui::showUndo(bool redo, bool done) {
     if (done) {
         notify(redo ? "Rehacer" : "Deshacer", redo ? Notice::Redo : Notice::Undo, 1100);
@@ -587,7 +619,11 @@ void Ui::handleKeys(Canvas& canvas, UiRequests& requests) {
     }
     const bool command = io.KeyCtrl || io.KeySuper;
     if (command) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Z, true)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+            requests.saveProject = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_O, false)) {
+            requests.openProject = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Z, true)) {
             undo(canvas, io.KeyShift);
         } else if (ImGui::IsKeyPressed(ImGuiKey_Y, true)) {
             undo(canvas, true);

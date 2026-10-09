@@ -168,6 +168,9 @@ ICONS = {
     "kBookmarkPlus": "bookmark-plus",
     "kBackspace": "delete",
     "kTriangleAlert": "triangle-alert",
+    # Proyectos: guardar y abrir.
+    "kSave": "save",
+    "kFolderOpen": "folder-open",
 }
 
 

@@ -63,7 +63,7 @@ bool Canvas::init(int width, int height) {
     return init(spec);
 }
 
-bool Canvas::init(const CanvasSpec& spec) {
+bool Canvas::create(const CanvasSpec& spec) {
     // El portapapeles pasa al lienzo nuevo.
     Clipboard clipboard = std::move(m_clipboard);
     destroy();
@@ -73,6 +73,8 @@ bool Canvas::init(const CanvasSpec& spec) {
     if (width <= 0 || height <= 0) {
         return false;
     }
+    // Es otro documento: lo guardado del anterior no vale para este.
+    ++m_documentVersion;
     m_info = {};
     m_info.name = spec.name;
     m_info.ppi = std::isfinite(spec.ppi) ? std::clamp(spec.ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi) : 72.0f;
@@ -91,20 +93,85 @@ bool Canvas::init(const CanvasSpec& spec) {
         destroy();
         return false;
     }
+    const size_t undoBytes = std::clamp(layerBytes() * kUndoLayers, kMinUndoBytes, kMaxUndoBytes);
+    m_history.setLimits(undoBytes, kMaxUndoSteps);
+    return true;
+}
 
+bool Canvas::init(const CanvasSpec& spec) {
+    if (!create(spec)) {
+        return false;
+    }
     if (!m_layers.insert(0, "")) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron crear las capas de %dx%d", width, height);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron crear las capas de %dx%d", spec.width,
+                     spec.height);
         destroy();
         return false;
     }
-
-    const size_t undoBytes = std::clamp(layerBytes() * kUndoLayers, kMinUndoBytes, kMaxUndoBytes);
-    m_history.setLimits(undoBytes, kMaxUndoSteps);
-
     m_layers.markAllDirty();
     m_ready = true;
     update();
     return true;
+}
+
+bool Canvas::open(const CanvasSpec& spec, const CanvasInfo& info, std::span<const OpenLayer> layers, int active,
+                  const DrawingGuide& guide) {
+    if (!create(spec)) {
+        return false;
+    }
+    const ColorProfile profile = m_info.profile;
+    m_info = info;
+    m_info.profile = profile;
+    m_info.ppi = std::isfinite(info.ppi) ? std::clamp(info.ppi, canvasspec::kMinPpi, canvasspec::kMaxPpi) : 72.0f;
+    m_guide = guide;
+    const int count = static_cast<int>(layers.size());
+    for (int i = 0; i < std::max(count, 1); ++i) {
+        const LayerProperties* p = i < count ? &layers[static_cast<size_t>(i)].properties : nullptr;
+        Layer* layer = m_layers.insert(i, p ? p->name : std::string());
+        if (!layer) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "No se pudieron crear %d capas de %dx%d", count, spec.width,
+                         spec.height);
+            destroy();
+            return false;
+        }
+        if (p) {
+            layer->visible = p->visible;
+            layer->opacity = std::isfinite(p->opacity) ? std::clamp(p->opacity, 0.0f, 1.0f) : 1.0f;
+            layer->blend = p->blend;
+            layer->alphaLock = p->alphaLock;
+            layer->clipping = p->clipping && i > 0;
+        }
+    }
+    for (int i = 0; i < count; ++i) {
+        if (layers[static_cast<size_t>(i)].reference) {
+            m_layers.setReference(i);
+            break;
+        }
+    }
+    m_layers.setActive(std::clamp(active, 0, m_layers.count() - 1));
+    m_layers.markAllDirty();
+    m_ready = true;
+    update();
+    return true;
+}
+
+bool Canvas::setLayerPixels(int index, const IRect& rect, const uint8_t* pixels) {
+    if (!m_ready || !m_layers.validIndex(index) || !pixels || rect.empty() ||
+        rect.intersected(IRect::ofSize(width(), height())) != rect) {
+        return false;
+    }
+    Layer& layer = m_layers.at(index);
+    gfx::clearErrors();
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glBindTexture(GL_TEXTURE_2D, layer.target.texture.id());
+    // La fila 0 de la textura es la de arriba: las filas van en el mismo orden.
+    glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x0, rect.y0, rect.width(), rect.height(), GL_RGBA, GL_UNSIGNED_BYTE,
+                    pixels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    ++layer.revision;
+    m_layers.markDirty(rect);
+    return gfx::checkErrors("Canvas::setLayerPixels");
 }
 
 void Canvas::destroy() {
@@ -1612,6 +1679,31 @@ bool Canvas::readComposite(std::vector<uint8_t>& pixels) {
     glReadPixels(0, 0, target.width, target.height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return gfx::checkErrors("Canvas::readComposite");
+}
+
+IRect Canvas::layerContent(int index) {
+    if (!m_ready || !m_layers.validIndex(index)) {
+        return {};
+    }
+    return m_bounds.find(m_layers.at(index).target, nullptr, IRect::ofSize(width(), height()));
+}
+
+bool Canvas::readRegion(int index, const IRect& rect, uint8_t* out) {
+    if (!m_ready || !out || rect.empty() || rect.intersected(IRect::ofSize(width(), height())) != rect ||
+        (index >= 0 && !m_layers.validIndex(index))) {
+        return false;
+    }
+    if (index < 0) {
+        update();
+    }
+    const gfx::RenderTarget& target = index < 0 ? m_compositor.composite() : m_layers.at(index).target;
+    gfx::clearErrors();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo.id());
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(rect.x0, rect.y0, rect.width(), rect.height(), GL_RGBA, GL_UNSIGNED_BYTE, out);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return gfx::checkErrors("Canvas::readRegion");
 }
 
 bool Canvas::pickColor(float x, float y, float rgb[3]) {

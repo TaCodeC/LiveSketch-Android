@@ -379,6 +379,9 @@ void Ui::paintWith(Canvas& canvas, Tool tool) {
 }
 
 void Ui::canvasCreated() {
+    // Lo que preguntaba o avisaba sobre el dibujo de antes ya no vale (se soltó un proyecto
+    // encima de una alerta o de una confirmación).
+    m_dialog = Dialog::None;
     m_drop = {};
     m_select.dropPolygon();
     m_transform.stop();

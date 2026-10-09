@@ -314,6 +314,24 @@ float saveSizeWidth() {
     return pt(16.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, "Guardar tamaño").x + pt(18.0f);
 }
 
+// «Abrir proyecto» de la pantalla de inicio: con el texto si cabe; si no, solo el icono.
+bool openProjectButton(ImDrawList* dl, const ImRect& rect, bool withText) {
+    const Press press = ui::buttonFrame("##open-project", rect, ui::ButtonStyle::Secondary, true, pt(10.0f));
+    const float cy = rect.GetCenter().y;
+    if (withText) {
+        ui::icon(dl, icon::kFolderOpen, ImVec2(rect.Min.x + pt(14.0f + 9.0f), cy), 18.0f, th::kLabel);
+        ui::label(dl, Weight::SemiBold, th::kSubhead, ImVec2(rect.Min.x + pt(14.0f + 18.0f + 8.0f), cy), Align::Left,
+                  th::kLabel, "Abrir proyecto", rect.GetWidth() - pt(14.0f + 18.0f + 8.0f + 10.0f));
+    } else {
+        ui::icon(dl, icon::kFolderOpen, rect.GetCenter(), 18.0f, th::kLabel);
+    }
+    return press.clicked;
+}
+
+float openProjectWidth() {
+    return pt(14.0f + 18.0f + 8.0f) + ui::measure(Weight::SemiBold, th::kSubhead, "Abrir proyecto").x + pt(16.0f);
+}
+
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -1302,9 +1320,10 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
                   (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
     bool close = false;
     bool save = false;
+    bool openProject = false;
 
     const char* description =
-        modal ? "El dibujo actual se descartará: guárdalo antes como PNG si quieres conservarlo."
+        modal ? "El dibujo actual se cerrará: guárdalo antes como proyecto si quieres retomarlo."
               : "NDI y el PNG usan el lienzo entero a este tamaño, sin importar el zoom.";
     const char* surface = modal ? "##new-canvas" : "##start-card";
     const ImU32 tint = modal ? IM_COL32(24, 24, 28, 232) : IM_COL32(24, 24, 28, 176);
@@ -1330,11 +1349,19 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         brand(dl, left, headerTop + pt(7.0f));
         const float titleCy = headerTop + pt(14.0f + 6.0f) + titleHeight * 0.5f;
         const float closeSize = pt(34.0f);
+        // A la derecha del título: cerrar (desde Acciones) o abrir un proyecto (al empezar).
+        const float titleWidth = ui::measure(Weight::Bold, th::kTitle, "Nuevo lienzo").x;
+        const bool openText = width - titleWidth - pt(12.0f) >= openProjectWidth();
+        const float buttonWidth = modal ? closeSize : (openText ? openProjectWidth() : closeSize);
         ui::label(dl, Weight::Bold, th::kTitle, ImVec2(left, titleCy), Align::Left, th::kLabel, "Nuevo lienzo",
-                  width - (modal ? closeSize + pt(12.0f) : 0.0f));
-        if (modal && closeButton(dl, ImRect(ImVec2(right - closeSize, titleCy - closeSize * 0.5f),
-                                            ImVec2(right, titleCy + closeSize * 0.5f)))) {
+                  width - buttonWidth - pt(12.0f));
+        const ImRect buttonRect(ImVec2(right - buttonWidth, titleCy - closeSize * 0.5f),
+                                ImVec2(right, titleCy + closeSize * 0.5f));
+        if (modal && closeButton(dl, buttonRect)) {
             close = true;
+        }
+        if (!modal && openProjectButton(dl, buttonRect, openText)) {
+            openProject = true;
         }
         const float headerBottom = titleCy + titleHeight * 0.5f + pt(14.0f);
         ui::separator(dl, rect.Min.x, rect.Max.x, headerBottom, th::kRule);
@@ -1406,7 +1433,9 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         const float settingsWidth = std::max(pt(kMinSettings), (inner - gutter) * kSettingsShare);
         const float presetsWidth = inner - gutter - settingsWidth;
         const float closeSize = pt(32.0f);
-        const float headerWidth = inner - (modal ? closeSize + pt(12.0f) : 0.0f);
+        // Arriba a la derecha: cerrar (desde Acciones) o abrir un proyecto (al empezar).
+        const float cornerWidth = modal ? closeSize : openProjectWidth();
+        const float headerWidth = inner - cornerWidth - pt(12.0f);
         // Con poco alto (un teléfono en horizontal), la cabecera va en dos líneas cortas.
         const bool shortHeader = L.bottom - L.top < pt(560.0f);
         const float titleHeight = ui::fontSize(shortHeader ? th::kHeadline : th::kTitle);
@@ -1448,8 +1477,12 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
             ui::label(dl, Weight::Regular, th::kFootnote,
                       ImVec2(left, top + titleHeight + pt(2.0f) + descriptionHeight * 0.5f), Align::Left,
                       IM_COL32(235, 235, 245, 153), description, headerWidth);
-            if (modal && closeButton(dl, ImRect(ImVec2(right - closeSize, top), ImVec2(right, top + closeSize)))) {
+            const ImRect corner(ImVec2(right - cornerWidth, top), ImVec2(right, top + closeSize));
+            if (modal && closeButton(dl, corner)) {
                 close = true;
+            }
+            if (!modal && openProjectButton(dl, corner, true)) {
+                openProject = true;
             }
         } else {
             float top = rect.Min.y + pad;
@@ -1461,9 +1494,12 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
             top += titleHeight + pt(6.0f);
             ui::paragraph(dl, Weight::Regular, th::kCallout, ImVec2(left, top), headerWidth, Align::Left,
                           IM_COL32(235, 235, 245, 153), description, 1.45f);
-            if (modal &&
-                closeButton(dl, ImRect(ImVec2(right - closeSize, headerTop), ImVec2(right, headerTop + closeSize)))) {
+            const ImRect corner(ImVec2(right - cornerWidth, headerTop), ImVec2(right, headerTop + closeSize));
+            if (modal && closeButton(dl, corner)) {
                 close = true;
+            }
+            if (!modal && openProjectButton(dl, corner, true)) {
+                openProject = true;
             }
         }
         const float bodyTop = rect.Min.y + headerHeight;
@@ -1543,6 +1579,9 @@ void Ui::newCanvasCard(bool modal, float presence, bool interactive, UiRequests&
         submitCanvas(requests, modal);
     } else if (close) {
         m_dialog = Dialog::None;
+    } else if (openProject) {
+        form.commit();
+        requests.openProject = true;
     }
 }
 
