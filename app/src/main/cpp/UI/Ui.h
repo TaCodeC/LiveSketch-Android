@@ -1,0 +1,791 @@
+#pragma once
+
+#include "Canvas/BrushLibrary.h"
+#include "Canvas/CanvasSpec.h"
+#include "Canvas/DrawingGuide.h"
+#include "Canvas/ImageAdjust.h"
+#include "Canvas/PressureCurve.h"
+#include "Canvas/Selection.h"
+#include "Tools/SelectTool.h"
+#include "Tools/ToolView.h"
+#include "Tools/TransformTool.h"
+#include "UI/CanvasForm.h"
+#include "UI/Kit.h"
+#include "UI/Previews.h"
+
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+class Canvas;
+namespace library {
+class Library;
+struct Summary;
+} // namespace library
+
+// Con qué se dibuja el trazo en curso (la forma rápida explica cómo hacerla perfecta).
+enum class StrokePointer { None, Pen, Finger, Mouse };
+
+// El proyecto del lienzo, para el botón Guardar: todo está en su archivo, hay cambios que aún
+// no (se guardan solos enseguida), se está guardando porque se pidió o no se pudo guardar.
+enum class ProjectSave { None, Saved, Unsaved, Saving, Failed };
+
+// La app trabaja y la interfaz no deja tocar nada: abre un proyecto o guarda el lienzo para
+// dejarlo.
+enum class Busy { None, Opening, Saving };
+
+// Lo que la interfaz necesita saber de la app en cada frame.
+struct UiStatus {
+    float pointScale = 1.0f;      // unidades de ImGui (coordenadas de la ventana) por punto
+    float pixelsPerUnit = 1.0f;   // píxeles físicos por unidad
+    float safeTop = 0.0f;         // bordes que tapan la muesca o el sistema, en unidades
+    float safeRight = 0.0f;
+    float safeBottom = 0.0f;
+    float safeLeft = 0.0f;
+    int screenWidth = 0;          // ventana en píxeles (lienzo "Pantalla completa")
+    int screenHeight = 0;
+    int maxCanvasSize = 0;        // lado máximo de textura que admite la GPU
+    float canvasZoom = 1.0f;      // píxeles de la pantalla por píxel del lienzo
+    ToolView canvasView;          // dónde se ve el lienzo (unidades)
+    float viewAngle = 0.0f;       // giro de la vista, en grados (de -180 a 180)
+    bool viewFlipped = false;     // la vista está volteada en horizontal
+    bool viewTurning = false;     // se está girando la vista: se muestra el ángulo
+    StrokePointer strokePointer = StrokePointer::None;   // con qué se dibuja el trazo en curso
+    float penPressure = -1.0f;    // presión del lápiz mientras toca la pantalla (0..1), o -1
+    bool touchInput = false;      // lo último que tocó la interfaz fue un dedo o el lápiz (no el ratón)
+
+    // Perfil de color de la pantalla en este frame, el del lienzo (sRGB sin lienzo) y si la
+    // pantalla puede mostrar Display P3.
+    ColorProfile displayProfile = ColorProfile::Srgb;
+    ColorProfile canvasProfile = ColorProfile::Srgb;
+    bool wideGamutScreen = false;
+
+    bool ndiAvailable = false;    // la app se compiló con el SDK de NDI
+    bool ndiRunning = false;
+    int ndiConnections = 0;
+    std::string ndiError;
+    bool exporting = false;       // hay un PNG guardándose (o esperando el permiso)
+    // El proyecto del lienzo y, si no se pudo guardar, por qué.
+    ProjectSave projectSave = ProjectSave::None;
+    std::string projectError;
+    bool exportingProject = false;   // se exporta el proyecto del lienzo (o se guarda para eso)
+    // Abriendo un proyecto o guardando el lienzo para dejarlo: lo que lleva (de 0 a 1; -1 si
+    // no se sabe), el nombre del lienzo (vacío si no tiene) y desde cuándo (SDL_GetTicks).
+    Busy busy = Busy::None;
+    float busyProgress = -1.0f;
+    std::string busyTitle;
+    uint64_t busySinceMs = 0;
+    // Los proyectos, para la pantalla de Proyectos (null: no hay dónde guardarlos).
+    const library::Library* library = nullptr;
+};
+
+// Lo que la interfaz pide a la app en este frame.
+struct UiRequests {
+    bool createCanvas = false;   // crear un lienzo nuevo como `canvas` (el de ahora se guarda antes)
+    CanvasSpec canvas;
+    bool fitView = false;   // centrar el lienzo (animado)
+    int rotateView = 0;     // girar la vista de 15 en 15 grados (+: en el sentido de las agujas del reloj)
+    bool straightenView = false;   // dejar la vista derecha
+    bool flipView = false;  // voltear la vista en horizontal (o quitar el volteo)
+    bool savePng = false;
+    bool saveProject = false;     // Guardar (el proyecto del lienzo)
+    bool exportProject = false;   // exportar el proyecto del lienzo (a Descargas; en la web, descargarlo)
+    bool exportProjectTo = false; // exportarlo eligiendo dónde (Android y escritorio)
+    bool openProject = false;     // elegir un archivo de proyecto para abrirlo
+    bool showProjects = false;    // dejar el lienzo e ir a Proyectos
+    bool leaveConfirmed = false;  // dejar el lienzo aunque no se pudo guardar (ver askLeave)
+    // Lo que se pide en la pantalla de Proyectos para un proyecto de la biblioteca.
+    struct ProjectAction {
+        // Export: a Descargas (en la web, descargarlo); ExportTo: eligiendo dónde.
+        enum class Kind { None, Open, Rename, Duplicate, Export, ExportTo, Remove };
+        Kind kind = Kind::None;
+        std::string path;
+        std::string name;   // Rename: el nuevo; Duplicate: el de la copia; al exportar, el del proyecto
+    } project;
+    bool quit = false;
+    int ndi = -1;           // 1: encender NDI, 0: apagarlo
+};
+
+// Tipo de aviso: decide el icono.
+enum class Notice { Info, Success, Warning, Error, Progress, Undo, Redo };
+
+// Herramientas de pintar, cada una con su pincel, su tamaño y su opacidad. En la barra van
+// en el orden de Procreate: pincel, difuminar y borrador.
+enum class Tool { Brush, Eraser, Smudge };
+inline constexpr int kToolCount = 3;
+
+// Qué hace un puntero sobre el lienzo: pintar (con el pincel o el borrador), seleccionar,
+// transformar, con un ajuste de imagen, cambiar su valor principal deslizando a los lados
+// o, mientras se edita la guía de dibujo, mover su centro y girarla.
+enum class CanvasTool { Paint, Select, Transform, Adjust, Guide };
+
+// Interfaz al estilo de Procreate: barras flotantes de cristal arriba, barra lateral con
+// tamaño, cuentagotas, opacidad, deshacer y rehacer, y paneles que se abren desde las
+// barras (hojas desde abajo en un teléfono en vertical).
+//
+// Opera directamente sobre el lienzo; lo que no es del lienzo lo pide a la app con
+// UiRequests. Implementación repartida en Ui.cpp (barras y avisos), UiPanels.cpp
+// (paneles), UiBrushes.cpp (pinceles), UiTools.cpp (Selección y Transformar), UiAdjust.cpp
+// (ajustes de imagen), UiGuide.cpp (guía de dibujo), UiFill.cpp (arrastrar el color para
+// rellenar), UiPen.cpp (curva de presión y suavizado), UiCanvas.cpp (tarjeta de lienzo
+// nuevo y propiedades del lienzo), UiDialogs.cpp (confirmaciones y alertas) y UiProjects.cpp
+// (la pantalla de Proyectos).
+class Ui {
+public:
+    // Objetos de GPU (miniaturas y trazos de muestra). Tras perder el contexto GL se
+    // vuelve a llamar.
+    bool init();
+    void destroy();
+    // Guarda ya lo que estaba pendiente de guardar (la app pasa a segundo plano y el
+    // sistema puede cerrarla sin avisar).
+    void saveNow() { saveBrushesIfDue(true); }
+
+    // Escala y reloj de las animaciones. Después del NewFrame de los backends y antes de
+    // ImGui::NewFrame().
+    void beginFrame(const UiStatus& status);
+    // Toda la interfaz del frame. `canvas` es null sin lienzo: entonces se muestra la
+    // pantalla de Proyectos.
+    void build(Canvas* canvas, UiRequests& requests);
+
+    // --- Para la entrada de la app ---
+    bool drawWithFinger() const { return m_prefs.drawWithFinger; }
+    // Girar la vista con dos dedos.
+    bool rotateWithFingers() const { return m_prefs.rotateWithFingers; }
+    // Forma rápida: mantener quieto el final de un trazo lo convierte en una forma.
+    bool quickShape() const { return m_prefs.quickShape; }
+    // Curva de presión del lápiz: la app la aplica a la presión que mide.
+    const PressureCurve& pressureCurve() const { return m_prefs.pressure; }
+    // Ajustes del pincel justo antes de empezar un trazo. La goma del lápiz usa los del
+    // borrador aunque la herramienta sea el pincel.
+    void prepareStroke(Canvas& canvas, bool eraserTip);
+    // Empezó un trazo: su color pasa a los recientes.
+    void strokeStarted(const Canvas& canvas, bool erasing);
+
+    bool eyedropperArmed() const { return m_eyedropperArmed; }
+    void setEyedropperArmed(bool armed) { m_eyedropperArmed = armed; }
+    // Lupa del cuentagotas en `position` (unidades). `rgb` null: fuera del lienzo.
+    // `touch`: con el dedo la lupa se dibuja encima para que el dedo no la tape.
+    void showPicker(ImVec2 position, const float* rgb, bool touch);
+    void hidePicker() { m_picker.active = false; }
+    // Aplica el color elegido con el cuentagotas.
+    void pickColor(Canvas& canvas, const float rgb[3]);
+
+    // Aviso breve bajo las barras. Progress se queda hasta que otro aviso lo sustituye
+    // (o hasta `durationMs`).
+    void notify(std::string text, Notice kind = Notice::Info, uint32_t durationMs = 3000);
+    // Quita el aviso que se ve si es de ese tipo (un «Guardando…» que ya no sigue).
+    void dismissNotice(Notice kind);
+    // Deshacer o rehacer desde un gesto o un atajo (ya hecho o no: `done`).
+    void showUndo(bool redo, bool done);
+    // Alerta con un solo botón: por qué no se pudo guardar o abrir un proyecto, o lo que se
+    // arregló al abrirlo. Si ya hay otra confirmación abierta, va como aviso.
+    void showAlert(std::string title, std::string message, Notice kind = Notice::Error);
+
+    // --- Proyectos (UiProjects.cpp) ---
+    // No se pudo guardar el lienzo antes de dejarlo: se pregunta si dejarlo igualmente, con
+    // `confirm` en el botón. Mientras se ve, confirmingLeave(); al aceptarla, la interfaz pide
+    // leaveConfirmed.
+    void askLeave(std::string title, std::string message, std::string confirm);
+    bool confirmingLeave() const { return m_dialog == Dialog::Leave; }
+    // El proyecto que estaba abierto (su nombre de archivo en la carpeta de proyectos; vacío
+    // si ninguno), para volver a él al arrancar. Se guarda con las preferencias.
+    const std::string& lastProject() const { return m_prefs.lastProject; }
+    void setLastProject(std::string name);
+    // Se abrió un proyecto (después de canvasCreated): el color del pincel que guardaba, en
+    // el perfil del lienzo (null si no lo guardaba).
+    void projectOpened(Canvas& canvas, const float* brushColor);
+    // El color del pincel en el perfil del lienzo, para guardarlo con el proyecto.
+    void brushColor(const Canvas& canvas, float rgb[3]) const;
+
+    // --- Selección, Transformar y Ajustes (UiTools.cpp) ---
+    CanvasTool canvasTool() const { return m_canvasTool; }
+    // Un puntero sobre el lienzo con la herramienta Selección, Transformar o un ajuste
+    // (unidades).
+    // `modifier`: Add o Subtract si los pide el teclado (Mayús o Alt); `constrain`: Mayús
+    // mientras se arrastra (cuadrado o círculo).
+    void toolPress(Canvas& canvas, const ToolView& view, ImVec2 position, SelectOp modifier);
+    void toolDrag(Canvas& canvas, const ToolView& view, ImVec2 position, bool constrain);
+    void toolRelease(Canvas& canvas, const ToolView& view, ImVec2 position);
+    // Otro dedo o el sistema cancelan el gesto.
+    void toolCancel(Canvas& canvas);
+    // Deshacer o rehacer desde un gesto: primero lo que la herramienta tenga a medias
+    // (el lazo por puntos, los pasos de la transformación).
+    void undoGesture(Canvas& canvas, bool redo);
+    // Hay que dibujar el siguiente frame (el borde de la selección se mueve).
+    bool selectionAnimating(const Canvas& canvas) const;
+    // Se creó otro lienzo: las herramientas vuelven a empezar.
+    void canvasCreated();
+
+    // Bordes de la ventana que tapa la interfaz (unidades): el ajuste del lienzo los evita.
+    float insetTop() const { return m_insets[0]; }
+    float insetRight() const { return m_insets[1]; }
+    float insetBottom() const { return m_insets[2]; }
+    float insetLeft() const { return m_insets[3]; }
+    // Instante (SDL_GetTicks) en que hay que volver a dibujar aunque no pase nada (se
+    // oculta un aviso), o 0.
+    uint64_t wakeDeadline() const;
+
+private:
+    enum class Panel { None, Actions, Ndi, Brushes, Layers, Color, Feather, Modify, Adjust };
+    // Lo que muestra el panel de Acciones: sus pestañas o las propiedades del lienzo.
+    enum class ActionsPage { Main, Properties };
+    // Qué color cambia el selector de color: el del pincel o el de fondo del lienzo.
+    enum class ColorTarget { Brush, Background };
+    enum class Dialog {
+        None,
+        DeleteLayer,
+        RenameLayer,
+        NewCanvas,
+        ConvertProfile,
+        Leave,
+        RenameProject,
+        DeleteProject,
+        Alert
+    };
+
+    struct Layout {
+        ImVec2 display;
+        float safe[4] = {0, 0, 0, 0};   // arriba, derecha, abajo, izquierda
+        bool compact = false;           // pantalla pequeña: medidas más justas
+        bool narrow = false;            // teléfono en vertical: paneles como hojas
+        float margin = 0.0f;
+        float left = 0.0f;              // zona útil (sin márgenes ni zona segura)
+        float top = 0.0f;
+        float right = 0.0f;
+        float bottom = 0.0f;
+        ImRect leftBar;
+        ImRect ndiBar;                  // vacía si NDI va dentro de la barra izquierda
+        ImRect rightBar;
+        ImRect sidebar;
+        ImRect sizeSlider;
+        ImRect eyedropper;
+        ImRect opacitySlider;
+        float separatorY = 0.0f;
+        ImRect undo;
+        ImRect redo;
+        float popoverTop = 0.0f;
+        float toastTop = 0.0f;
+        float barButton = 0.0f;         // ancho de los botones de las barras de arriba
+    };
+
+    struct Prefs {
+        bool drawWithFinger = false;
+        bool sidebarRight = false;
+        bool rotateWithFingers = true;
+        bool quickShape = true;
+        int size = 1;   // tamaño de la interfaz: 0 pequeña, 1 normal, 2 grande
+        PressureCurve pressure;     // del lápiz
+        float smoothing = 0.0f;     // suavizado de todos los trazos (0..1)
+        std::string lastProject;    // ver lastProject()
+    };
+
+    // Ajustes de cada herramienta: el pincel, difuminar y el borrador guardan los suyos.
+    struct ToolPreset {
+        int brush = 0;          // en brushes::library()
+        float size = 0.3f;      // posición del deslizador (0..1): el radio depende del pincel
+        float opacity = 1.0f;
+    };
+    // Tamaño y opacidad que tenía cada pincel en cada herramienta.
+    struct BrushMemory {
+        float size = 0.0f;
+        float opacity = 1.0f;
+        bool set = false;
+    };
+
+    struct Toast {
+        std::string text;
+        Notice kind = Notice::Info;
+        uint64_t until = 0;     // SDL_GetTicks
+    };
+
+    struct Picker {
+        bool active = false;
+        bool touch = false;
+        bool valid = false;
+        ImVec2 position;
+        float rgb[3] = {0, 0, 0};
+    };
+
+    // Marco de un panel: popover bajo su botón o hoja desde abajo.
+    struct PanelFrame {
+        ImDrawList* dl = nullptr;
+        ImRect rect;              // el panel en pantalla
+        ImRect content;           // zona del contenido (sin el tirador de la hoja)
+        float scroll = 0.0f;      // hay que restarlo a la y del contenido
+        bool scrolls = false;
+        bool open = false;        // abierto (si no, se está cerrando)
+        bool sheet = false;
+        float presence = 0.0f;
+        ImVec2 anchor;
+        ui::DrawMark mark;
+    };
+
+    // --- Ui.cpp ---
+    void computeLayout();
+    void loadPrefs();
+    void savePrefs() const;
+    void syncBrush(Canvas& canvas);
+    void applyPreset(Canvas& canvas, Tool tool);
+    void selectTool(Tool tool);
+    // Posición del botón de la herramienta en la barra de la derecha.
+    static int toolSlot(Tool tool);
+    void togglePanel(Panel panel);
+    void closePanels();
+    // Cierra lo último que se abrió (el botón atrás o Escape). Con `canvas`, también sale
+    // de la herramienta Selección o Transformar, o cancela el ajuste de imagen.
+    bool closeTopmost(Canvas* canvas);
+    void handleKeys(Canvas& canvas, UiRequests& requests);
+    void undo(Canvas& canvas, bool redo);
+    bool canUndo(const Canvas& canvas) const;
+    void setColor(Canvas& canvas, const float rgb[3]);
+    void pushRecent(const float rgb[3]);
+    // El lienzo cambió de perfil de color (otro lienzo, convertirlo o deshacerlo): el color
+    // del pincel, los recientes y los anteriores pasan a él y se ven igual.
+    void followCanvasProfile(Canvas& canvas);
+    float ndiCapsuleWidth() const;
+
+    void beginBar(const char* name, const ImRect& rect, float radius);
+    bool barButton(const char* id, const ImRect& rect, const char* glyph, bool open, bool selected,
+                   bool enabled = true);
+    void drawScrim();
+    void drawTopBars(Canvas& canvas, UiRequests& requests);
+    void drawNdiCapsule();
+    void drawSidebar(Canvas& canvas);
+    void drawHud(Canvas& canvas);
+    void drawPicker(Canvas& canvas);
+    void drawToast();
+    // Mientras la app abre un proyecto o guarda el lienzo para dejarlo: tapa la interfaz con lo
+    // que hace (al guardar, solo si tarda un poco).
+    void drawBusy();
+    // Cápsula de arriba (donde salen los avisos) mientras se gira la vista o se ajusta una
+    // forma rápida. Va antes que los avisos: mientras se ve, los oculta.
+    void drawCapsules(const Canvas& canvas);
+
+    // --- UiPanels.cpp ---
+    bool beginPanel(PanelFrame& frame, Panel panel, const char* name, float x, float width, float contentHeight,
+                    float anchorX, bool scrollBody);
+    void endPanel(PanelFrame& frame);
+    void drawPanels(Canvas& canvas, UiRequests& requests);
+    void actionsPanel(Canvas& canvas, UiRequests& requests);
+    void ndiPanel(Canvas& canvas, UiRequests& requests);
+    void layersPanel(Canvas& canvas);
+    void blendList(Canvas& canvas, ImDrawList* dl, const ImRect& view);
+    // Al final de la lista de capas, el color de fondo: tocarlo abre su página.
+    void backgroundRow(Canvas& canvas, ImDrawList* dl, const ImRect& row, float thumbWidth, float thumbHeight);
+    void layerMenu(Canvas& canvas);
+    void colorPanel(Canvas& canvas);
+    // Rueda de tono con el cuadro de saturación y brillo, el hexadecimal, los recientes y la
+    // paleta, para el color de `target`, entre `left` y `right` desde `y`. `wide`: la rueda a
+    // la izquierda y lo demás a su derecha.
+    void colorPicker(Canvas& canvas, ImDrawList* dl, ColorTarget target, float left, float right, float y,
+                     float wheel, bool wide);
+    void targetColor(const Canvas& canvas, ColorTarget target, float rgb[3]) const;
+    void setTargetColor(Canvas& canvas, ColorTarget target, const float rgb[3]);
+    void syncHsv(const float rgb[3]);
+    void applyHsv(Canvas& canvas, ColorTarget target);
+
+    // --- UiBrushes.cpp ---
+    void initBrushes();
+    void loadBrushes();
+    void saveBrushes();
+    void scheduleBrushSave();
+    void saveBrushesIfDue(bool force);
+    // Elige el pincel `index` de la biblioteca para `tool`: recupera el tamaño y la
+    // opacidad que tenía (o los suyos por defecto).
+    void selectBrush(Tool tool, int index);
+    const BrushParams& toolBrush(Tool tool) const;
+    float toolRadius(Tool tool) const;
+    void brushesPanel();
+    void brushList(ImDrawList* dl, const ImRect& view);
+    void brushSettings(ImDrawList* dl, const ImRect& view);
+
+    // --- UiTools.cpp ---
+    // Cambia de herramienta del lienzo: al salir de Transformar se aplica y al entrar se
+    // empieza (si hay algo que transformar).
+    void setCanvasTool(Canvas& canvas, CanvasTool tool);
+    // Vuelve a pintar con el pincel o el borrador.
+    void paintWith(Canvas& canvas, Tool tool);
+    // Cada frame: lo que cambió fuera de la herramienta (otra operación aplicó la
+    // transformación, deshacer quitó el difuminado...).
+    void toolFrame(Canvas& canvas);
+    // Deshace o rehace un paso (con lo de la herramienta primero). Devuelve si hizo algo.
+    bool undoStep(Canvas& canvas, bool redo);
+    bool toolKeys(Canvas& canvas);
+    void selectionNotice(SelectTool::Result result);
+    // Empieza a transformar. `quiet`: sin avisar si no hay nada que transformar.
+    // `wholeLayer`: toda la capa activa aunque haya selección (ver Canvas::beginTransform).
+    bool enterTransform(Canvas& canvas, bool quiet, bool wholeLayer = false);
+    void copySelection(Canvas& canvas, bool cut);
+    void pasteClipboard(Canvas& canvas);
+    void duplicateSelection(Canvas& canvas);
+    void clearSelected(Canvas& canvas);
+    void fillSelected(Canvas& canvas);
+    void drawToolOverlay(const Canvas& canvas);
+    void drawDock(Canvas& canvas);
+    void selectDock(Canvas& canvas);
+    void transformDock(Canvas& canvas);
+    void drawPolygonBar(Canvas& canvas);
+    // Indicador de arriba mientras se ajusta algo arrastrando en el lienzo.
+    void drawThreshold(const Canvas& canvas);
+    void featherPanel(Canvas& canvas);
+    void modifyPanel(Canvas& canvas);
+
+    // --- UiAdjust.cpp ---
+    // Deslizador de la barra de un ajuste: su valor (0..1), su nombre, el texto del valor
+    // y su aspecto.
+    struct AdjustSlider {
+        float* t = nullptr;
+        const char* text = "";
+        char value[24] = {};
+        ui::SliderStyle style;
+    };
+    // Empieza el ajuste `kind` en la capa activa, con los valores a cero. El que hubiera a
+    // medias se aplica antes, y la transformación también.
+    void startAdjust(Canvas& canvas, Adjustment kind);
+    // Termina el ajuste (aplicándolo o no) y vuelve a la herramienta de antes.
+    void finishAdjust(Canvas& canvas, bool apply);
+    AdjustParams adjustParams(const Canvas& canvas) const;
+    // Pasa los deslizadores al lienzo (que vuelve a dibujar el resultado).
+    void updateAdjust(Canvas& canvas);
+    // Los deslizadores del ajuste que se está haciendo (el principal, primero). Devuelve
+    // cuántos hay.
+    int adjustSliders(const Canvas& canvas, AdjustSlider out[3]);
+    // El valor que cambia deslizando en el lienzo (desenfoque, enfocar y ruido), o null.
+    float* adjustMain();
+    void adjustPress(ImVec2 position);
+    void adjustDrag(Canvas& canvas, ImVec2 position);
+    void adjustRelease();
+    // Otro dedo o el sistema cancelan el arrastre: el valor vuelve al de antes.
+    void adjustCancel(Canvas& canvas);
+    // Lo que muestra el indicador de arriba mientras se desliza en el lienzo.
+    void adjustPill(const Canvas& canvas, const char** glyph, const char** title, char* value, size_t size, float* t);
+    void adjustPanel(Canvas& canvas);
+    void adjustDock(Canvas& canvas);
+
+    // --- UiGuide.cpp ---
+    // Edita la guía de dibujo: la activa y muestra su barra y sus tiradores (el centro y el
+    // giro). Al terminar se vuelve a la herramienta de antes; sin `keep`, la guía vuelve a
+    // como estaba.
+    void startGuide(Canvas& canvas);
+    void finishGuide(Canvas& canvas, bool keep);
+    // Un puntero sobre el lienzo mientras se edita: arrastra el tirador que toque.
+    void guidePress(const Canvas& canvas, const ToolView& view, ImVec2 position);
+    void guideDrag(Canvas& canvas, const ToolView& view, ImVec2 position);
+    void guideRelease();
+    // Otro dedo o el sistema cancelan el arrastre: el tirador vuelve a donde estaba.
+    void guideCancel(Canvas& canvas);
+    // Las líneas de la guía, si está activa, y al editarla sus tiradores (debajo de la
+    // interfaz).
+    void drawGuide(const Canvas& canvas);
+    void guideDock(Canvas& canvas);
+
+    // --- UiFill.cpp ---
+    // El botón del color (`button`) está pulsado o se acaba de soltar: arrastrarlo lleva
+    // el color al lienzo, y soltarlo rellena la zona. Quieto un momento sobre el lienzo,
+    // el relleno se ve y deslizar en horizontal ajusta el umbral hasta soltar.
+    void colorDrop(Canvas& canvas, ImGuiID button);
+    void finishDrop(Canvas& canvas);
+    // Escape o deshacer mientras se arrastra: no se rellena nada (hasta soltar no hace nada).
+    void cancelDrop(Canvas& canvas);
+    // Empieza el relleno donde está el puntero; si no se puede, avisa por qué.
+    bool startFill(Canvas& canvas, ImVec2 position);
+    void fillApplied(Canvas& canvas, bool changed);
+    // El puntero está sobre el lienzo y no sobre la interfaz.
+    bool overCanvas(const Canvas& canvas, ImVec2 position) const;
+    // El círculo del color que va con el puntero.
+    void drawDrop(Canvas& canvas);
+
+    // --- UiPen.cpp ---
+    // Curva de presión y suavizado en Preferencias: alto que ocupan con este ancho, y
+    // dibujarlos entre `left` y `right` desde `y`.
+    float penSettingsHeight(float width) const;
+    void penSettings(ImDrawList* dl, float left, float right, float y);
+
+    // --- UiDialogs.cpp ---
+    void drawDialogs(Canvas* canvas, UiRequests& requests);
+    void openDialog(Dialog dialog, const Canvas* canvas);
+    // Confirmación para pasar el lienzo a `profile` (dice si se podrá deshacer).
+    void askConvertProfile(Canvas& canvas, ColorProfile profile);
+    // Fondo de la pantalla de Proyectos y de la tarjeta de inicio.
+    void startBackground();
+    // Sin dónde guardar proyectos: la tarjeta de lienzo nuevo, sola.
+    void startScreen(UiRequests& requests);
+
+    // --- UiProjects.cpp ---
+    // Al abrir la app y sin lienzo: los proyectos de la biblioteca (sin biblioteca, la
+    // tarjeta de lienzo nuevo).
+    void projectsScreen(UiRequests& requests);
+    // Las fichas de los proyectos en `view`, que se desplaza.
+    void projectGrid(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests);
+    // Sin proyectos, en `view`: qué es esta pantalla, «Abrir archivo» y «Nuevo lienzo».
+    void projectsEmpty(ImDrawList* dl, const ImRect& view, float left, float right, UiRequests& requests);
+    void projectCard(ImDrawList* dl, const library::Summary& item, const ImRect& rect, bool busy,
+                     UiRequests& requests);
+    // El menú de un proyecto (Renombrar, Duplicar, Exportar, Eliminar), junto a su botón.
+    void projectMenu(UiRequests& requests);
+    void openProjectMenu(const std::string& path, const ImRect& anchor);
+    // La miniatura del proyecto en una textura, en el perfil de la pantalla (0 si no tiene).
+    GLuint projectThumbnail(const library::Summary& item);
+
+    // --- UiCanvas.cpp ---
+    // Lo que dice el resumen de la tarjeta de lienzo nuevo.
+    struct CanvasSummary {
+        std::string size;           // "2480 × 3508 px"
+        std::string detail;         // "A4 vertical · 21 × 29,7 cm a 300 ppp"
+        std::string note;           // las capas que caben o, si no se puede crear, por qué
+        ImU32 noteColor = 0;        // 0: nada que avisar; si no, el color del aviso
+        bool canCreate = true;
+    };
+    // Tarjeta de lienzo nuevo: pantalla de inicio (`modal` false) o desde Acciones.
+    void newCanvasCard(bool modal, float presence, bool interactive, UiRequests& requests);
+    // Los tamaños (pestañas de las categorías y fichas) y los ajustes (nombre, tamaño a
+    // medida, resolución y fondo): su alto con este ancho y dibujarlos desde `y`.
+    float canvasPresetsHeight(float width, int category) const;
+    void canvasPresets(ImDrawList* dl, float left, float right, float y);
+    float canvasSettingsHeight(float width, bool colorOptions) const;
+    void canvasSettings(ImDrawList* dl, float left, float right, float y, bool interactive);
+    // Campo de un número (ancho o alto) que se escribe al tocarlo.
+    void numberField(ImDrawList* dl, const char* id, const ImRect& rect, CanvasForm::Field field, const char* caption,
+                     const std::string& value, const char* unit);
+    // Fichas de la resolución de `form` (72, 150, 300, 600 y «Otra», que se escribe ahí
+    // mismo) desde `y`. Elegir una cambia los ppp de `form`; devuelve si se tocó «Otra»
+    // para escribirla. Mientras se escribe, deja en `fieldRect` dónde está.
+    bool ppiChips(ImDrawList* dl, float left, float right, float y, CanvasForm& form, ImRect* fieldRect);
+    // Fichas del fondo (blanco, un color o transparente) y, con Color, las muestras y el
+    // hexadecimal, desde `y`. Devuelve si se cambió `kind` o `color`.
+    // `color` es de `profile`.
+    float backgroundOptionsHeight(bool colorOptions) const;
+    bool backgroundOptions(ImDrawList* dl, float left, float right, float y, CanvasForm::Background* kind,
+                           float color[3], ColorProfile profile, bool interactive);
+    // Fichas del perfil de color (sRGB o Display P3) desde `y`, y debajo lo que se explica
+    // del perfil `current`. Devuelve el que se tocó (o `current`).
+    float profileOptionsHeight(float width) const;
+    ColorProfile profileOptions(ImDrawList* dl, float left, float right, float y, ColorProfile current);
+    // Qué tamaño es: "A4 vertical", "Full HD horizontal" o "Horizontal a medida". Con
+    // `category` e `index`, mejor ese tamaño de la tarjeta si aún lo es.
+    std::string sizeName(int width, int height, float ppi, int category, int index) const;
+    CanvasSummary canvasSummary() const;
+    // La forma del lienzo con su fondo y el resumen a su derecha, desde `top`.
+    void canvasSummaryBlock(ImDrawList* dl, const CanvasSummary& summary, float left, float right, float top,
+                            float preview);
+    // Teclado numérico para el número que se escribe en `form`.
+    void numberKeypad(ImDrawList* dl, const ImRect& area, CanvasForm& form);
+    // Píxeles de un tamaño de la tarjeta: la pantalla, o el papel a `ppi`.
+    void presetPixels(const canvasspec::Preset& preset, float ppi, int* width, int* height) const;
+    void beginCanvasEdit(CanvasForm::Field field, bool keypad);
+    // Deja de escribir (Escape sin cambiar nada; atrás, con lo escrito). Devuelve si se
+    // escribía algo.
+    bool cancelCanvasEdit();
+    // Teclado físico mientras se escribe un número en `form`. `cycle`: el tabulador pasa
+    // al ancho, al alto y a la resolución.
+    void numberKeys(CanvasForm& form, bool cycle);
+    void submitCanvas(UiRequests& requests, bool modal);
+    void loadSavedSizes();
+    void saveSavedSizes() const;
+    // «Guardar tamaño»: lo que está configurado pasa a «Mis tamaños».
+    void saveCanvasSize();
+
+    // Propiedades del lienzo, una página del panel de Acciones: el nombre, la resolución
+    // (sin reescalar) y el fondo, y los datos del lienzo.
+    void openProperties(const Canvas& canvas);
+    // Deja de escribir el nombre o los ppp: con `keep`, con lo escrito; si no, los ppp
+    // vuelven a como estaban (el nombre se queda: cambia según se escribe). Devuelve si se
+    // escribía algo.
+    bool stopPropertiesEdit(Canvas& canvas, bool keep);
+    // Alto de la página con este ancho y la página en `view` (bajo su cabecera), que se
+    // desplaza si no cabe.
+    float propertiesHeight(const Canvas& canvas, float width) const;
+    void propertiesPage(Canvas& canvas, ImDrawList* dl, const ImRect& view, bool interactive);
+
+    Previews m_previews;
+    UiStatus m_status;
+    Layout m_layout;
+    Prefs m_prefs;
+    bool m_prefsLoaded = false;
+    bool m_prefsDirty = false;      // hay cambios sin guardar (se guardan al soltar)
+    float m_insets[4] = {0, 0, 0, 0};
+
+    Tool m_tool = Tool::Brush;
+    ToolPreset m_presets[kToolCount];
+
+    // Pinceles: la biblioteca con los cambios del usuario, lo que recuerda cada uno y el
+    // guardado (se escribe un momento después del último cambio).
+    std::vector<BrushParams> m_brushParams;
+    std::vector<BrushMemory> m_brushMemory[kToolCount];
+    uint64_t m_brushSaveAt = 0;     // SDL_GetTicks; 0: nada pendiente
+    int m_brushCategory = 0;        // la que muestra la lista
+    bool m_brushPage = false;       // el panel muestra los ajustes del pincel elegido
+    bool m_brushScroll = false;     // al abrir la lista, mostrar el pincel elegido
+    Panel m_panel = Panel::None;
+    int m_actionsTab = 0;           // Acciones: 0 lienzo, 1 compartir, 2 preferencias, 3 ayuda
+    ActionsPage m_actionsPage = ActionsPage::Main;
+    bool m_layerMenu = false;
+    bool m_blendPage = false;       // el panel de capas muestra la lista de modos de fusión
+    bool m_blendEditing = false;    // se han probado modos: al salir de la lista se guarda el paso
+    bool m_blendScroll = false;     // al abrir la lista, mostrar el modo de la capa
+    bool m_backgroundPage = false;  // el panel de capas muestra el color de fondo
+    bool m_backgroundEditing = false;   // se cambió el fondo: al salir de su página se guarda el paso
+    float m_previousBackground[3] = {1.0f, 1.0f, 1.0f};   // el color de fondo al abrir su página
+    ImRect m_activeRow;             // fila de la capa activa (para situar su menú)
+    ImRect m_layersRect;            // panel de capas en pantalla
+    bool m_layerOpacityDragging = false;
+    int m_scrollToLayer = -1;       // id de una capa nueva que hay que mostrar
+
+    // Color: HSV propio (para no perder el tono con grises), recientes y el anterior.
+    float m_hsv[3] = {0.6f, 0.8f, 0.9f};
+    float m_hsvSource[3] = {-1.0f, -1.0f, -1.0f};   // RGB del que salió m_hsv
+    float m_recent[6][3] = {};
+    int m_recentCount = 0;
+    float m_previousColor[3] = {0, 0, 0};
+    ColorProfile m_colorProfile = ColorProfile::Srgb;   // el de esos colores (el del lienzo)
+    bool m_hexEditing = false;
+    int m_hexFocusFrames = 0;       // frames en los que el campo aún está cogiendo el foco
+    char m_hexBuffer[16] = {};
+
+    bool m_eyedropperArmed = false;
+    Picker m_picker;
+    Toast m_toast;
+
+    // Selección y Transformar.
+    CanvasTool m_canvasTool = CanvasTool::Paint;
+    CanvasTool m_toolBeforeTransform = CanvasTool::Paint;   // adónde vuelve al aplicar
+    SelectTool m_select;
+    TransformTool m_transform;
+    ImRect m_dock;                  // barra de opciones de la herramienta, en pantalla
+    ImRect m_featherButton;         // botón de difuminar (para situar su panel)
+    ImRect m_modifyButton;          // "Modificar" en un teléfono
+    float m_featherValue = 0.0f;    // posición del deslizador de difuminar (0..1)
+    bool m_autoHint = false;        // ya se explicó la selección automática
+    // Lo que muestra el indicador de arriba (o lo que mostraba, mientras se oculta).
+    enum class Pill { Select, Fill, Adjust };
+    Pill m_pill = Pill::Select;
+    // Cápsula del giro de la vista o de la forma rápida (lo que muestra o, mientras se
+    // oculta, lo que mostraba).
+    struct Capsule {
+        const char* glyph = nullptr;
+        std::string title;
+        std::string hint;           // cómo hacer perfecta la forma ("" si no hay)
+        bool flipped = false;       // la vista está volteada
+    } m_capsule;
+
+    // Guía de dibujo mientras se edita.
+    CanvasTool m_toolBeforeGuide = CanvasTool::Paint;   // adónde vuelve al terminar
+    DrawingGuide m_guideBefore;     // la de antes de editarla (para cancelar)
+    struct GuideDrag {
+        int handle = 0;             // 0 ninguno, 1 el centro, 2 el giro
+        glm::vec2 grab{0.0f};       // del puntero al centro, en el lienzo
+        float spin = 0.0f;          // del puntero al tirador del giro (radianes)
+        DrawingGuide before;        // la guía al empezar el arrastre
+    } m_guideDrag;
+
+    // Ajustes de imagen: los deslizadores de cada uno (0..1) y el arrastre en el lienzo.
+    CanvasTool m_toolBeforeAdjust = CanvasTool::Paint;   // adónde vuelve al terminar
+    Adjustment m_adjustKind = Adjustment::HueSaturation;
+    struct AdjustSliders {
+        float hsb[3] = {0.5f, 0.5f, 0.5f};   // el centro es el cero
+        float balance[3][3] = {{0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}};
+        float blur = 0.0f;
+        float sharpen = 0.0f;
+        float noise = 0.0f;
+        float noiseSize = 0.0f;
+    } m_adjust;
+    int m_balanceRange = 1;         // sombras, medios tonos o luces
+    struct AdjustDrag {
+        bool pressed = false;
+        bool active = false;        // ya se movió: cambia el valor
+        float startX = 0.0f;
+        float startT = 0.0f;
+    } m_adjustDrag;
+    ImRect m_adjustButton;          // botón de Ajustes en la barra de una tableta
+    bool m_adjustHint = false;      // ya se explicó que se puede deslizar en el lienzo
+
+    // Arrastrar el color al lienzo para rellenar.
+    struct ColorDrop {
+        bool dragging = false;      // el color va con el puntero
+        bool filling = false;       // se paró sobre el lienzo: se ve el relleno y se ajusta el umbral
+        bool finished = false;      // ya terminó (deshacer lo quitó): no hace nada hasta soltar
+        bool refused = false;       // no se pudo rellenar aquí: no se vuelve a probar sin moverse
+        ImVec2 position;            // del puntero (unidades)
+        ImVec2 stillAt;             // dónde se quedó quieto
+        double stillSince = 0.0;
+        ImVec2 fillAt;              // dónde empezó el relleno
+        float startThreshold = 0.0f;
+    } m_drop;
+    float m_fillThreshold = 0.3f;   // umbral del relleno (0..1); se recuerda para la siguiente vez
+    struct DropMark {               // lo que se dibuja del color (se queda al soltar, mientras se desvanece)
+        ImVec2 center;
+        bool small = false;         // el punto de donde sale el relleno
+    } m_dropMark;
+
+    // Punto de la curva de presión que se arrastra (o toque para añadir uno).
+    struct CurveDrag {
+        int index = -1;             // -1: ninguno
+        bool removing = false;      // está fuera de la gráfica: al soltar se quita
+        bool tap = false;           // se tocó lejos de los puntos: al soltar sin moverse se añade uno
+        glm::vec2 grab{0.0f};       // del puntero al punto (unidades)
+        glm::vec2 at{0.0f};         // dónde va (unidades)
+    } m_curveDrag;
+
+    // Deshacer mantenido pulsado: se repite.
+    ImGuiID m_repeatId = 0;
+    double m_repeatStart = 0.0;
+    double m_repeatLast = 0.0;
+    bool m_repeated = false;
+
+    // HUD del tamaño o la opacidad mientras se arrastra su deslizador.
+    int m_hudKind = 0;              // 0 tamaño, 1 opacidad
+    bool m_hudActive = false;
+
+    // Diálogos.
+    Dialog m_dialog = Dialog::None;   // el que está abierto
+    Dialog m_dialogShown = Dialog::None;   // el que se dibuja (sigue al cerrarse)
+    uint32_t m_dialogLayerId = 0;
+    std::string m_dialogTitle;
+    std::string m_dialogMessage;
+    std::string m_dialogConfirm;    // Leave: el botón que deja el lienzo
+    std::string m_dialogProject;    // RenameProject y DeleteProject: el proyecto
+    ColorProfile m_dialogProfile = ColorProfile::Srgb;   // ConvertProfile: al que se pasa
+    Notice m_dialogKind = Notice::Error;                 // Alert: decide el icono
+    char m_renameBuffer[64] = {};
+    bool m_dialogFocus = false;
+    // Lo que tapa la interfaz (sigue mientras se desvanece).
+    Busy m_busyShown = Busy::None;
+    std::string m_busyTitle;
+
+    // Pantalla de Proyectos: el menú abierto (el proyecto y el botón que lo abrió) y las
+    // miniaturas en la GPU, por archivo.
+    std::string m_projectMenu;
+    ImRect m_projectMenuAnchor;
+    std::string m_projectMenuShown;   // el que se dibuja (sigue mientras se cierra)
+    struct ProjectThumb {
+        gfx::Texture texture;
+        int64_t fileTime = 0;         // la del archivo de la que se hizo
+        ColorProfile display = ColorProfile::Srgb;
+    };
+    std::unordered_map<std::string, ProjectThumb> m_projectThumbs;
+    uint64_t m_libraryLoadingSince = 0;   // desde cuándo se buscan los proyectos (0: no se buscan)
+
+    // Lienzo nuevo: lo que se configura, «Mis tamaños» y el número que se escribe.
+    CanvasForm m_canvasForm;
+    int m_canvasPreset[2] = {-1, -1};   // categoría y posición del último tamaño elegido
+    std::vector<canvasspec::SavedSize> m_savedSizes;
+    bool m_savedSizesLoaded = false;
+    bool m_keypad = false;          // los números se escriben con el teclado de la tarjeta
+    bool m_fieldScroll = false;     // hay que mostrar el campo que se empieza a escribir
+    ImRect m_fieldRect;             // campo que se escribe (en el frame anterior)
+    ImRect m_keypadRect;            // teclado numérico (en el frame anterior)
+    double m_eraseRepeat = 0.0;     // borrar mantenido: cuándo se vuelve a borrar
+
+    // Propiedades del lienzo: los ppp que se escriben (con el teclado de la página o el
+    // físico), el nombre y el último color de fondo que no era blanco (el que vuelve al
+    // elegir «Color»).
+    CanvasForm m_ppiForm;
+    bool m_ppiKeypad = false;       // los ppp se escriben con el teclado de la página
+    bool m_ppiScroll = false;       // hay que mostrar las fichas y el teclado
+    ImRect m_ppiFieldRect;          // «Otra» mientras se escribe (en el frame anterior)
+    ImRect m_ppiKeypadRect;         // el teclado (en el frame anterior)
+    char m_nameBuffer[64] = {};
+    bool m_nameEditing = false;
+    float m_propertiesColor[3] = {243.0f / 255.0f, 237.0f / 255.0f, 226.0f / 255.0f};
+};

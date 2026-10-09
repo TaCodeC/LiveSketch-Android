@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LiveSketch</title>
+<style>
+  /* Página de carga de la versión web: el mismo fondo que la pantalla de inicio de la app
+     (casi negro con una luz azul y otra roja, ver Ui::startScreen), así el paso de uno a
+     otra no se nota. En cuanto SDL crea la ventana, el lienzo ocupa toda la página y este
+     aviso queda oculto. */
+  :root {
+    color-scheme: dark;
+    --bg: #0c0c0e;
+    --text: #fff;
+    --muted: rgb(235 235 245 / 0.6);
+    --live: #ff3b30;
+    --error: #ff453a;
+    --accent: #0a84ff;
+    --accent-text: #5ab0ff;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  /* Sin ancho ni alto en CSS: SDL mide el lienzo para saber si puede ajustarlo a la página. */
+  #canvas { display: block; border: 0; outline: none; touch-action: none; }
+  #splash {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 18px;
+    padding: 16px;
+    text-align: center;
+    /* Las luces caen como las de la app: exp(-3t²)(1 - t²) desde el centro. */
+    background:
+      radial-gradient(circle 50vmax at 34% 20%, rgb(10 132 255 / 0.2), rgb(10 132 255 / 0.188) 12.5%,
+                      rgb(10 132 255 / 0.155) 25%, rgb(10 132 255 / 0.113) 37.5%, rgb(10 132 255 / 0.071) 50%,
+                      rgb(10 132 255 / 0.038) 62.5%, rgb(10 132 255 / 0.016) 75%, rgb(10 132 255 / 0.005) 87.5%,
+                      rgb(10 132 255 / 0) 100%),
+      radial-gradient(circle 42vmax at 72% 90%, rgb(255 69 58 / 0.12), rgb(255 69 58 / 0.113) 12.5%,
+                      rgb(255 69 58 / 0.093) 25%, rgb(255 69 58 / 0.068) 37.5%, rgb(255 69 58 / 0.043) 50%,
+                      rgb(255 69 58 / 0.023) 62.5%, rgb(255 69 58 / 0.01) 75%, rgb(255 69 58 / 0.003) 87.5%,
+                      rgb(255 69 58 / 0) 100%),
+      var(--bg);
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .brand::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--live); }
+  /* Indicador de actividad de iOS: ocho radios que giran a saltos. */
+  .spinner { width: 28px; height: 28px; color: var(--muted); animation: spin 0.8s steps(8) infinite; }
+  #status { margin: 0; color: var(--muted); max-width: 32em; text-wrap: balance; }
+  #splash.error .spinner { display: none; }
+  #splash.error #status { color: var(--error); }
+  /* Aviso de la pestaña que se queda atrás (src/web/storage.js): tapa el lienzo, que ya no
+     guarda nada, hasta que se vuelve a cargar con «Usar aquí». */
+  #other-tab {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(12 12 14 / 0.72);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  #other-tab[hidden] { display: none; }
+  #other-tab .card {
+    box-sizing: border-box;
+    width: min(100%, 400px);
+    padding: 24px;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 20px;
+    background: rgb(28 28 30 / 0.94);
+    box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+  }
+  #other-tab h1 { margin: 12px 0 8px; font-size: 21px; line-height: 1.25; font-weight: 700; text-wrap: balance; }
+  #other-tab p.text { margin: 0; color: var(--muted); }
+  #other-tab button {
+    display: block;
+    width: 100%;
+    height: 46px;
+    margin-top: 22px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #other-tab button:hover { filter: brightness(1.08); }
+  #other-tab button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+</style>
+</head>
+<body>
+<div id="splash">
+  <p class="brand">LIVESKETCH</p>
+  <svg class="spinner" viewBox="0 0 28 28" aria-hidden="true">
+    <g stroke="currentColor" stroke-width="2.6" stroke-linecap="round">
+      <line x1="14" y1="3" x2="14" y2="8.5"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(45 14 14)" opacity="0.2"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(90 14 14)" opacity="0.25"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(135 14 14)" opacity="0.3"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(180 14 14)" opacity="0.4"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(225 14 14)" opacity="0.5"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(270 14 14)" opacity="0.65"/>
+      <line x1="14" y1="3" x2="14" y2="8.5" transform="rotate(315 14 14)" opacity="0.8"/>
+    </g>
+  </svg>
+  <p id="status" role="status">Cargando el lienzo…</p>
+  <noscript><p>LiveSketch necesita JavaScript.</p></noscript>
+</div>
+<div id="other-tab" role="alertdialog" aria-modal="true" aria-labelledby="other-tab-title"
+     aria-describedby="other-tab-text" hidden>
+  <div class="card">
+    <p class="brand">LIVESKETCH</p>
+    <h1 id="other-tab-title">LiveSketch se abrió en otra pestaña</h1>
+    <p class="text" id="other-tab-text">Se usa en una pestaña a la vez, para que una no guarde encima de lo
+      que cambió la otra. Lo de esta pestaña ya está guardado.</p>
+    <button type="button" id="other-tab-use">Usar aquí</button>
+  </div>
+</div>
+<canvas id="canvas" tabindex="-1"></canvas>
+<script>
+  (function () {
+    var splash = document.getElementById('splash');
+    var status = document.getElementById('status');
+    var canvas = document.getElementById('canvas');
+    function showError(text) {
+      if (splash.classList.contains('error')) {
+        return;   // se queda el primer error, que es el que explica el resto
+      }
+      status.textContent = text;
+      splash.classList.add('error');
+      // Con la app en marcha, SDL tiene escondido el aviso: se vuelve a mostrar encima.
+      if (splash.parentNode !== document.body) {
+        document.body.appendChild(splash);
+      }
+    }
+    // El botón derecho del ratón mueve la vista: sin menú contextual del navegador.
+    canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+
+    window.Module = {
+      canvas: canvas,
+      onAbort: function (what) {
+        if (/Refused to compile or instantiate WebAssembly/.test(String(what))) {
+          showError('Esta página no deja ejecutar WebAssembly, que LiveSketch necesita. ' +
+                    'Abre el archivo LiveSketch.html directamente en el navegador.');
+        } else {
+          showError('LiveSketch se detuvo por un error: ' + what);
+        }
+      },
+    };
+    // Solo mientras se ve este aviso: con la app en marcha, un error suelto de JavaScript
+    // no debe tapar el lienzo (lo que detiene la app llega por onAbort).
+    window.addEventListener('error', function (event) {
+      if (splash.parentNode === document.body) {
+        showError('LiveSketch no pudo arrancar: ' + event.message);
+      }
+    });
+    if (!document.createElement('canvas').getContext('webgl2')) {
+      Module.noInitialRun = true;
+      showError('Este navegador no tiene WebGL 2. Prueba con una versión reciente de Chrome, Edge, Firefox o Safari.');
+    }
+  })();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

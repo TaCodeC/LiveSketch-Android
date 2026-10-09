@@ -2,6 +2,15 @@ plugins {
     id 'com.android.application'
 }
 
+// Ruta del NDI SDK: "ndi.sdk.dir" en local.properties o la variable de entorno NDI_SDK_DIR.
+// Si no se encuentra, CMake compila la app sin salida NDI (ver app/CMakeLists.txt).
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+def ndiSdkDir = localProperties.getProperty('ndi.sdk.dir') ?: (System.getenv('NDI_SDK_DIR') ?: '')
+
 android {
     namespace 'com.tacodec.livesketch'
     compileSdk 35
@@ -10,15 +19,15 @@ android {
         applicationId "com.tacodec.livesketch"
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName "0.2.4-alpha"
+        versionCode 2
+        versionName "0.3.0-alpha"
         ndk {
             abiFilters "armeabi-v7a", "arm64-v8a"
         }
 
         externalNativeBuild {
             cmake {
-                cppFlags "-std=c++17"
+                arguments "-DANDROID_STL=c++_static", "-DNDI_SDK_DIR=${ndiSdkDir}"
             }
         }
     }
@@ -42,11 +51,12 @@ android {
 
     sourceSets {
         main {
-            java.srcDirs = ["src/main/cpp"]
+            // MainActivity + las clases Java de SDL (SDLActivity y compañía), tomadas del submódulo.
+            java.srcDirs = ["src/main/java", "externals/SDL/android-project/app/src/main/java"]
         }
     }
 }
 
 dependencies {
-    // No androidx libs, porque es C++ puro
+    // Sin dependencias de androidx: la app es C++ con la capa Java mínima de SDL.
 }

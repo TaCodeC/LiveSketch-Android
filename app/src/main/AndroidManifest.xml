@@ -2,32 +2,76 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- OpenGL ES 3.0 -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- NDI -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-    <!-- Para poder guardar archivos en Downloads -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Para poder guardar archivos en Downloads (desde Android 11 no hace falta permiso) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
+    <!-- enableOnBackInvokedCallback=false: el botón atrás llega a SDL (se pide confirmación antes de salir) -->
     <application
-        android:hasCode="false"
         android:label="LiveSketch"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:requestLegacyExternalStorage="true">
+        android:requestLegacyExternalStorage="true"
+        android:enableOnBackInvokedCallback="false"
+        android:hardwareAccelerated="true"
+        tools:targetApi="33">
+        <!-- Atributos de la actividad tomados de la plantilla android-project de SDL -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name=".MainActivity"
             android:label="LiveSketch"
             android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-            <meta-data android:name="android.app.lib_name"
-                android:value="livesketch" />
+            android:alwaysRetainTaskState="true"
+            android:launchMode="singleInstance"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:preferMinimalPostProcessing="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- «Abrir con»: los proyectos (.lvskt) que se abren desde otra app (el gestor de
+                 archivos, el correo...). Android no conoce la extensión, así que suelen llegar
+                 como archivo binario genérico; si no es un proyecto, la app lo dice. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/x-livesketch" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <!-- Los que llegan con otro tipo pero con el nombre del archivo en la ruta. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\..*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.lvskt" />
+            </intent-filter>
+            <!-- Los archivos que llegan sin tipo (los gestores de archivos antiguos): por el nombre. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\..*\\.lvskt" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.lvskt" />
             </intent-filter>
         </activity>
 
